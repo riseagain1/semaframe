@@ -128,6 +128,15 @@ describe("Agent connection offer lifecycle", () => {
 });
 
 describe("AgentConnectionPage", () => {
+  it("shows the SemaFrame lockup on the standalone connection gate only", () => {
+    const { rerender } = render(<AgentConnectionPage {...connectionProps()} />);
+    expect(screen.getByLabelText("SemaFrame")).toBeVisible();
+
+    rerender(<AgentConnectionPage {...connectionProps({ onClose: vi.fn() })} />);
+    expect(screen.queryByLabelText("SemaFrame")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to workspace" })).toBeVisible();
+  });
+
   it("shows the actual connection URL and copies only on a user action", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

@@ -1,5 +1,9 @@
 # SemaFrame
 
+<p align="center">
+  <img src="./public/semaframe-lockup.svg" alt="SemaFrame — Build spaces agents can understand" width="620" />
+</p>
+
 > **Build spaces agents can understand.**
 >
 > A browser-authoritative, agent-operated workspace where 2D interfaces, 3D space, live data, interaction, animation, collision, and bounded physics share one state model.
@@ -451,6 +455,7 @@ server/
   agent/                  Loopback gateway, MCP transport, approvals, OpenAPI
   feed/                   Bounded public HTTPS feed runtime and approval store
   workspace/              REST/MCP Workspace tool adapters
+public/                    SemaFrame SVG, favicon, app icons, and social preview assets
 scripts/                  Development launcher, stdio bridge, browser smoke tests
 integrations/             Installable Agent skill metadata and instructions
 ```

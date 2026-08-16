@@ -1,5 +1,6 @@
 import { ChevronDown, Download, FolderOpen, MoreHorizontal, Redo2, Save, Undo2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { SemaFrameMark } from "./SemaFrameMark";
 
 type ProjectBarProps = {
   projectName: string;
@@ -61,7 +62,7 @@ export function ProjectBar(props: ProjectBarProps) {
   return (
     <header className="project-bar">
       <div className="brand-lockup" aria-label="SemaFrame semantic spatial workspace">
-        <div className="brand-mark"><span /><span /><span /></div>
+        <SemaFrameMark className="brand-mark" />
         <div><strong>SEMAFRAME</strong><small>Semantic spatial workspace</small></div>
       </div>
       <div className="project-name-wrap">

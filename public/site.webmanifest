@@ -1,0 +1,14 @@
+{
+  "name": "SemaFrame",
+  "short_name": "SemaFrame",
+  "description": "A semantic spatial workspace for AI agents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f0e8",
+  "theme_color": "#2c332f",
+  "icons": [
+    { "src": "/semaframe-icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/semaframe-icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/semaframe-favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

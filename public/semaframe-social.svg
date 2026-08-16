@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">SemaFrame</title>
+  <desc id="description">A semantic spatial workspace for AI agents.</desc>
+  <rect width="1200" height="630" fill="#F4F0E8"/>
+  <circle cx="1110" cy="590" r="310" fill="none" stroke="#627F72" stroke-opacity=".09" stroke-width="2"/>
+  <circle cx="1110" cy="590" r="235" fill="none" stroke="#627F72" stroke-opacity=".08" stroke-width="2"/>
+  <path d="M0 505C260 420 433 452 635 552S1015 665 1200 520V630H0Z" fill="#E8E1D4" fill-opacity=".72"/>
+  <g transform="translate(94 92) scale(2.45)" fill="none">
+    <path d="M9 25V9h16M39 9h16v16M55 39v16H39M25 55H9V39" stroke="#2C332F" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m18 32 14-9 14 9-14 9-14-9Z" stroke="#2C332F" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M32 23v18" stroke="#2C332F" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="18" cy="32" r="4.5" fill="#D66B45"/>
+    <circle cx="46" cy="32" r="4.5" fill="#D66B45"/>
+    <circle cx="32" cy="41" r="4.5" fill="#627F72"/>
+  </g>
+  <text x="300" y="198" fill="#25241F" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-size="78" font-weight="760" letter-spacing="12">SEMAFRAME</text>
+  <text x="302" y="275" fill="#4E5049" font-family="Georgia, Times New Roman, serif" font-size="43">A semantic spatial workspace</text>
+  <text x="302" y="328" fill="#4E5049" font-family="Georgia, Times New Roman, serif" font-size="43">for AI agents.</text>
+  <g transform="translate(302 405)">
+    <rect width="162" height="44" rx="22" fill="#2C332F"/>
+    <text x="81" y="28" text-anchor="middle" fill="#F4F0E8" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="1.4">2D + 3D</text>
+    <rect x="174" width="174" height="44" rx="22" fill="#D66B45"/>
+    <text x="261" y="28" text-anchor="middle" fill="#FFF9F2" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="1.2">LIVE DATA</text>
+    <rect x="360" width="190" height="44" rx="22" fill="#627F72"/>
+    <text x="455" y="28" text-anchor="middle" fill="#F4F0E8" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="1.2">AGENT MCP</text>
+    <rect x="562" width="190" height="44" rx="22" fill="#E8E1D4" stroke="#B8AE9D"/>
+    <text x="657" y="28" text-anchor="middle" fill="#4E5049" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="1.2">PHYSICS</text>
+  </g>
+  <text x="96" y="566" fill="#746F65" font-family="Avenir Next, Segoe UI, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" letter-spacing="2.2">BUILD SPACES AGENTS CAN UNDERSTAND</text>
+</svg>

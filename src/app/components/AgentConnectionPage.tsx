@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { AgentGatewayError } from "../../agent/AgentGatewayClient";
+import { SemaFrameMark } from "./SemaFrameMark";
 
 export type AgentConnectionStatus = "disabled" | "waiting" | "approval" | "connected" | "disconnected" | "occupied";
 
@@ -347,6 +348,10 @@ export function AgentConnectionPage({
       aria-describedby={detailId}
       aria-busy={blocked || undefined}
     >
+      {!onClose && <div className="agent-page-brand" aria-label="SemaFrame">
+        <SemaFrameMark className="agent-page-brand-mark" />
+        <span>SEMAFRAME</span>
+      </div>}
       {onClose && <button ref={closeRef} type="button" className="agent-page-close" onClick={onClose} disabled={blocked}>
         <ArrowLeft size={16} aria-hidden="true" />Back to workspace
       </button>}
