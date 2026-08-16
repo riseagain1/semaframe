@@ -33,6 +33,7 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
 ## Contents
 
 - [Why SemaFrame](#why-semaframe)
+- [A practical Jarvis-like workspace](#a-practical-jarvis-like-workspace)
 - [What it can do](#what-it-can-do)
 - [Quick start](#quick-start)
 - [First Agent connection](#first-agent-connection)
@@ -61,6 +62,14 @@ It is designed around four principles:
 4. **Capability-based control.** Connections, approvals, sessions, scopes, transactions, feed fetches, and host signals are explicit and bounded.
 
 SemaFrame is useful for Agent-driven dashboards, simulation controls, spatial planning, interactive explainers, mixed 2D/3D prototypes, operational views, and feasibility preflight. It is not a general web browser, an unrestricted code sandbox, or a full engineering solver.
+
+## A practical Jarvis-like workspace
+
+Imagine an assistant that does more than chat: it can inspect a shared 2D/3D workspace, understand where objects are, read approved live data, check collisions and physical support, and operate controls through explicit permissions.
+
+For example, an Agent could inspect a workshop layout through Universal Space Data, place a machine without intersecting existing equipment, attach a live telemetry panel, connect a 2D emergency-stop button to a 3D animation, run a bounded stability preflight, and leave every action visible in the same undoable project history.
+
+SemaFrame provides this inspectable spatial substrate. It is not an autonomous operating system or a full engineering simulator: the browser remains authoritative, actions are scoped, and physical results are deliberately bounded.
 
 ## What it can do
 
