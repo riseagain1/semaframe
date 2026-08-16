@@ -92,7 +92,7 @@ The built-in component registry contains:
 
 ### Requirements
 
-- Node.js 20.19 or newer
+- Node.js 22.12 or newer
 - npm
 - a modern browser with WebGL support
 - an MCP-capable Agent client for external Agent control

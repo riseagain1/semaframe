@@ -14,7 +14,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "node scripts/dev-agent.mjs",

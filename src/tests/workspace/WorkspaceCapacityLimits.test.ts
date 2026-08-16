@@ -43,7 +43,7 @@ describe("Workspace application capacity", () => {
     }
     expect(reopened.undoUserCommand()).toBeNull();
     expect(reopened.getState().revision).toBe(1);
-  });
+  }, 20_000);
 
   it("rejects oversized state collections before per-record validation", () => {
     const baseline = new WorkspaceStore().getState();

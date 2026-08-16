@@ -13,7 +13,7 @@ Thank you for helping improve SemaFrame. The project values changes that keep th
 
 Requirements:
 
-- Node.js 20.19 or newer
+- Node.js 22.12 or newer
 - npm
 - a modern browser with WebGL support for browser smoke tests
 
