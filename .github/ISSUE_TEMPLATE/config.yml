@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and design discussions
+    url: https://github.com/riseagain1/semaframe/discussions
+    about: Ask for help or discuss a substantial design before filing an issue.
+  - name: Private security report
+    url: https://github.com/riseagain1/semaframe/security/advisories/new
+    about: Report vulnerabilities privately; do not disclose them in a public issue.

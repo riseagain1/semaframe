@@ -4,6 +4,10 @@
   <img src="./public/semaframe-lockup.svg" alt="SemaFrame — Build spaces agents can understand" width="620" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml"><img src="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+</p>
+
 > **Build spaces agents can understand.**
 >
 > A browser-authoritative, agent-operated workspace where 2D interfaces, 3D space, live data, interaction, animation, collision, and bounded physics share one state model.
@@ -42,6 +46,7 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
 - [Current boundaries](#current-boundaries)
 - [Architecture and code map](#architecture-and-code-map)
 - [Development and verification](#development-and-verification)
+- [Contributing and security](#contributing-and-security)
 - [License](#license)
 
 ## Why SemaFrame
@@ -87,7 +92,7 @@ The built-in component registry contains:
 
 ### Requirements
 
-- Node.js 20.12 or newer
+- Node.js 20.19 or newer
 - npm
 - a modern browser with WebGL support
 - an MCP-capable Agent client for external Agent control
@@ -495,6 +500,12 @@ npm run test:coverage                    # coverage run
 Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, MCP, and OpenAPI.
 
 When changing a public contract, update the schema, TypeScript type, controller/adapter, guide, focused regression, and at least one cross-layer test together. A green unit test alone is not sufficient for connection, rendering, persistence, or security changes.
+
+## Contributing and security
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and review expectations, and use [GitHub Discussions](https://github.com/riseagain1/semaframe/discussions) for design questions before large changes.
+
+Please report vulnerabilities privately by following [SECURITY.md](SECURITY.md), not through a public issue. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). Dependency and video-tooling licenses are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 
