@@ -1,154 +1,305 @@
-# Scene Thread — Universal 2D/3D Workspace
+# Scene Thread
 
-Scene Thread is a browser-authoritative visual workspace. A project can combine a navigable Three.js world, ordinary 2D panels, timers and checklists, data-backed charts, safe website embeds, and bounded agent-defined components on one canvas.
+> A browser-authoritative, agent-operated workspace where 2D interfaces, 3D space, live data, interaction, animation, collision, and bounded physics share one state model.
 
-There is one state authority: `WorkspaceStore` and Workspace Protocol 1.2. People edit through Components, Inspector, Sources, and direct canvas interaction. External agents use the same Workspace through approval-gated MCP or OpenAPI transactions. The retired Compose interpreter, Scene Protocol v0.2, SceneStore, and dual-project compatibility envelope are not part of the product.
+Scene Thread turns a browser canvas into a programmable visual workspace. A person or an approved external Agent can create spatial scenes, dashboards, controls, simulations, data panels, websites, charts, timers, checklists, and declarative custom components—then connect them through typed actions and events.
 
-## Run locally
+The central idea is simple: there is one authoritative `WorkspaceStore`. The UI, Agent API, data bindings, physics queries, project history, and hybrid renderer all operate on that same revisioned state. There is no hidden model-owned scene and no separate legacy Compose authority.
+
+## Contents
+
+- [Why Scene Thread](#why-scene-thread)
+- [What it can do](#what-it-can-do)
+- [Quick start](#quick-start)
+- [First Agent connection](#first-agent-connection)
+- [Product tour](#product-tour)
+- [Core model](#core-model)
+- [Spatial understanding and physics](#spatial-understanding-and-physics)
+- [Data feeds and websites](#data-feeds-and-websites)
+- [Agent integration](#agent-integration)
+- [Protocol and persistence](#protocol-and-persistence)
+- [Security and trust model](#security-and-trust-model)
+- [Current boundaries](#current-boundaries)
+- [Architecture and code map](#architecture-and-code-map)
+- [Development and verification](#development-and-verification)
+- [License](#license)
+
+## Why Scene Thread
+
+Most Agent interfaces expose documents, forms, or a chat transcript. Scene Thread instead exposes a persistent visual world with explicit geometry, data, behavior, history, and permissions.
+
+It is designed around four principles:
+
+1. **One shared authority.** Human edits and Agent transactions modify the same Workspace, so the rendered result, saved project, undo history, and Agent inspection cannot silently diverge.
+2. **Semantic objects, not pixels.** Components retain typed props, durable state, placement, actions, events, bindings, collision, physics intent, provenance, and versioned manifests.
+3. **Inspect before acting.** Agents receive revision-bound component, space, placement, and physics projections rather than guessing from a screenshot alone.
+4. **Capability-based control.** Connections, approvals, sessions, scopes, transactions, feed fetches, and host signals are explicit and bounded.
+
+Scene Thread is useful for Agent-driven dashboards, simulation controls, spatial planning, interactive explainers, mixed 2D/3D prototypes, operational views, and feasibility preflight. It is not a general web browser, an unrestricted code sandbox, or a full engineering solver.
+
+## What it can do
+
+| Area | Current capability |
+| --- | --- |
+| Universal canvas | Mix navigable Three.js content with DOM/SVG panels on one canvas |
+| Component system | 16 versioned built-ins plus bounded Agent-defined declarative recipes |
+| Spatial reasoning | Revision-bound Universal Space Data with transforms, bounds, colliders, support, and intersection relations |
+| Collision | Asset bounds, explicit boxes, and compound oriented-box colliders with independent enable/trigger controls |
+| Physics | Optional static/dynamic/kinematic intent, mass and material properties, constraints, stability reports, placement preflight, and deterministic settle previews |
+| Data | Local JSON/CSV snapshots and approved public HTTPS JSON/CSV/RSS/Atom feeds |
+| Projection | Schema-checked resource bindings into writable component props without mutating canonical props |
+| Interaction | Typed actions and events routed atomically across 2D and 3D components |
+| Animation | Discoverable spatial clips, durable playback state, bounded transitions, completion events, and reduced-motion support |
+| Web and media | User-activated sandboxed website panels plus normalized YouTube, Vimeo, MP4, and WebM video |
+| Agent control | Approval-gated Streamable HTTP MCP, OpenAPI 3.1, and a stdio bridge |
+| Persistence | Direct Workspace project files with deterministic replay, migration, undo/redo, and validated provenance |
+
+The built-in component registry contains:
+
+- spatial: `stage-3d`, `spatial-entity`;
+- layout: `group`, `panel`;
+- content: `text`, `image`, `annotation`, `document`;
+- media and web: `video-player`, `web-panel`;
+- data: `data-panel`, `chart`, `table`;
+- controls and utilities: `button`, `timer`, `checklist`.
+
+## Quick start
+
+### Requirements
+
+- Node.js 20.12 or newer
+- npm
+- a modern browser with WebGL support
+- an MCP-capable Agent client for external Agent control
+
+### Install and run
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:4173`. The development command starts Vite and the loopback Agent Gateway. To run only the browser UI, use `npm run dev:vite`.
+Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 
-Production output:
+`npm run dev` starts both Vite and the loopback Agent Gateway. The main local endpoints are:
+
+| Service | URL |
+| --- | --- |
+| Browser app | `http://127.0.0.1:4173` |
+| Agent Gateway | `http://127.0.0.1:8788` |
+| OpenAPI document | `http://127.0.0.1:8788/openapi.json` |
+
+Useful alternatives:
 
 ```bash
-npm run build
+npm run dev:vite          # browser UI only
+npm run agent:gateway     # one-shot gateway
+npm run agent:mcp         # stdio MCP bridge
+npm run build             # production build
+npm run preview           # preview the production bundle
 ```
 
-## One workspace
+### What appears on first launch
 
-The Workspace is unlocked after an approved Agent completes the instruction handshake. Before that, the app shows only the Agent connection gate; committed project state remains preserved locally but is not editable until control reconnects:
+Before a connection completes, Scene Thread intentionally shows only the Agent connection interface—not an empty editable Workspace. The existing project remains preserved, but the canvas is unlocked only after an approved Agent completes the instruction handshake.
 
-- **Components** creates registered 2D and 3D components.
-- **Inspector** edits the selected component and invokes its declared actions.
-- **Sources** creates, previews, refreshes, binds, and manages data snapshots.
-- Canvas controls move and resize components, frame content, reset the view, zoom, and enter presentation full screen.
-- Project controls provide New, Open, Save, Undo, and Redo.
-- **Manage** opens Agent connection settings without switching to another product mode.
+This makes ownership explicit: the browser is authoritative, while the external Agent receives scoped access to the open Workspace.
 
-A fresh project has zero components. `canvas2d` and `viewport` content needs no stage. Create exactly one `stage-3d` before adding `world3d`, `surface`, or `billboard` content.
+## First Agent connection
 
-The built-in registry contains `stage-3d`, `spatial-entity`, `group`, `panel`, `text`, `image`, `video-player`, `web-panel`, `data-panel`, `annotation`, `button`, `timer`, `checklist`, `chart`, `table`, and `document`.
+Any Streamable HTTP MCP-capable client can connect:
 
-## Agent connection
-
-Any Streamable HTTP MCP-capable client can operate the open Workspace:
-
-1. Choose **Manage** in the Agent controls.
+1. Start Scene Thread with `npm run dev`.
 2. Enable Agent control and copy the short-lived connection URL.
 3. Add that URL as an MCP server or connector in the external client.
 4. The client reads `workspace://instructions/v1` and calls `get_workspace_instructions` first.
-5. Verify its name, fingerprint, and requested scopes in Scene Thread, then approve it.
-6. The client inspects and changes the same open project through revision-bound transactions.
+5. Scene Thread displays the client's name, fingerprint, requested scopes, and destructive capabilities.
+6. Approve the request in the authoritative browser.
+7. The Agent inspects and edits the same open project through revision-bound transactions.
 
-The URL contains a random offer identifier, not authority. The first instruction request creates a separate approval claim that only the authoritative browser can approve. A completed endpoint remains active until replaced or revoked. Failed or expired incomplete offers can be replaced with **Create fresh URL**.
+The connection URL contains a random offer identifier, not authority. The first instruction request creates a separate approval claim. Approval, session, and transaction capabilities are never placed in the URL or project file.
 
-Voice, realtime, and multimodal clients use this same contract. They keep partial model output in client-side preview state and submit only final intent through `begin_workspace_update` and `submit_workspace_batch`. Scene Thread owns validation, transactions, rendering, history, and permissions; it does not bundle a model or voice transport.
+Incomplete expired or failed offers can be replaced with **Create fresh URL**. **Revoke pairing** invalidates the current offer and live sessions. If the authoritative browser disappears, the engine becomes unavailable rather than creating a second hidden Workspace.
 
-The gateway exposes exactly thirteen Workspace tools:
+## Product tour
 
-- `get_workspace_instructions`
-- `inspect_workspace`
-- `inspect_workspace_component`
-- `inspect_workspace_space`
-- `query_spatial_placement`
-- `inspect_workspace_physics`
-- `query_stable_placement`
-- `simulate_workspace_physics`
-- `begin_workspace_update`
-- `submit_workspace_batch`
-- `undo_workspace_batch`
-- `redo_workspace_batch`
-- `read_workspace_events`
+After the handshake, the Workspace exposes five primary surfaces:
 
-For clients without MCP, the gateway publishes OpenAPI 3.1 at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. `npm run agent:mcp` provides a stdio bridge.
+- **Components** creates registered 2D and 3D components.
+- **Inspector** edits the selected component, geometry, visual effects, collision, physics, actions, and data bindings.
+- **Sources** previews, creates, refreshes, binds, rebinds, and removes data resources.
+- **Canvas** provides direct selection, move, resize, frame, reset, zoom, and presentation controls.
+- **Agent controls** show connection state, approval requests, active identity, recent history, and revocation actions.
 
-The gateway starts disabled, binds to loopback, and keeps approval, session, and transaction capabilities out of URLs, browser storage, recovery data, and project files. **Revoke pairing** invalidates the active offer and sessions. Closing the authoritative browser makes the engine unavailable rather than creating a hidden second workspace.
+Project controls provide **New**, **Open**, **Save**, **Undo**, and **Redo**.
 
-## Universal canvas
+A fresh project contains zero components. `canvas2d` and `viewport` content does not need a Stage. Create exactly one `stage-3d` before adding content in `world3d`, `surface`, or `billboard` space.
 
-Every object is a versioned component with typed props, durable state, placement, locks, bindings, events, provenance, and a pinned content digest. Placement spaces are:
+### Placement spaces
 
-For model spatial reasoning, `inspect_workspace_space` returns a revision-bound **Universal Space Data** projection: parent-aware world transforms, stable prim paths, asset-derived world bounds, exact collider parts, rigid-body intent, and support/intersection relations. `since_revision` requests a delta when it is unambiguous. This is a derived JSON view of the authoritative Workspace, not a second scene database or an OpenUSD file.
+| Space | Meaning |
+| --- | --- |
+| `world3d` | Spatial content inside the Stage |
+| `canvas2d` | Content on the zoomable 2D plane |
+| `surface` | A 2D component attached to a named component surface |
+| `billboard` | Screen-facing content anchored to a 3D target |
+| `viewport` | Fixed HUD-style content in screen pixels |
 
-New `spatial-entity@1.5.0` components support `asset_bounds`, explicit box, and up to 16 compound oriented-box collider parts. Solid overlaps reject the entire atomic update; touching faces and trigger volumes are handled explicitly. Parent/child faces may attach through their safety margin, but actual solid penetration remains invalid. The Inspector edits collision shapes and rigid-body properties.
+Scroll or pinch over the background to zoom around the pointer. `viewport` components stay fixed. **Frame all** recovers both layers, while **Reset view** restores the canonical camera. Navigation and full-screen presentation are browser-local: they do not alter project revision, dirty state, saved files, history, or Agent authority.
 
-The same manifest persists an explicit physics master switch, static/dynamic/kinematic body type, mass, center-of-mass offset, friction, restitution, gravity scale, report/enforce stability mode, and up to 16 fixed/hinge/slider/ball constraints. Turning physics off preserves those values while removing the body from support, constraint, and settle participation; collision remains independently controlled. Physics report 2.0 derives exact horizontal OBB/compound contact polygons, finite-Stage contact, recursive grounded load paths, world COM, stability margin, collisions, and conservative joint equilibrium. Disabled, trigger, none, hidden, unsupported, or unstable bodies cannot carry another body. `query_stable_placement` preflights one candidate. `simulate_workspace_physics` runs a bounded, deterministic, fixed-step vertical drop preview and returns absolute placement proposals plus explicit modeled/ignored properties. It validates layout feasibility and quasi-static support; it does not claim frictional sliding, bounce, angular dynamics, stress, fracture, soft bodies, fluids, or general engineering feasibility.
+## Core model
 
-- `world3d`: spatial content inside the Stage;
-- `canvas2d`: content on the zoomable 2D plane;
-- `surface`: a 2D component attached to a named component surface;
-- `billboard`: screen-facing content anchored to a 3D target; and
-- `viewport`: fixed HUD-style content.
+Every Workspace object is a versioned component with:
 
-### Navigation and presentation
+- a stable ID and pinned component type, version, and digest;
+- typed props and durable state;
+- placement and geometry;
+- visual effects and visibility;
+- locks and provenance;
+- resource bindings;
+- declared actions and events;
+- optional collision and physics attributes for spatial entities.
 
-Scroll or pinch over the 3D background to zoom the spatial world and 2D plane around the pointer. `viewport` components remain fixed in screen pixels. **Frame all** recovers both layers and **Reset view** restores the canonical camera. Navigation is browser-local and does not change revision, history, dirty state, saved files, or Agent authority.
-
-Full screen hides editing chrome while keeping 2D and 3D components live. It is browser-local presentation state and never creates a Workspace operation or undo entry.
+The engine validates operations against the pinned manifest. It does not silently clamp malformed commands or reinterpret stale component definitions.
 
 ### Geometry, effects, and animation
 
-Every manifest declares a resize policy for each supported placement. Geometry is one of `box2d`, `scale3d`, `stage_dimensions`, or `none`. The engine validates absolute geometry, bounds, locks, aspect/uniform constraints, and placement compatibility rather than silently clamping commands.
+Each manifest declares supported placements and a resize policy. Geometry uses one of four closed models: `box2d`, `scale3d`, `stage_dimensions`, or `none`.
 
-All components support renderer-neutral opacity, emissive color/intensity, glow, visibility actions, and bounded transitions. A transition has duration, optional delay, and a closed easing value. Final semantic state commits once; DOM and Three.js interpolate that revision without per-frame history writes and honor reduced-motion preferences.
+All components support renderer-neutral opacity, emissive color/intensity, glow, visibility actions, and bounded transitions. A transition has duration, optional delay, and a closed easing value. The semantic state commits once; DOM and Three.js interpolate the resulting revision without writing per-frame history and honor reduced-motion preferences.
 
-Spatial components expose discoverable animation clips and durable `play_animation`/`stop_animation` actions. Playback starts only while both the entity and Stage are visible. Hiding or collapsing either one deterministically stops active playback. Renderer completion is a host-only signal and cannot be forged by an Agent or unattended event route.
+Spatial components expose discoverable animation clips and durable `play_animation` and `stop_animation` actions. Playback starts only while both the entity and Stage are visible. Hiding or collapsing either one deterministically stops active playback. Renderer completion is a host-only signal and cannot be forged by an Agent or unattended event route.
 
 ### Cross-component actions
 
-`connect_event` executes declared semantic actions in the same atomic Workspace commit as the source event. Routes are cycle-checked, bounded, deterministically ordered, permission-checked again at execution, and recorded with causation. Privileged network, external-write, and extension effects cannot be wired for unattended execution.
+`connect_event` routes declared semantic actions in the same atomic Workspace commit as the source event. Routes are cycle-checked, bounded, deterministically ordered, and permission-checked again when they execute.
 
-Examples:
+Examples include:
 
-- a 2D button can start a supported 3D animation;
-- double-click or Enter/Space on a spatial object can show or hide a 2D panel;
-- a completed timer can add an item to a checklist.
+- a 2D button starting a supported 3D animation;
+- double-click or Enter/Space on a spatial object showing a 2D panel;
+- a timer completion adding an item to a checklist;
+- a selected chart point forwarding a schema-identical payload to another component.
 
-Connections may provide static validated input or forward the complete event payload when source and target schemas are exactly identical. Arbitrary expressions and JavaScript are never evaluated.
+Connections may use static validated input or forward the complete event payload when the event and action schemas are exactly identical. Arbitrary expressions and JavaScript are never evaluated. Privileged network, external-write, and extension effects cannot be wired for unattended execution.
 
-## Media and websites
+### Agent-defined components
 
-### Video player
+An approved Agent can define a bounded `recipe.*` component type, inspect its canonical digest, and create instances in a later transaction.
 
-`video-player` supports normalized YouTube, Vimeo, and public HTTPS MP4/WebM sources. It begins as a facade and creates no iframe or media element until a person chooses **Load video**. Private, DRM, owner-disabled, unsupported, or expired media may remain unavailable. Pasted iframe HTML and credential-bearing URLs are rejected.
+Recipes can declare schemas, defaults, writable props, actions, events, placements, resize policies, and a bounded node tree. The renderer accepts only a closed data vocabulary: stacks, grids, overlays, scrolling, text, shapes, images, icons, charts, tables, asset placeholders, buttons, sliders, toggles, inputs, and timers.
 
-### Website panel
+Recipes cannot execute HTML, JavaScript, JSX, iframe code, shaders, network requests, or arbitrary packages. Untrusted schemas reject regular expressions, references, unbounded combinators, and other synchronous validation-amplification paths.
 
-`web-panel` embeds an approved public HTTPS page in a resizable 2D panel. It always starts as a no-network facade. A person must choose **Load website** for that exact component instance; URL changes, project replacement, and component recreation require another gesture.
+## Spatial understanding and physics
 
-The Store rejects HTTP, local/private/special-use targets, custom ports, embedded credentials, signed/session/login capability patterns, and other recognized secret-bearing URLs. The frame uses an opaque-origin `allow-scripts` sandbox with no forms, same-origin authority, popup, top-navigation, referrer, or ambient browser permissions. **Unload** destroys it and **Open in browser** is an explicit fallback.
+### Universal Space Data
 
-Not every website can be embedded. A remote site may refuse framing with CSP or `X-Frame-Options`, and browsers do not expose a reliable cross-origin load-success signal. Scene Thread reports that an embed was requested, not that the site loaded. Truly arbitrary browsing requires a separate trusted browser or native webview surface.
+`inspect_workspace_space` returns **Universal Space Data 2.0**: a revision-bound, model-readable projection of the open Workspace. It includes:
 
-## Data feeds and bindings
+- stable prim paths and component identity;
+- parent-aware world transforms;
+- asset-derived and component-derived world bounds;
+- exact collider parts;
+- rigid-body intent;
+- containment, intersection, contact, and support relations;
+- optional deltas through `since_revision` when the change is unambiguous.
 
-Resources store a connector type/version, safe public configuration, last-good immutable snapshot, content hash, retrieval time, refresh policy, and bounded provenance. Credentials are never persisted.
+Universal Space Data is derived JSON, not a second scene database and not a Pixar OpenUSD file. The authoritative data remains the Workspace.
+
+### Collision
+
+Current spatial entities support:
+
+- asset-derived bounds;
+- one explicit box collider; or
+- up to 16 compound oriented-box parts.
+
+Collision can be enabled or disabled independently of physics. A collider may also be a trigger. Solid overlaps reject the entire atomic update; touching faces and trigger volumes are represented explicitly. Parent/child attachment can use a safety margin, but true solid penetration remains invalid.
+
+### Physics attributes
+
+Physics is optional per component. Turning the physics master switch off preserves configured values while excluding the body from support, constraint, and settle participation.
+
+Supported attributes include:
+
+- static, dynamic, and kinematic body type;
+- mass and center-of-mass offset;
+- friction, restitution, and gravity scale;
+- report or enforce stability mode;
+- up to 16 fixed, hinge, slider, or ball constraints.
+
+`inspect_workspace_physics` reports contact geometry, grounded load paths, world center of mass, stability margin, collisions, and conservative joint equilibrium. `query_stable_placement` preflights a candidate placement. `simulate_workspace_physics` runs a bounded deterministic fixed-step vertical-drop preview and returns absolute placement proposals plus explicit modeled and ignored properties.
+
+This can test layout feasibility, collision-free assembly, quasi-static support, center-of-mass stability, simple constraints, and conservative settling. It does **not** prove material strength, stress, fracture, fatigue, frictional sliding, bounce, angular dynamics, soft bodies, fluids, manufacturing tolerances, or general engineering feasibility.
+
+## Data feeds and websites
+
+### Data resources and bindings
+
+Resources hold a connector type/version, safe public configuration, last-good immutable snapshot, content hash, retrieval time, refresh policy, and bounded provenance. Credentials are never persisted.
 
 Two data paths are available:
 
-- `inline.snapshot@1.0.0`: paste or Agent-submit bounded JSON/CSV-like data with no network execution.
-- `http.feed@1.0.0`: a person previews a public HTTPS JSON, CSV, RSS, or Atom endpoint through the trusted loopback broker.
+- `inline.snapshot@1.0.0` accepts bounded local or Agent-submitted JSON/CSV-like data without network execution.
+- `http.feed@1.0.0` lets a person preview a public HTTPS JSON, CSV, RSS, or Atom endpoint through the trusted loopback broker.
 
-The feed broker sends no cookies, credentials, custom headers, or request body. It revalidates DNS and redirects, blocks private/link-local targets, pins TLS to the validated address, and bounds time, redirects, concurrency, compressed and decoded size, XML structure, output schema, and credential-like content. Preview/fetch uses a short-lived single-use server-held approval capability bound to the canonical URL and format.
+`bind_resource` projects a snapshot value into a writable component prop through closed transforms. Binding `$.labels` and `$.series` produces a chart; binding `$` to `data-panel.data` renders a general feed as a bounded table, card list, or inert JSON view. Projection does not mutate canonical component props or create a Workspace revision.
 
-Manual refresh is always an explicit local action. Interval and on-open automation is authorized only by an in-memory consent recorded after a successful preview and matching save; opening or restoring an untrusted project cannot start network reads. Changing URL, format, policy, project, or resource revokes that automation consent.
+The broker sends no cookies, credentials, custom headers, request body, or ambient browser authority. It validates DNS and every redirect, blocks private/link-local/special-use targets, pins TLS to the validated address, and bounds total time, redirects, concurrency, compressed and decoded size, XML structure, output schema, and credential-like content.
 
-`bind_resource` projects snapshot values into writable component props through closed transforms. Binding `$.labels` and `$.series` creates a stock chart; binding `$` to `data-panel.data` renders a general feed as a bounded table, card list, or inert JSON view. Projection does not mutate canonical component props or create a revision. Refreshes produce discrete replayable snapshots; SSE, WebSockets, credentialed APIs, arbitrary request headers/bodies, and private-network endpoints remain outside the connector.
+Interval and on-open automation is authorized only by in-memory consent after a successful preview and matching save. Opening or restoring an untrusted project cannot silently start network reads. Changing the URL, format, policy, project, or resource revokes that consent.
 
-Agents can inspect an existing host feed and bind it to components, but cannot mint feed approval, initiate network reads, forge host provenance, or create `http.feed` resources.
+Agents can inspect and bind an existing host feed, but cannot mint feed approval, initiate network reads, forge host provenance, or create `http.feed` resources.
 
-## Agent-defined components
+### Website panels
 
-An approved Agent can define a bounded declarative `recipe.*` component type in one transaction, then inspect and create it with its canonical pinned digest in a second transaction. Recipes declare schemas, defaults, writable props, actions, events, placements, resize policies, and a bounded node tree.
+`web-panel` embeds an approved public HTTPS page in a resizable 2D panel. It starts as a no-network facade. A person must choose **Load website** for that exact component instance; URL changes, project replacement, component recreation, or unload require another gesture.
 
-The renderer accepts only its closed data-only vocabulary: stacks, grids, overlays, scrolling, text, shapes, images, icons, charts, tables, asset placeholders, buttons, sliders, toggles, inputs, and timers. Recipes cannot execute HTML, JavaScript, JSX, iframe code, shaders, network requests, or arbitrary packages. Untrusted schemas reject regular expressions, references, unbounded combinators, and other synchronous validation-amplification paths.
+The Store rejects HTTP, local/private/special-use targets, custom ports, embedded credentials, and recognized signed, session, login, reset, invitation, or authorization capabilities. The frame uses an opaque-origin `allow-scripts` sandbox with no forms, same-origin authority, popup, top navigation, referrer, or ambient browser permissions.
 
-## Workspace Protocol 1.2
+Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, and the browser does not provide a reliable cross-origin success signal. **Open in browser** is the explicit fallback. Truly arbitrary browsing requires a separate trusted browser or native webview surface.
+
+### Video panels
+
+`video-player` accepts normalized YouTube, Vimeo, and public HTTPS MP4/WebM sources. It also begins as a facade and creates no iframe or media element until a person chooses **Load video**. Private, DRM-protected, owner-disabled, expired, or unsupported media can remain unavailable. Pasted iframe HTML and credential-bearing URLs are rejected.
+
+## Agent integration
+
+Scene Thread exposes exactly 13 Workspace tools:
+
+| Phase | Tool |
+| --- | --- |
+| Handshake | `get_workspace_instructions` |
+| Inspect | `inspect_workspace` |
+| Inspect | `inspect_workspace_component` |
+| Inspect | `inspect_workspace_space` |
+| Inspect | `query_spatial_placement` |
+| Inspect | `inspect_workspace_physics` |
+| Inspect | `query_stable_placement` |
+| Inspect | `simulate_workspace_physics` |
+| Mutate | `begin_workspace_update` |
+| Mutate | `submit_workspace_batch` |
+| History | `undo_workspace_batch` |
+| History | `redo_workspace_batch` |
+| Events | `read_workspace_events` |
+
+The normal Agent flow is:
+
+1. obtain approval through `get_workspace_instructions`;
+2. retain the returned `session_token` and map `guide_digest` to the `instruction_digest` input used by subsequent tools;
+3. inspect the Workspace, target components, spatial projection, or physics report;
+4. begin an update against an exact revision and registry digest;
+5. submit one bounded atomic operation batch;
+6. retry safely with the same request ID, or inspect the new revision before continuing.
+
+Voice, realtime, and multimodal clients use this same contract. Partial model output stays in client-side preview state; only final intent becomes a Workspace transaction. Scene Thread owns validation, rendering, history, permissions, and persistence. It does not bundle a model, speech recognizer, or voice transport.
+
+For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. `npm run agent:mcp` exposes the same Workspace surface over stdio.
+
+## Protocol and persistence
+
+### Workspace Protocol 1.2
 
 The closed protocol supports 19 operations:
 
@@ -157,63 +308,171 @@ The closed protocol supports 19 operations:
 - behavior: `set_component_visual_effects`, `invoke_component_action`;
 - data: `upsert_resource`, `delete_resource`, `bind_resource`, `unbind_resource`;
 - wiring: `connect_event`, `disconnect_event`;
-- metadata/reset: `present_view`, `clear_workspace`.
+- metadata and reset: `present_view`, `clear_workspace`.
 
-Every batch carries exact Workspace identity, revisions, registry digest, request ID, and a bounded operation array. Validation and reduction happen on a draft; any failure leaves authoritative state unchanged. Identical retries are idempotent. Changed retries, stale revisions, unknown fields, unpinned component digests, and missing permissions fail closed.
+Every batch carries exact Workspace identity, base revision, registry digest, request ID, and a bounded operation list. Validation and reduction occur on a draft. Any failure leaves authoritative state unchanged. Identical retries are idempotent; changed retries, stale revisions, unknown fields, unpinned digests, invalid geometry, collisions, and missing permissions fail closed.
 
-Saved components remain pinned to their manifest version. `upgrade_component_manifest` explicitly repins a compatible older built-in as one atomic, undoable, replayable operation. Workspace 1.0 and 1.1 project migrations remain supported; this is Workspace version migration, not the removed Scene compatibility system.
+Saved components remain pinned to their manifest version. `upgrade_component_manifest` explicitly moves a compatible older built-in to the latest exact reference as one atomic, undoable, replayable operation. Workspace 1.0 and 1.1 project migrations remain supported.
 
-## Saved projects
+Protocol source of truth:
 
-**Save** exports one direct `WorkspaceProjectFile` (`formatVersion: "1.0"`) containing:
+- [`src/workspace/protocol/workspaceProtocol.schema.json`](src/workspace/protocol/workspaceProtocol.schema.json)
+- [`src/workspace/protocol/workspaceTypes.ts`](src/workspace/protocol/workspaceTypes.ts)
+- [`src/workspace/agents/contracts.ts`](src/workspace/agents/contracts.ts)
+
+### Project files
+
+**Save** exports one direct `WorkspaceProjectFile` with `formatVersion: "1.0"`. It contains:
 
 - the checkpoint and current Workspace state;
-- component recipes, pins, geometry, state, locks, aliases, and provenance;
+- recipes, pins, geometry, state, locks, aliases, and provenance;
 - resources, bindings, event connections, and shared views;
-- monotonic component/event counters; and
+- monotonic component and event counters;
 - resolved command and event history for deterministic replay.
 
-Open validates the closed schema, versions, registry digests, counters, command continuity, resource invariants, and replay before replacing the current project. It never reruns actions, models, assets, or connector reads.
+Open validates the closed schema, registry digests, counters, command continuity, resource invariants, and replay before replacing the current project. It never reruns actions, models, assets, or connector reads.
 
-Legacy Scene v0.2 files and the former dual `scene-thread-workspace` envelope are intentionally unsupported. Local recovery uses the same Workspace-only format. Provider credentials, feed approvals, MCP approvals, session tokens, and transaction tokens are never saved.
+Legacy Scene v0.2 projects and the former dual `scene-thread-workspace` envelope are intentionally unsupported. Local recovery uses the same Workspace-only representation. Provider credentials, feed approvals, MCP approvals, session tokens, and transaction tokens are never saved.
 
-## Architecture
+Project schema: [`src/workspace/persistence/workspaceProject.schema.json`](src/workspace/persistence/workspaceProject.schema.json).
 
-```text
-Human tools ──────────────────────────────────────────────┐
-Agent client ─→ MCP/OpenAPI approval + session + tx ─────┤
-Feed preview ─→ one-use approval + bounded HTTPS broker ─┤
-                                                          ▼
-                                                WorkspaceStore 1.2
-                                                          │
-                                              semantic render snapshot
-                                                 ┌────────┴────────┐
-                                      Three.js spatial layer   DOM/SVG 2D layer
+### Application limits
+
+Hard limits bound main-thread work, memory use, persistence, and replay:
+
+| Resource | Limit |
+| --- | ---: |
+| Components | 2,000 |
+| Data resources | 1,000 |
+| Event/data connections | 5,000 |
+| Aliases | 4,000 |
+| Shared views | 500 |
+| Agent-defined recipes | 200 |
+| Public history summaries | 512 |
+| Recent undoable commands | 64 |
+| Idempotency ledger entries | 4,096 |
+| Project file size | 25 MiB |
+
+Older commands are compacted into a checkpoint rather than allowing undo memory to grow without bound.
+
+## Security and trust model
+
+Scene Thread treats the browser as the authoritative host and external clients as scoped callers.
+
+Important boundaries include:
+
+- the gateway binds to loopback and starts disabled;
+- connection URLs identify offers but do not carry session authority;
+- approvals are bound to the instruction surface, client identity, requested scopes, and browser lease;
+- mutation requires a scoped session plus a short-lived revision-bound transaction;
+- capability values are redacted from diagnostics and excluded from projects and recovery;
+- connector network reads require a person-mediated single-use approval;
+- resource schemas, payloads, paths, transforms, and provenance are bounded and validated;
+- feeds reject private networks, credential-like URLs/content, unsafe redirects, excessive bodies, and long-lived sockets;
+- web and video content begins behind an explicit user-activation facade;
+- event routes reauthorize their target actions and cannot call non-routable host signals;
+- declarative recipes have no arbitrary code or network execution;
+- project replacement invalidates ephemeral web activation, feed automation consent, and in-flight refresh work.
+
+This is an application-level local capability model, not an operating-system security boundary. A malicious process already able to impersonate the local browser and access loopback is outside the model.
+
+## Current boundaries
+
+Scene Thread deliberately does not claim the following:
+
+- **Not any website.** Remote sites may reject framing; authenticated arbitrary browsing needs a trusted browser surface.
+- **Not any API.** Host feeds are public HTTPS JSON, CSV, RSS, or Atom only. There are no arbitrary headers, request bodies, cookies, credentialed URLs, private-network targets, SSE, or WebSockets.
+- **Not a general code sandbox.** Recipe components use a closed declarative vocabulary.
+- **Not a general physics engine.** Current physics focuses on collision, support, conservative stability, constraints, and bounded settle previews.
+- **Not structural certification.** Material properties, stress, fatigue, fracture, tolerances, and safety factors are not modeled.
+- **Not OpenUSD.** Universal Space Data is Scene Thread's bounded JSON projection for Agent reasoning.
+- **Not a bundled AI model.** Model choice, voice, and realtime transport live in the connecting client.
+- **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project format.
+
+## Architecture and code map
+
+```mermaid
+flowchart LR
+    Human["Human tools<br/>Components, Inspector, Sources, Canvas"]
+    Agent["External Agent<br/>MCP, OpenAPI, or stdio"]
+    Approval["Gateway<br/>offer, approval, session, transaction"]
+    Feed["Feed broker<br/>single-use approval and bounded HTTPS"]
+    Store["WorkspaceStore 1.2<br/>single project authority"]
+    Project["WorkspaceProjectFile<br/>checkpoint and resolved history"]
+    Projection["Semantic render snapshot"]
+    Three["Three.js spatial layer"]
+    DOM["DOM and SVG 2D layer"]
+
+    Human --> Store
+    Agent --> Approval --> Store
+    Feed --> Store
+    Store <--> Project
+    Store --> Projection
+    Projection --> Three
+    Projection --> DOM
 ```
 
 Key invariants:
 
 - `WorkspaceStore` is the only project authority.
 - State is semantic and renderer-independent; Three.js and DOM/SVG are projections.
-- Stable IDs and event cursors are monotonic and restored from projects.
-- Type versions/digests pin validation and replay behavior.
+- Stable IDs and event cursors are monotonic and restored from project files.
+- Type versions and digests pin validation and replay behavior.
 - Timed and routed actions store resolved effects so replay does not depend on wall-clock execution.
 - Resources carry host-validated hashes and provenance while secrets remain outside the Workspace.
-- One coherent intent is one atomic batch and one undo step; host settlement is excluded from user undo history.
+- One coherent intent is one atomic batch and one user undo step; host settlement is excluded from user undo history.
 
-The renderer still uses a compact internal spatial render DTO for Three.js deltas. It is not a second Store, public protocol, persistence format, or Agent API.
+The Three.js layer still uses a compact internal spatial render DTO. It is not another Store, public protocol, persistence format, or Agent API.
 
-## Verification
+### Repository map
 
-```bash
-npm run typecheck
-npm test -- --run --maxWorkers=2
-npm run build
-npm run smoke:workspace
-npm run smoke:agent
+```text
+src/
+  app/                    React application, connection gate, panels, host signals
+  agent/                  Browser-side Agent Gateway client
+  assets/                 Registered spatial asset catalog
+  renderer/               Three.js renderer and render-only scene DTOs
+  workspace/
+    agents/               Agent controller, guide, scopes, public capability adapter
+    components/           Built-in manifests, registry, recipes, web security
+    data/                 Resources, feeds, bindings, connector contracts
+    interaction/          Pointer, keyboard, selection, and activation routing
+    persistence/          Workspace project schema and serializer
+    physics/              Physics configuration, reports, and deterministic preview
+    protocol/             Workspace Protocol schema, types, and validation
+    renderer/             Hybrid projection bridge and 2D/3D component projection
+    spatial/              Bounds, contact geometry, and spatial index
+    state/                 WorkspaceStore, state model, limits, and utilities
+server/
+  agent/                  Loopback gateway, MCP transport, approvals, OpenAPI
+  feed/                   Bounded public HTTPS feed runtime and approval store
+  workspace/              REST/MCP Workspace tool adapters
+scripts/                  Development launcher, stdio bridge, browser smoke tests
+integrations/             Installable Agent skill metadata and instructions
 ```
 
-- `smoke:workspace` verifies the always-visible Workspace, mixed 2D/3D canvas, component creation and actions, direct Workspace project save/open, undo/redo, responsive layout, and console health.
-- `smoke:agent` uses a real Streamable HTTP MCP client and browser. It covers connection offers, multi-tab lease conflict/takeover, approval, instruction-first behavior, Workspace creation/data/event flows, idempotency, undo/redo, persistence, revocation, responsive layout, and capability-secret scans.
+## Development and verification
 
-Unit and integration tests cover all Workspace operations, component manifests and recipes, video and website security, placements and geometry, timers/buttons/spatial actions, deterministic event routing, data-feed security and consent, binding projection, transitions and reduced motion, permissions, stale contexts, rollback, idempotency, persistence/replay, hybrid rendering, and gateway MCP/OpenAPI contracts.
+### Commands
+
+```bash
+npm run typecheck                       # TypeScript project check
+npm test -- --run --maxWorkers=2       # deterministic bounded full test run
+npm run build                           # production bundle
+npm run smoke:workspace                 # real browser Workspace flow
+npm run smoke:agent                     # real browser + Streamable HTTP MCP flow
+npm run test:watch                       # interactive Vitest
+npm run test:coverage                    # coverage run
+```
+
+`smoke:workspace` verifies the exclusive pre-handshake Agent gate, Workspace unlock, mixed 2D/3D canvas, component creation and actions, direct project save/open, undo/redo, responsive layout, and console health.
+
+`smoke:agent` starts a real Streamable HTTP MCP client and browser. It covers offer creation, approval, instruction-first behavior, multi-tab lease conflict and takeover, Workspace creation, data and event flows, idempotency, undo/redo, persistence, revocation, responsive layout, and capability-secret scans.
+
+Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, MCP, and OpenAPI.
+
+When changing a public contract, update the schema, TypeScript type, controller/adapter, guide, focused regression, and at least one cross-layer test together. A green unit test alone is not sufficient for connection, rendering, persistence, or security changes.
+
+## License
+
+Scene Thread is available under the [MIT License](LICENSE).
