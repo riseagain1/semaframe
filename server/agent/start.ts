@@ -1,0 +1,83 @@
+import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
+import { hostHeaderValidation } from "@modelcontextprotocol/node";
+import { AgentGateway } from "./AgentGateway";
+import { createNodeAgentGatewayHttpHandler } from "./AgentGatewayHttpHandler";
+import { resolveAgentGatewayNetworkConfig } from "./AgentGatewayNetworkConfig";
+
+function positiveInteger(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer.`);
+  return value;
+}
+
+function allowedOrigins(value: string | undefined): string[] {
+  const values = (value ?? "http://127.0.0.1:4173,http://localhost:4173")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!values.length) throw new Error("TTV_AGENT_ALLOWED_ORIGINS must contain at least one exact origin.");
+  return [...new Set(values.map((entry) => {
+    const url = new URL(entry);
+    if (url.origin !== entry || url.username || url.password || url.pathname !== "/") {
+      throw new Error(`Invalid exact browser origin: ${entry}`);
+    }
+    return url.origin;
+  }))];
+}
+
+const network = resolveAgentGatewayNetworkConfig(process.env);
+const { bindHost: host, port, publicBaseUrl } = network;
+const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/u, "");
+const browserOrigins = [
+  ...new Set([
+    ...allowedOrigins(process.env.TTV_AGENT_ALLOWED_ORIGINS),
+    new URL(publicBaseUrl).origin,
+  ]),
+];
+const bodyLimitBytes = positiveInteger("TTV_AGENT_BODY_LIMIT_BYTES", 512 * 1024);
+
+const gateway = new AgentGateway({
+  publicBaseUrl,
+  workspaceRoot,
+  commandTimeoutMs: positiveInteger("TTV_AGENT_COMMAND_TIMEOUT_MS", 45_000),
+  pollTimeoutMs: positiveInteger("TTV_AGENT_POLL_TIMEOUT_MS", 25_000),
+  browserTtlMs: positiveInteger("TTV_AGENT_BROWSER_TTL_MS", 65_000),
+  offerTtlMs: positiveInteger("TTV_AGENT_OFFER_TTL_MS", 10 * 60_000),
+  approvalTtlMs: positiveInteger("TTV_AGENT_APPROVAL_TTL_MS", 2 * 60_000),
+});
+const handle = createNodeAgentGatewayHttpHandler(gateway, {
+  allowedOrigins: browserOrigins,
+  publicBaseUrl,
+  bodyLimitBytes,
+});
+const validateHost = hostHeaderValidation([...network.allowedHostnames]);
+
+const server = createServer((request, response) => {
+  if (!validateHost(request, response)) return;
+  void handle(request, response);
+});
+
+server.on("clientError", (_error, socket) => {
+  socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+});
+
+server.listen(port, host, () => {
+  // This is intentionally the only startup log. Pairing credentials are never logged.
+  console.log(`Scene Thread Agent Gateway listening on ${publicBaseUrl}`);
+});
+
+let shuttingDown = false;
+function shutdown(): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  gateway.close();
+  void handle.close();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 5_000).unref();
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

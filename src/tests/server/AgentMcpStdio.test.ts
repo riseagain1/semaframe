@@ -1,0 +1,123 @@
+import {
+  Client,
+  type ProtocolEra,
+  type VersionNegotiationMode,
+} from "@modelcontextprotocol/client";
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+  type StdioServerParameters,
+} from "@modelcontextprotocol/client/stdio";
+import { describe, expect, it } from "vitest";
+
+const PROJECT_ROOT = process.cwd();
+const EXPECTED_TOOLS = [
+  "begin_workspace_update",
+  "get_workspace_instructions",
+  "inspect_workspace",
+  "inspect_workspace_component",
+  "inspect_workspace_physics",
+  "inspect_workspace_space",
+  "query_spatial_placement",
+  "query_stable_placement",
+  "read_workspace_events",
+  "redo_workspace_batch",
+  "simulate_workspace_physics",
+  "submit_workspace_batch",
+  "undo_workspace_batch",
+];
+
+type NegotiationSnapshot = {
+  era: ProtocolEra | undefined;
+  protocolVersion: string | undefined;
+  discoverResult: ReturnType<Client["getDiscoverResult"]>;
+  serverVersion: ReturnType<Client["getServerVersion"]>;
+  toolNames: string[];
+  allInputsClosed: boolean;
+  allHaveOutputSchema: boolean;
+  historyToolsRequireRevision: boolean;
+};
+
+function serverParameters(): StdioServerParameters {
+  return {
+    command: process.platform === "win32" ? "npm.cmd" : "npm",
+    args: ["--silent", "--prefix", PROJECT_ROOT, "run", "agent:mcp"],
+    cwd: PROJECT_ROOT,
+    env: {
+      ...getDefaultEnvironment(),
+      TTV_AGENT_GATEWAY_URL: "http://127.0.0.1:9",
+      TTV_AGENT_TOKEN: "stdio-negotiation-test-token",
+    },
+    stderr: "pipe",
+  };
+}
+
+async function inspectNegotiation(mode: VersionNegotiationMode): Promise<NegotiationSnapshot> {
+  const client = new Client(
+    { name: "scene-thread-negotiation-test", version: "1.0.0" },
+    { versionNegotiation: { mode, probe: { timeoutMs: 5_000 } } },
+  );
+  const transport = new StdioClientTransport(serverParameters());
+  let stderr = "";
+  transport.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    const historyTools = tools.filter((tool) => ["undo_workspace_batch", "redo_workspace_batch"].includes(tool.name));
+    return {
+      era: client.getProtocolEra(),
+      protocolVersion: client.getNegotiatedProtocolVersion(),
+      discoverResult: client.getDiscoverResult(),
+      serverVersion: client.getServerVersion(),
+      toolNames: tools.map((tool) => tool.name).sort(),
+      allInputsClosed: tools.every((tool) => tool.inputSchema.additionalProperties === false),
+      allHaveOutputSchema: tools.every((tool) => Boolean(tool.outputSchema)),
+      historyToolsRequireRevision: historyTools.length === 2 && historyTools.every((tool) => {
+        const required = tool.inputSchema.required;
+        return Array.isArray(required) && required.includes("expected_workspace_revision");
+      }),
+    };
+  } catch (cause) {
+    const diagnostic = stderr.trim();
+    if (diagnostic) {
+      throw new Error(`The Agent MCP child wrote to stderr:\n${diagnostic}`, { cause });
+    }
+    throw cause;
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+describe("Agent MCP stdio protocol negotiation", () => {
+  it("serves a 2025-era client through the legacy initialize handshake", async () => {
+    const result = await inspectNegotiation("legacy");
+
+    expect(result.era).toBe("legacy");
+    expect(result.protocolVersion).toMatch(/^2025-/u);
+    expect(result.discoverResult).toBeUndefined();
+    expect(result.serverVersion).toEqual({ name: "scene-thread-workspace-engine", version: "1.6.0" });
+    expect(result.toolNames).toEqual(EXPECTED_TOOLS);
+    expect(result.allInputsClosed).toBe(true);
+    expect(result.allHaveOutputSchema).toBe(true);
+    expect(result.historyToolsRequireRevision).toBe(true);
+  }, 15_000);
+
+  it("serves a 2026-era client through mandatory modern discovery", async () => {
+    const result = await inspectNegotiation({ pin: "2026-07-28" });
+
+    expect(result.era).toBe("modern");
+    expect(result.protocolVersion).toBe("2026-07-28");
+    expect(result.discoverResult).toMatchObject({
+      supportedVersions: ["2026-07-28"],
+      resultType: "complete",
+    });
+    expect(result.serverVersion).toEqual({ name: "scene-thread-workspace-engine", version: "1.6.0" });
+    expect(result.toolNames).toEqual(EXPECTED_TOOLS);
+    expect(result.allInputsClosed).toBe(true);
+    expect(result.allHaveOutputSchema).toBe(true);
+    expect(result.historyToolsRequireRevision).toBe(true);
+  }, 15_000);
+});

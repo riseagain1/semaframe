@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "assetManifest.schema.json",
+  "title": "AssetManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assetLibraryVersion", "styleFamily", "assets"],
+  "properties": {
+    "assetLibraryVersion": { "type": "string", "minLength": 1 },
+    "styleFamily": { "type": "string", "minLength": 1 },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/assetRecord" }
+    }
+  },
+  "$defs": {
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "depth"],
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "depth": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "format", "unitScaleMeters", "upAxis", "forwardAxis", "originRule"],
+      "properties": {
+        "uri": { "type": "string", "minLength": 1, "pattern": "\\.glb$" },
+        "format": { "const": "glb" },
+        "unitScaleMeters": { "type": "number", "exclusiveMinimum": 0 },
+        "upAxis": { "const": "+Y" },
+        "forwardAxis": { "const": "+Z" },
+        "originRule": { "enum": ["ground_center", "logical_center"] }
+      }
+    },
+    "renderHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shape", "primaryColor"],
+      "properties": {
+        "shape": {
+          "enum": [
+            "box",
+            "sphere",
+            "capsule",
+            "cylinder",
+            "cone",
+            "plane",
+            "humanoid",
+            "quadruped",
+            "table",
+            "chair",
+            "door",
+            "window",
+            "lamp",
+            "tree",
+            "vehicle",
+            "effect"
+          ]
+        },
+        "primaryColor": { "type": "string", "pattern": "^#[0-9A-F]{6}$" },
+        "accentColor": { "type": "string", "pattern": "^#[0-9A-F]{6}$" }
+      }
+    },
+    "assetRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assetId",
+        "kind",
+        "displayName",
+        "tags",
+        "styleFamily",
+        "bounds",
+        "defaultScale",
+        "anchors",
+        "sockets",
+        "animations",
+        "supportedStates",
+        "variants",
+        "source",
+        "license",
+        "renderHint"
+      ],
+      "properties": {
+        "assetId": { "type": "string", "minLength": 1 },
+        "kind": {
+          "enum": ["character", "animal", "prop", "structure", "effect", "primitive"]
+        },
+        "displayName": { "type": "string", "minLength": 1 },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "styleFamily": { "type": "string", "minLength": 1 },
+        "runtime": { "$ref": "#/$defs/runtime" },
+        "bounds": { "$ref": "#/$defs/bounds" },
+        "defaultScale": { "type": "number", "minimum": 0.01, "maximum": 100 },
+        "anchors": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "sockets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "animations": {
+          "type": "array",
+          "items": { "enum": ["idle", "walk", "run", "enter", "exit"] },
+          "uniqueItems": true
+        },
+        "supportedStates": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "variants": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "source": { "enum": ["bundled", "procedural"] },
+        "license": { "const": "project_owned_or_permissive" },
+        "renderHint": { "$ref": "#/$defs/renderHint" },
+        "fallback": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["source"],
+            "properties": { "source": { "const": "bundled" } }
+          },
+          "then": {
+            "type": "object",
+            "required": ["runtime"],
+            "properties": { "runtime": true }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["source"],
+            "properties": { "source": { "const": "procedural" } }
+          },
+          "then": {
+            "type": "object",
+            "properties": { "runtime": false }
+          }
+        }
+      ]
+    }
+  }
+}

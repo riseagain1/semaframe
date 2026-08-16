@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scene Thread Workspace"
+  short_description: "Control a universal 2D and 3D workspace"
+  default_prompt: "Use $scene-thread-engine to inspect and update the open universal component workspace."

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "workspaceProject.schema.json",
+  "title": "WorkspaceProjectFile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatVersion", "protocolVersion", "workspaceSchemaVersion", "projectId", "createdAt", "updatedAt", "registryDigest", "checkpointNextComponentSequence", "nextComponentSequence", "checkpointNextEventCursor", "nextEventCursor", "checkpoint", "workspace", "commandHistory"],
+  "properties": {
+    "formatVersion": { "const": "1.0" },
+    "protocolVersion": { "enum": ["1.0", "1.1", "1.2"] },
+    "workspaceSchemaVersion": { "enum": ["1.0", "1.1", "1.2"] },
+    "projectId": { "$ref": "workspaceProtocol.schema.json#/$defs/id" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "registryDigest": { "type": "string", "minLength": 1 },
+    "checkpointNextComponentSequence": { "type": "integer", "minimum": 1, "maximum": 999999 },
+    "nextComponentSequence": { "type": "integer", "minimum": 1, "maximum": 999999 },
+    "checkpointNextEventCursor": { "type": "integer", "minimum": 1 },
+    "nextEventCursor": { "type": "integer", "minimum": 1 },
+    "checkpoint": { "$ref": "#/$defs/workspace" },
+    "workspace": { "$ref": "#/$defs/workspace" },
+    "commandHistory": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/command" } }
+  },
+  "$defs": {
+    "entry": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "type": "string", "minLength": 1 }, {}] },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["createdRevision", "createdBy"], "properties": { "createdRevision": { "type": "integer", "minimum": 0 }, "createdBy": { "enum": ["user", "agent", "system", "migration"] }, "legacyId": { "type": "string" }, "sourceId": { "type": "string" } } },
+    "component": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "type", "label", "props", "durableState", "placement", "bindings", "tags", "visibility", "locks", "provenance"],
+      "properties": {
+        "id": { "$ref": "workspaceProtocol.schema.json#/$defs/id" },
+        "type": { "$ref": "workspaceProtocol.schema.json#/$defs/componentType" },
+        "label": { "type": "string", "maxLength": 1000 },
+        "props": { "$ref": "workspaceProtocol.schema.json#/$defs/jsonObject" },
+        "durableState": { "$ref": "workspaceProtocol.schema.json#/$defs/jsonObject" },
+        "placement": { "$ref": "workspaceProtocol.schema.json#/$defs/placement" },
+        "parentId": { "$ref": "workspaceProtocol.schema.json#/$defs/id" },
+        "bindings": { "type": "array", "maxItems": 5000, "uniqueItems": true, "items": { "$ref": "workspaceProtocol.schema.json#/$defs/id" } },
+        "tags": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "maxLength": 256 } },
+        "visibility": { "enum": ["visible", "hidden", "collapsed"] },
+        "visualEffects": { "$ref": "workspaceProtocol.schema.json#/$defs/visualEffects" },
+        "locks": { "$ref": "workspaceProtocol.schema.json#/$defs/locks" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "summary": { "type": "object", "additionalProperties": false, "required": ["requestId", "inputRevision", "baseWorkspaceRevision", "resultingWorkspaceRevision", "resultingRegistryDigest", "operationIds", "eventIds"], "properties": { "requestId": { "type": "string", "minLength": 1 }, "inputRevision": { "type": "integer", "minimum": 0 }, "baseWorkspaceRevision": { "type": "integer", "minimum": 0 }, "resultingWorkspaceRevision": { "type": "integer", "minimum": 1 }, "resultingRegistryDigest": { "type": "string", "minLength": 1 }, "operationIds": { "type": "array", "maxItems": 300, "items": { "type": "string", "minLength": 1 } }, "eventIds": { "type": "array", "maxItems": 10000, "items": { "type": "string", "minLength": 1 } } } },
+    "workspace": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workspaceId", "revision", "protocolVersion", "workspaceSchemaVersion", "registryDigest", "components", "resources", "connections", "aliases", "sharedViews", "recipes", "history"],
+      "properties": {
+        "workspaceId": { "$ref": "workspaceProtocol.schema.json#/$defs/id" }, "revision": { "type": "integer", "minimum": 0 }, "protocolVersion": { "enum": ["1.0", "1.1", "1.2"] }, "workspaceSchemaVersion": { "enum": ["1.0", "1.1", "1.2"] }, "registryDigest": { "type": "string", "minLength": 1 },
+        "components": { "type": "array", "maxItems": 2000, "items": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "$ref": "workspaceProtocol.schema.json#/$defs/id" }, { "$ref": "#/$defs/component" }] } },
+        "resources": { "type": "array", "maxItems": 1000, "items": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "$ref": "workspaceProtocol.schema.json#/$defs/id" }, { "$ref": "workspaceProtocol.schema.json#/$defs/resource" }] } },
+        "connections": { "type": "array", "maxItems": 5000, "items": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "$ref": "workspaceProtocol.schema.json#/$defs/id" }, { "oneOf": [{ "$ref": "workspaceProtocol.schema.json#/$defs/binding" }, { "$ref": "workspaceProtocol.schema.json#/$defs/eventConnection" }] }] } },
+        "aliases": { "type": "array", "maxItems": 4000, "items": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "type": "string", "minLength": 1 }, { "$ref": "workspaceProtocol.schema.json#/$defs/id" }] } },
+        "sharedViews": { "type": "array", "maxItems": 500, "items": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "$ref": "workspaceProtocol.schema.json#/$defs/id" }, { "$ref": "workspaceProtocol.schema.json#/$defs/view" }] } },
+        "recipes": { "type": "array", "maxItems": 200, "items": { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "type": "string", "minLength": 1 }, { "$ref": "workspaceProtocol.schema.json#/$defs/recipe" }] } },
+        "history": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/summary" } }
+      }
+    },
+    "causation": { "type": "object", "additionalProperties": false, "required": ["eventId", "connectionId"], "properties": { "eventId": { "type": "string", "minLength": 1 }, "connectionId": { "$ref": "workspaceProtocol.schema.json#/$defs/id" } } },
+    "event": { "type": "object", "additionalProperties": false, "required": ["id", "cursor", "workspaceRevision", "event", "payload", "source", "effectiveTimeMs"], "properties": { "id": { "type": "string", "minLength": 1 }, "cursor": { "type": "integer", "minimum": 1 }, "workspaceRevision": { "type": "integer", "minimum": 1 }, "componentId": { "$ref": "workspaceProtocol.schema.json#/$defs/id" }, "event": { "type": "string", "minLength": 1 }, "payload": { "$ref": "workspaceProtocol.schema.json#/$defs/jsonObject" }, "source": { "enum": ["user", "agent", "system", "migration", "binding"] }, "effectiveTimeMs": { "type": "integer", "minimum": 0 }, "causedBy": { "$ref": "#/$defs/causation" } } },
+    "command": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requestId", "actor", "inputRevision", "baseWorkspaceRevision", "inputRegistryDigest", "resultingRegistryDigest", "resolvedOperations", "resolvedEvents", "resultingWorkspaceRevision"],
+      "properties": {
+        "requestId": { "type": "string", "minLength": 1 }, "actor": { "enum": ["user", "agent", "system", "migration"] }, "inputRevision": { "type": "integer", "minimum": 0 }, "baseWorkspaceRevision": { "type": "integer", "minimum": 0 }, "inputRegistryDigest": { "type": "string", "minLength": 1 }, "resultingRegistryDigest": { "type": "string", "minLength": 1 },
+        "resolvedOperations": { "type": "array", "maxItems": 300, "items": { "$ref": "workspaceProtocol.schema.json#/$defs/operation" } }, "resolvedEvents": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/event" } },
+        "resolvedActionEffects": { "type": "array", "maxItems": 100, "items": { "type": "object", "additionalProperties": false, "required": ["opId", "componentId", "durableState", "events"], "properties": { "opId": { "$ref": "workspaceProtocol.schema.json#/$defs/id" }, "componentId": { "$ref": "workspaceProtocol.schema.json#/$defs/id" }, "durableState": { "$ref": "workspaceProtocol.schema.json#/$defs/jsonObject" }, "visibility": { "enum": ["visible", "hidden", "collapsed"] }, "causedBy": { "$ref": "#/$defs/causation" }, "events": { "type": "array", "maxItems": 10000, "items": { "type": "object", "additionalProperties": false, "required": ["id", "event", "payload"], "properties": { "id": { "type": "string", "minLength": 1 }, "event": { "type": "string", "minLength": 1 }, "payload": { "$ref": "workspaceProtocol.schema.json#/$defs/jsonObject" } } } } } } },
+        "resultingWorkspaceRevision": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

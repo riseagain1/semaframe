@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "workspaceProtocol.schema.json",
+  "title": "WorkspaceCommandBatch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "request_id", "workspace_id", "input_revision", "base_workspace_revision", "registry_digest", "mode", "operations"],
+  "properties": {
+    "protocol_version": { "enum": ["1.0", "1.1", "1.2"] },
+    "request_id": { "$ref": "#/$defs/id" },
+    "workspace_id": { "$ref": "#/$defs/id" },
+    "input_revision": { "type": "integer", "minimum": 0 },
+    "base_workspace_revision": { "type": "integer", "minimum": 0 },
+    "registry_digest": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "mode": { "const": "commit" },
+    "operations": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/$defs/operation" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+    "jsonValue": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" },
+        { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/jsonValue" } },
+        { "type": "object", "maxProperties": 10000, "propertyNames": { "not": { "enum": ["__proto__", "prototype", "constructor"] } }, "additionalProperties": { "$ref": "#/$defs/jsonValue" } }
+      ]
+    },
+    "jsonObject": { "type": "object", "maxProperties": 10000, "propertyNames": { "not": { "enum": ["__proto__", "prototype", "constructor"] } }, "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+    "vec2": { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } },
+    "vec3": { "type": "object", "additionalProperties": false, "required": ["x", "y", "z"], "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } } },
+    "size2": { "type": "object", "additionalProperties": false, "required": ["width", "height"], "properties": { "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 } } },
+    "world3dPlacement": { "type": "object", "additionalProperties": false, "required": ["space", "position", "rotation", "scale"], "properties": { "space": { "const": "world3d" }, "position": { "$ref": "#/$defs/vec3" }, "rotation": { "$ref": "#/$defs/vec3" }, "scale": { "$ref": "#/$defs/vec3" }, "size": { "$ref": "#/$defs/size2" } } },
+    "canvas2dPlacement": { "type": "object", "additionalProperties": false, "required": ["space", "position"], "properties": { "space": { "const": "canvas2d" }, "position": { "$ref": "#/$defs/vec2" }, "size": { "$ref": "#/$defs/size2" }, "rotationDeg": { "type": "number" }, "zIndex": { "type": "integer", "minimum": -10000, "maximum": 10000 } } },
+    "surfacePlacement": { "type": "object", "additionalProperties": false, "required": ["space", "targetId", "surface", "offset"], "properties": { "space": { "const": "surface" }, "targetId": { "$ref": "#/$defs/id" }, "surface": { "$ref": "#/$defs/id" }, "offset": { "$ref": "#/$defs/vec2" }, "size": { "$ref": "#/$defs/size2" }, "zIndex": { "type": "integer", "minimum": -10000, "maximum": 10000 } } },
+    "billboardPlacement": { "type": "object", "additionalProperties": false, "required": ["space", "targetId", "offset"], "properties": { "space": { "const": "billboard" }, "targetId": { "$ref": "#/$defs/id" }, "offset": { "$ref": "#/$defs/vec3" }, "size": { "$ref": "#/$defs/size2" }, "occlusion": { "enum": ["visible", "hide_when_occluded", "fade_when_occluded"] } } },
+    "viewportPlacement": { "type": "object", "additionalProperties": false, "required": ["space", "anchor", "offset"], "properties": { "space": { "const": "viewport" }, "anchor": { "enum": ["top_left", "top", "top_right", "left", "center", "right", "bottom_left", "bottom", "bottom_right"] }, "offset": { "$ref": "#/$defs/vec2" }, "size": { "$ref": "#/$defs/size2" }, "zIndex": { "type": "integer", "minimum": -10000, "maximum": 10000 } } },
+    "placement": { "oneOf": [{ "$ref": "#/$defs/world3dPlacement" }, { "$ref": "#/$defs/canvas2dPlacement" }, { "$ref": "#/$defs/surfacePlacement" }, { "$ref": "#/$defs/billboardPlacement" }, { "$ref": "#/$defs/viewportPlacement" }] },
+    "componentType": { "type": "object", "additionalProperties": false, "required": ["typeId", "version", "digest"], "properties": { "typeId": { "$ref": "#/$defs/id" }, "version": { "type": "string", "minLength": 1, "maxLength": 64 }, "digest": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+    "locks": { "type": "object", "additionalProperties": false, "properties": { "placement": { "type": "boolean" }, "resize": { "type": "boolean" }, "visualEffects": { "type": "boolean" }, "props": { "type": "boolean" }, "deletion": { "type": "boolean" }, "actions": { "type": "boolean" } } },
+    "visualEffects": {
+      "type": "object", "additionalProperties": false,
+      "required": ["opacity", "emissive", "glow"],
+      "properties": {
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "emissive": {
+          "type": "object", "additionalProperties": false,
+          "required": ["color", "intensity"],
+          "properties": {
+            "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "intensity": { "type": "number", "minimum": 0, "maximum": 8 }
+          }
+        },
+        "glow": {
+          "type": "object", "additionalProperties": false,
+          "required": ["color", "intensity", "spread"],
+          "properties": {
+            "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "intensity": { "type": "number", "minimum": 0, "maximum": 4 },
+            "spread": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "noResizePolicy": { "type": "object", "additionalProperties": false, "required": ["kind", "mode"], "properties": { "kind": { "const": "none" }, "mode": { "const": "none" } } },
+    "box2dResizePolicy": { "type": "object", "additionalProperties": false, "required": ["kind", "mode", "defaultSize", "minSize", "maxSize", "allowedAxes", "units"], "properties": { "kind": { "const": "box2d" }, "mode": { "enum": ["free", "aspect_locked"] }, "defaultSize": { "$ref": "#/$defs/size2" }, "minSize": { "$ref": "#/$defs/size2" }, "maxSize": { "$ref": "#/$defs/size2" }, "aspectRatio": { "type": "number", "exclusiveMinimum": 0 }, "allowedAxes": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["width", "height"] } }, "units": { "const": "px" } } },
+    "scale3dResizePolicy": { "type": "object", "additionalProperties": false, "required": ["kind", "mode", "defaultScale", "minScale", "maxScale", "allowedAxes", "units"], "properties": { "kind": { "const": "scale3d" }, "mode": { "enum": ["free", "uniform"] }, "defaultScale": { "$ref": "#/$defs/vec3" }, "minScale": { "$ref": "#/$defs/vec3" }, "maxScale": { "$ref": "#/$defs/vec3" }, "allowedAxes": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["x", "y", "z"] } }, "units": { "const": "ratio" } } },
+    "stageDimensions": { "type": "object", "additionalProperties": false, "required": ["width", "height", "depth"], "properties": { "width": { "type": "number", "exclusiveMinimum": 0 }, "height": { "type": "number", "exclusiveMinimum": 0 }, "depth": { "type": "number", "exclusiveMinimum": 0 } } },
+    "stageDimensionsResizePolicy": { "type": "object", "additionalProperties": false, "required": ["kind", "mode", "defaultDimensions", "minDimensions", "maxDimensions", "allowedAxes", "units"], "properties": { "kind": { "const": "stage_dimensions" }, "mode": { "enum": ["free", "uniform"] }, "defaultDimensions": { "$ref": "#/$defs/stageDimensions" }, "minDimensions": { "$ref": "#/$defs/stageDimensions" }, "maxDimensions": { "$ref": "#/$defs/stageDimensions" }, "allowedAxes": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["width", "height", "depth"] } }, "units": { "const": "m" } } },
+    "resizePolicy": { "oneOf": [{ "$ref": "#/$defs/noResizePolicy" }, { "$ref": "#/$defs/box2dResizePolicy" }, { "$ref": "#/$defs/scale3dResizePolicy" }, { "$ref": "#/$defs/stageDimensionsResizePolicy" }] },
+    "resizePolicies": { "type": "object", "additionalProperties": false, "properties": { "world3d": { "$ref": "#/$defs/resizePolicy" }, "canvas2d": { "$ref": "#/$defs/resizePolicy" }, "surface": { "$ref": "#/$defs/resizePolicy" }, "billboard": { "$ref": "#/$defs/resizePolicy" }, "viewport": { "$ref": "#/$defs/resizePolicy" } } },
+    "recipeResizePolicy": { "oneOf": [{ "$ref": "#/$defs/noResizePolicy" }, { "$ref": "#/$defs/box2dResizePolicy" }] },
+    "recipeResizePolicies": { "type": "object", "additionalProperties": false, "properties": { "world3d": { "$ref": "#/$defs/recipeResizePolicy" }, "canvas2d": { "$ref": "#/$defs/recipeResizePolicy" }, "surface": { "$ref": "#/$defs/recipeResizePolicy" }, "billboard": { "$ref": "#/$defs/recipeResizePolicy" }, "viewport": { "$ref": "#/$defs/recipeResizePolicy" } } },
+    "componentResize": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["kind", "size"], "properties": { "kind": { "const": "box2d" }, "size": { "$ref": "#/$defs/size2" } } },
+      { "type": "object", "additionalProperties": false, "required": ["kind", "scale"], "properties": { "kind": { "const": "scale3d" }, "scale": { "$ref": "#/$defs/vec3" } } },
+      { "type": "object", "additionalProperties": false, "required": ["kind", "dimensions"], "properties": { "kind": { "const": "stage_dimensions" }, "dimensions": { "$ref": "#/$defs/stageDimensions" } } }
+    ] },
+    "jsonSchema": { "type": "object", "maxProperties": 1000, "propertyNames": { "not": { "enum": ["__proto__", "prototype", "constructor"] } } },
+    "actionManifest": { "type": "object", "additionalProperties": false, "required": ["inputSchema", "effectClass"], "properties": { "inputSchema": { "$ref": "#/$defs/jsonSchema" }, "effectClass": { "enum": ["none", "semantic", "data_read", "external_write", "extension_install"] }, "requiredPermissions": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } } } },
+    "recipeNode": { "type": "object", "additionalProperties": false, "required": ["id", "primitive"], "properties": { "id": { "$ref": "#/$defs/id" }, "primitive": { "enum": ["stack", "grid", "overlay", "scroll", "text", "shape", "image", "icon", "chart", "table", "asset3d", "button", "slider", "toggle", "input", "timer"] }, "props": { "$ref": "#/$defs/jsonObject" }, "children": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/recipeNode" } } } },
+    "recipe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["typeId", "version", "digest", "displayName", "allowedPlacements", "propsSchema", "durableStateSchema", "defaultProps", "defaultDurableState", "writableProps", "actions", "events", "root"],
+      "properties": {
+        "typeId": { "$ref": "#/$defs/id" }, "version": { "type": "string", "minLength": 1, "maxLength": 64 }, "digest": { "type": "string", "minLength": 1, "maxLength": 256 }, "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "allowedPlacements": { "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true, "items": { "enum": ["world3d", "canvas2d", "surface", "billboard", "viewport"] } }, "resizePolicy": { "$ref": "#/$defs/recipeResizePolicies" },
+        "propsSchema": { "$ref": "#/$defs/jsonSchema" }, "durableStateSchema": { "$ref": "#/$defs/jsonSchema" }, "defaultProps": { "$ref": "#/$defs/jsonObject" }, "defaultDurableState": { "$ref": "#/$defs/jsonObject" },
+        "writableProps": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "actions": { "type": "object", "maxProperties": 128, "additionalProperties": { "$ref": "#/$defs/actionManifest" } },
+        "events": { "type": "object", "maxProperties": 128, "additionalProperties": { "$ref": "#/$defs/jsonSchema" } },
+        "root": { "$ref": "#/$defs/recipeNode" }
+      }
+    },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["retrievedAt"], "properties": { "title": { "type": "string" }, "uri": { "type": "string" }, "publisher": { "type": "string" }, "retrievedAt": { "type": "string", "format": "date-time" }, "citation": { "type": "string" } } },
+    "resource": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "connectorType", "connectorVersion", "outputSchema", "config", "policy", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "label": { "type": "string", "minLength": 1, "maxLength": 1000 }, "connectorType": { "$ref": "#/$defs/id" }, "connectorVersion": { "type": "string", "minLength": 1 }, "outputSchema": { "$ref": "#/$defs/jsonSchema" }, "config": { "$ref": "#/$defs/jsonObject" }, "secretRef": { "$ref": "#/$defs/id" },
+        "policy": { "type": "object", "additionalProperties": false, "required": ["mode", "offline"], "properties": { "mode": { "enum": ["manual", "interval", "on_open"] }, "intervalMs": { "type": "integer", "minimum": 1000 }, "maxStaleMs": { "type": "integer", "minimum": 0 }, "offline": { "enum": ["keep_last_good", "show_error"] } } },
+        "snapshot": { "type": "object", "additionalProperties": false, "required": ["data", "contentHash", "retrievedAt", "stale", "provenance"], "properties": { "data": { "$ref": "#/$defs/jsonValue" }, "contentHash": { "type": "string", "minLength": 1 }, "retrievedAt": { "type": "string", "format": "date-time" }, "stale": { "type": "boolean" }, "provenance": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/provenance" } } } },
+        "status": { "enum": ["unconfigured", "ready", "stale", "error"] }, "lastError": { "type": "string", "maxLength": 10000 }
+      }
+    },
+    "transform": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "identity" } } },
+      { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "const": "pick" }, "path": { "type": "string" } } },
+      { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "format_number" }, "decimals": { "type": "integer", "minimum": 0, "maximum": 20 }, "prefix": { "type": "string" }, "suffix": { "type": "string" } } },
+      { "type": "object", "additionalProperties": false, "required": ["kind", "template"], "properties": { "kind": { "const": "template" }, "template": { "type": "string", "maxLength": 10000 } } }
+    ] },
+    "binding": { "type": "object", "additionalProperties": false, "required": ["kind", "id", "resourceId", "componentId", "targetProp", "mode", "transform", "enabled"], "properties": { "kind": { "const": "resource_binding" }, "id": { "$ref": "#/$defs/id" }, "resourceId": { "$ref": "#/$defs/id" }, "componentId": { "$ref": "#/$defs/id" }, "targetProp": { "$ref": "#/$defs/id" }, "sourcePath": { "type": "string", "maxLength": 2000 }, "mode": { "enum": ["snapshot", "live"] }, "transform": { "$ref": "#/$defs/transform" }, "enabled": { "type": "boolean" } } },
+    "eventConnection": { "type": "object", "additionalProperties": false, "required": ["kind", "id", "sourceComponentId", "event", "targetComponentId", "action", "enabled"], "properties": { "kind": { "const": "event_connection" }, "id": { "$ref": "#/$defs/id" }, "sourceComponentId": { "$ref": "#/$defs/id" }, "event": { "$ref": "#/$defs/id" }, "targetComponentId": { "$ref": "#/$defs/id" }, "action": { "$ref": "#/$defs/id" }, "input": { "$ref": "#/$defs/jsonObject" }, "inputMode": { "enum": ["static", "event_payload"] }, "transition": { "$ref": "#/$defs/transitionSpec" }, "enabled": { "type": "boolean" } } },
+    "transitionSpec": { "type": "object", "additionalProperties": false, "required": ["durationMs", "easing"], "properties": { "durationMs": { "type": "integer", "minimum": 0, "maximum": 60000 }, "delayMs": { "type": "integer", "minimum": 0, "maximum": 60000 }, "easing": { "enum": ["linear", "ease_in", "ease_out", "ease_in_out"] } } },
+    "view": { "type": "object", "additionalProperties": false, "required": ["id", "label", "componentIds"], "properties": { "id": { "$ref": "#/$defs/id" }, "label": { "type": "string", "minLength": 1, "maxLength": 1000 }, "componentIds": { "type": "array", "maxItems": 10000, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }, "camera": { "$ref": "#/$defs/jsonObject" } } },
+    "operation": { "oneOf": [
+      { "$ref": "#/$defs/defineRecipe" }, { "$ref": "#/$defs/createComponent" }, { "$ref": "#/$defs/updateComponent" }, { "$ref": "#/$defs/upgradeComponentManifest" }, { "$ref": "#/$defs/deleteComponent" }, { "$ref": "#/$defs/placeComponent" }, { "$ref": "#/$defs/resizeComponent" }, { "$ref": "#/$defs/setComponentVisualEffects" }, { "$ref": "#/$defs/attachComponent" }, { "$ref": "#/$defs/detachComponent" }, { "$ref": "#/$defs/invokeAction" }, { "$ref": "#/$defs/upsertResource" }, { "$ref": "#/$defs/deleteResource" }, { "$ref": "#/$defs/bindResource" }, { "$ref": "#/$defs/unbindResource" }, { "$ref": "#/$defs/connectEvent" }, { "$ref": "#/$defs/disconnectEvent" }, { "$ref": "#/$defs/presentView" }, { "$ref": "#/$defs/clearWorkspace" }
+    ] },
+    "defineRecipe": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "recipe"], "properties": { "op": { "const": "define_component_recipe" }, "op_id": { "$ref": "#/$defs/id" }, "recipe": { "$ref": "#/$defs/recipe" } } },
+    "createComponent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id", "component_type", "placement"], "properties": { "op": { "const": "create_component" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "component_type": { "$ref": "#/$defs/componentType" }, "label": { "type": "string", "maxLength": 1000 }, "props": { "$ref": "#/$defs/jsonObject" }, "durable_state": { "$ref": "#/$defs/jsonObject" }, "placement": { "$ref": "#/$defs/placement" }, "parent_id": { "$ref": "#/$defs/id" }, "tags": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "maxLength": 256 } }, "visibility": { "enum": ["visible", "hidden", "collapsed"] }, "visual_effects": { "$ref": "#/$defs/visualEffects" }, "locks": { "$ref": "#/$defs/locks" }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "updateComponent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id", "patch"], "properties": { "op": { "const": "update_component" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "patch": { "type": "object", "additionalProperties": false, "minProperties": 1, "properties": { "label": { "type": "string", "maxLength": 1000 }, "props": { "$ref": "#/$defs/jsonObject" }, "tags": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "maxLength": 256 } }, "visibility": { "enum": ["visible", "hidden", "collapsed"] }, "locks": { "$ref": "#/$defs/locks" } } }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "upgradeComponentManifest": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id", "component_type"], "properties": { "op": { "const": "upgrade_component_manifest" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "component_type": { "$ref": "#/$defs/componentType" } } },
+    "deleteComponent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id"], "properties": { "op": { "const": "delete_component" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "policy": { "enum": ["reject_if_referenced", "cascade", "orphan"] }, "confirm": { "const": true } } },
+    "placeComponent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id", "placement"], "properties": { "op": { "const": "place_component" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "placement": { "$ref": "#/$defs/placement" }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "resizeComponent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id", "resize"], "properties": { "op": { "const": "resize_component" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "resize": { "$ref": "#/$defs/componentResize" }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "setComponentVisualEffects": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id", "visual_effects"], "properties": { "op": { "const": "set_component_visual_effects" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "visual_effects": { "$ref": "#/$defs/visualEffects" }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "attachComponent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "child_id", "parent_id"], "properties": { "op": { "const": "attach_component" }, "op_id": { "$ref": "#/$defs/id" }, "child_id": { "$ref": "#/$defs/id" }, "parent_id": { "$ref": "#/$defs/id" }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "detachComponent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "child_id"], "properties": { "op": { "const": "detach_component" }, "op_id": { "$ref": "#/$defs/id" }, "child_id": { "$ref": "#/$defs/id" }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "invokeAction": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "id", "action", "input"], "properties": { "op": { "const": "invoke_component_action" }, "op_id": { "$ref": "#/$defs/id" }, "id": { "$ref": "#/$defs/id" }, "action": { "$ref": "#/$defs/id" }, "input": { "$ref": "#/$defs/jsonObject" }, "effective_time_ms": { "type": "integer", "minimum": 0 }, "transition": { "$ref": "#/$defs/transitionSpec" } } },
+    "upsertResource": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "resource"], "properties": { "op": { "const": "upsert_resource" }, "op_id": { "$ref": "#/$defs/id" }, "resource": { "$ref": "#/$defs/resource" } } },
+    "deleteResource": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "resource_id"], "properties": { "op": { "const": "delete_resource" }, "op_id": { "$ref": "#/$defs/id" }, "resource_id": { "$ref": "#/$defs/id" }, "cascade": { "type": "boolean" } } },
+    "bindResource": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "binding"], "properties": { "op": { "const": "bind_resource" }, "op_id": { "$ref": "#/$defs/id" }, "binding": { "$ref": "#/$defs/binding" } } },
+    "unbindResource": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "binding_id"], "properties": { "op": { "const": "unbind_resource" }, "op_id": { "$ref": "#/$defs/id" }, "binding_id": { "$ref": "#/$defs/id" } } },
+    "connectEvent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "connection"], "properties": { "op": { "const": "connect_event" }, "op_id": { "$ref": "#/$defs/id" }, "connection": { "$ref": "#/$defs/eventConnection" } } },
+    "disconnectEvent": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "connection_id"], "properties": { "op": { "const": "disconnect_event" }, "op_id": { "$ref": "#/$defs/id" }, "connection_id": { "$ref": "#/$defs/id" } } },
+    "presentView": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "view"], "properties": { "op": { "const": "present_view" }, "op_id": { "$ref": "#/$defs/id" }, "view": { "$ref": "#/$defs/view" } } },
+    "clearWorkspace": { "type": "object", "additionalProperties": false, "required": ["op", "op_id", "confirm"], "properties": { "op": { "const": "clear_workspace" }, "op_id": { "$ref": "#/$defs/id" }, "confirm": { "const": true }, "include_resources": { "type": "boolean" } } }
+  }
+}
