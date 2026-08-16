@@ -1,0 +1,296 @@
+{
+  "universalSpaceData": {
+    "format": "universal-space-data",
+    "version": "2.0",
+    "workspaceRevision": 2,
+    "stage": {
+      "component_id": "CMP_000001",
+      "visibility": "visible",
+      "dimensions": {
+        "width": 12,
+        "height": 4,
+        "depth": 10
+      },
+      "ground_height": 0,
+      "ground_polygon": [
+        {
+          "x": -6,
+          "z": -5
+        },
+        {
+          "x": 6,
+          "z": -5
+        },
+        {
+          "x": 6,
+          "z": 5
+        },
+        {
+          "x": -6,
+          "z": 5
+        }
+      ]
+    },
+    "nodes": [
+      {
+        "id": "CMP_000002",
+        "primPath": "/World/CMP_000002",
+        "label": "Telemetry desk",
+        "bounds": {
+          "min": {
+            "x": -2.4000000000000004,
+            "y": 0,
+            "z": -0.425
+          },
+          "max": {
+            "x": -0.8,
+            "y": 0.76,
+            "z": 0.425
+          },
+          "center": {
+            "x": -1.6,
+            "y": 0.38,
+            "z": 0
+          },
+          "size": {
+            "x": 1.6000000000000003,
+            "y": 0.76,
+            "z": 0.85
+          }
+        },
+        "collision": {
+          "enabled": true,
+          "role": "solid",
+          "shape": "box"
+        }
+      },
+      {
+        "id": "CMP_000003",
+        "primPath": "/World/CMP_000003",
+        "label": "Operator chair",
+        "bounds": {
+          "min": {
+            "x": -1.84,
+            "y": 0,
+            "z": 1.09
+          },
+          "max": {
+            "x": -1.36,
+            "y": 0.9,
+            "z": 1.61
+          },
+          "center": {
+            "x": -1.6,
+            "y": 0.45,
+            "z": 1.35
+          },
+          "size": {
+            "x": 0.48,
+            "y": 0.9,
+            "z": 0.52
+          }
+        },
+        "collision": {
+          "enabled": true,
+          "role": "solid",
+          "shape": "box"
+        }
+      },
+      {
+        "id": "CMP_000004",
+        "primPath": "/World/CMP_000004",
+        "label": "Simulation runner",
+        "bounds": {
+          "min": {
+            "x": 0.525,
+            "y": 0,
+            "z": 0.5249999999999999
+          },
+          "max": {
+            "x": 1.0750000000000002,
+            "y": 1.75,
+            "z": 0.875
+          },
+          "center": {
+            "x": 0.8,
+            "y": 0.875,
+            "z": 0.7
+          },
+          "size": {
+            "x": 0.5500000000000002,
+            "y": 1.75,
+            "z": 0.3500000000000001
+          }
+        },
+        "collision": {
+          "enabled": true,
+          "role": "solid",
+          "shape": "box"
+        }
+      },
+      {
+        "id": "CMP_000005",
+        "primPath": "/World/CMP_000005",
+        "label": "Floating telemetry crate",
+        "bounds": {
+          "min": {
+            "x": 2.476,
+            "y": 2.2,
+            "z": -0.496
+          },
+          "max": {
+            "x": 2.9240000000000004,
+            "y": 2.5360000000000005,
+            "z": -0.10399999999999998
+          },
+          "center": {
+            "x": 2.7,
+            "y": 2.3680000000000003,
+            "z": -0.3
+          },
+          "size": {
+            "x": 0.4480000000000004,
+            "y": 0.3360000000000003,
+            "z": 0.392
+          }
+        },
+        "collision": {
+          "enabled": true,
+          "role": "solid",
+          "shape": "box"
+        }
+      }
+    ],
+    "relations": []
+  },
+  "physicsBefore": {
+    "model": "quasi_static_rigid_support_v2",
+    "feasible": false,
+    "issues": [
+      {
+        "code": "unsupported",
+        "component_id": "CMP_000005",
+        "message": "CMP_000005 has no grounded support load path"
+      }
+    ],
+    "bodies": [
+      {
+        "componentId": "CMP_000002",
+        "bodyType": "static",
+        "grounded": true,
+        "stabilityReason": "anchored"
+      },
+      {
+        "componentId": "CMP_000003",
+        "bodyType": "static",
+        "grounded": true,
+        "stabilityReason": "anchored"
+      },
+      {
+        "componentId": "CMP_000004",
+        "bodyType": "static",
+        "grounded": true,
+        "stabilityReason": "anchored"
+      },
+      {
+        "componentId": "CMP_000005",
+        "bodyType": "dynamic",
+        "grounded": false,
+        "stabilityReason": "unsupported"
+      }
+    ]
+  },
+  "collisionPreflight": {
+    "valid": false,
+    "suggestedPlacements": [
+      {
+        "space": "world3d",
+        "position": {
+          "x": -1.6,
+          "y": 0,
+          "z": -0.625
+        },
+        "rotation": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      {
+        "space": "world3d",
+        "position": {
+          "x": -1.6,
+          "y": 0,
+          "z": 0.625
+        },
+        "rotation": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    ]
+  },
+  "settlePreview": {
+    "model": "quasi_static_vertical_drop_v2",
+    "mutatesWorkspace": false,
+    "proposals": [
+      {
+        "component_id": "CMP_000005",
+        "from": {
+          "space": "world3d",
+          "position": {
+            "x": 2.7,
+            "y": 2.2,
+            "z": -0.3
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "scale": {
+            "x": 1.4,
+            "y": 1.4,
+            "z": 1.4
+          }
+        },
+        "to": {
+          "space": "world3d",
+          "position": {
+            "x": 2.7,
+            "y": 0,
+            "z": -0.3
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "scale": {
+            "x": 1.4,
+            "y": 1.4,
+            "z": 1.4
+          }
+        },
+        "drop_distance_m": 2.2,
+        "settled": true
+      }
+    ]
+  },
+  "physicsAfter": {
+    "model": "quasi_static_rigid_support_v2",
+    "feasible": true,
+    "issues": []
+  }
+}

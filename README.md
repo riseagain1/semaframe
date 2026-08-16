@@ -12,6 +12,20 @@ SemaFrame turns a browser canvas into a programmable visual workspace. A person 
 
 The central idea is simple: there is one authoritative `WorkspaceStore`. The UI, Agent API, data bindings, physics queries, project history, and hybrid renderer all operate on that same revisioned state. There is no hidden model-owned scene and no separate legacy Compose authority.
 
+<p align="center">
+  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4">
+    <img src="./docs/media/semaframe-demo-poster.jpg" alt="Watch the 78-second SemaFrame product demo" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4"><strong>▶ Watch the 78-second product demo</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo-short.mp4">18-second vertical cut</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/riseagain1/semaframe/releases/tag/v0.2.0">Video, captions, and release notes</a>
+</p>
+
 ## Contents
 
 - [Why SemaFrame](#why-semaframe)

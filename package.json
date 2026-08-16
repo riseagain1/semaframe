@@ -30,6 +30,13 @@
     "test:coverage": "vitest run --coverage",
     "smoke:workspace": "node scripts/workspace-smoke.mjs",
     "smoke:agent": "node scripts/agent-smoke.mjs",
+    "demo:capture": "node scripts/demo-video-capture.mjs",
+    "demo:audio": "node scripts/generate-demo-audio.mjs",
+    "demo:studio": "npm run demo:audio && remotion studio video/src/index.ts --public-dir=video/public",
+    "demo:typecheck": "tsc -p video/tsconfig.json --pretty false",
+    "demo:render": "npm run demo:audio && remotion render video/src/index.ts SemaFrameHero artifacts/semaframe-demo.mp4 --public-dir=video/public --codec=h264 --crf=18 --pixel-format=yuv420p",
+    "demo:render:short": "npm run demo:audio && remotion render video/src/index.ts SemaFrameShort artifacts/semaframe-demo-short.mp4 --public-dir=video/public --codec=h264 --crf=18 --pixel-format=yuv420p",
+    "demo:render:poster": "npm run demo:audio && remotion still video/src/index.ts SemaFramePoster artifacts/semaframe-demo-poster.png --public-dir=video/public",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
@@ -47,6 +54,9 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
+    "@remotion/cli": "^4.0.512",
+    "@remotion/media": "^4.0.512",
+    "@remotion/transitions": "^4.0.512",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.4",
@@ -56,6 +66,7 @@
     "@types/three": "^0.179.0",
     "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "^26.1.0",
+    "remotion": "^4.0.512",
     "tsx": "^4.23.12",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",

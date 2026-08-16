@@ -1,6 +1,7 @@
 node_modules/
 dist/
 artifacts/
+video/public/audio/*.wav
 .env
 .env.local
 .DS_Store
