@@ -165,6 +165,24 @@ class Cdp {
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
     return result.result.value;
   }
+  async call(functionDeclaration, ...args) {
+    const global = await this.send("Runtime.evaluate", { expression: "globalThis" });
+    const objectId = global.result.objectId;
+    if (!objectId) throw new Error("The browser execution context was unavailable.");
+    try {
+      const result = await this.send("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration,
+        arguments: args.map((value) => ({ value })),
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+      return result.result.value;
+    } finally {
+      await this.send("Runtime.releaseObject", { objectId }).catch(() => undefined);
+    }
+  }
   close() { this.socket.close(); }
 }
 
@@ -192,6 +210,15 @@ async function poll(cdp, expression, label, timeoutMs = 12_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await cdp.evaluate(expression)) return;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function pollCall(cdp, functionDeclaration, args, label, timeoutMs = 12_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await cdp.call(functionDeclaration, ...args)) return;
     await delay(100);
   }
   throw new Error(`Timed out waiting for ${label}`);
@@ -856,25 +883,40 @@ try {
       !sameJson(nativeInspection.data?.pinned_manifest?.defaultDurableState, timerDefaultDurableState)) {
     throw new Error(`The native timer did not materialize its advertised defaults/provenance: ${JSON.stringify(nativeInspection)}`);
   }
-  await poll(
+  await pollCall(
     cdp,
-    `Boolean(document.querySelector('[role="region"][data-workspace-component-id="${timerId}"]')) && [...document.querySelectorAll('.workspace-component-tree button')].some((item) => item.dataset.workspaceComponentId === ${JSON.stringify(timerId)} && item.textContent?.trim() === 'Native default timer') && document.querySelector('.scene-stat')?.textContent?.includes('rev 1')`,
+    `function (expectedId) {
+      return [...document.querySelectorAll('[role="region"][data-workspace-component-id]')]
+        .some((item) => item.dataset.workspaceComponentId === expectedId) &&
+        [...document.querySelectorAll('.workspace-component-tree button')]
+          .some((item) => item.dataset.workspaceComponentId === expectedId && item.textContent?.trim() === 'Native default timer') &&
+        document.querySelector('.scene-stat')?.textContent?.includes('rev 1');
+    }`,
+    [timerId],
     "native timer tree, projection, and revision",
   );
-  const nativeRender = await cdp.evaluate(`({
-    text: document.querySelector('[role="region"][data-workspace-component-id="${timerId}"]')?.textContent,
-    type: document.querySelector('[role="region"][data-workspace-component-id="${timerId}"]')?.dataset.workspaceComponentType,
-    label: document.querySelector('[role="region"][data-workspace-component-id="${timerId}"]')?.getAttribute('aria-label'),
-  })`);
+  const nativeRender = await cdp.call(`function (expectedId) {
+    const item = [...document.querySelectorAll('[role="region"][data-workspace-component-id]')]
+      .find((candidate) => candidate.dataset.workspaceComponentId === expectedId);
+    return {
+      text: item?.textContent,
+      type: item?.dataset.workspaceComponentType,
+      label: item?.getAttribute('aria-label'),
+    };
+  }`, timerId);
   if (nativeRender.type !== "timer" || !nativeRender.label?.includes("Native default timer") ||
       !nativeRender.text?.includes(String(timerDefaultProps.label))) {
     throw new Error(`The native timer projection did not render its advertised defaults: ${JSON.stringify(nativeRender)}`);
   }
 
   if (!await cdp.evaluate(clickButton("History"))) throw new Error("Native Workspace history control was unavailable.");
-  await poll(
+  await pollCall(
     cdp,
-    `[...document.querySelectorAll('.agent-history-drawer .workspace-history-entry')].some((entry) => entry.querySelector('.entry-source')?.textContent?.includes(${JSON.stringify(`Agent · ${workspaceClientName}`)}))`,
+    `function (expectedSource) {
+      return [...document.querySelectorAll('.agent-history-drawer .workspace-history-entry')]
+        .some((entry) => entry.querySelector('.entry-source')?.textContent?.includes(expectedSource));
+    }`,
+    [`Agent · ${workspaceClientName}`],
     "native Workspace provenance entry",
   );
   await cdp.evaluate(`(() => { const b = document.querySelector('button[aria-label="Close workspace history"]'); b?.click(); return Boolean(b); })()`);
@@ -887,7 +929,11 @@ try {
   if (nativeUndone.ok !== true || nativeUndone.data?.changed !== true || nativeUndone.data?.workspace_revision !== 0) {
     throw new Error("Native Workspace undo did not restore revision 0.");
   }
-  await poll(cdp, `!document.querySelector('[data-workspace-component-id="${timerId}"]') && document.querySelector('.scene-stat')?.textContent?.includes('rev 0')`, "native timer undo projection");
+  await pollCall(cdp, `function (expectedId) {
+    return ![...document.querySelectorAll('[data-workspace-component-id]')]
+      .some((item) => item.dataset.workspaceComponentId === expectedId) &&
+      document.querySelector('.scene-stat')?.textContent?.includes('rev 0');
+  }`, [timerId], "native timer undo projection");
   const nativeRedone = await callAgent(mcpClient, "redo_workspace_batch", {
     ...workspaceSessionInput,
     expected_workspace_revision: 0,
@@ -895,7 +941,11 @@ try {
   if (nativeRedone.ok !== true || nativeRedone.data?.changed !== true || nativeRedone.data?.workspace_revision !== 1) {
     throw new Error("Native Workspace redo did not restore revision 1.");
   }
-  await poll(cdp, `Boolean(document.querySelector('[role="region"][data-workspace-component-id="${timerId}"]')) && document.querySelector('.scene-stat')?.textContent?.includes('rev 1')`, "native timer redo projection");
+  await pollCall(cdp, `function (expectedId) {
+    return [...document.querySelectorAll('[role="region"][data-workspace-component-id]')]
+      .some((item) => item.dataset.workspaceComponentId === expectedId) &&
+      document.querySelector('.scene-stat')?.textContent?.includes('rev 1');
+  }`, [timerId], "native timer redo projection");
   const afterNativeRedo = await callAgent(mcpClient, "inspect_workspace_component", {
     ...workspaceSessionInput,
     component_id: timerId,
@@ -925,13 +975,12 @@ try {
     workspaceSession.guide_digest,
     workspaceTransaction.transaction_token,
   ];
-  const leaks = await cdp.evaluate(`(() => {
-    const needles = ${JSON.stringify(secrets)};
+  const leaks = await cdp.call(`function (needles) {
     const local = Object.fromEntries(Array.from({length: localStorage.length}, (_, i) => { const k = localStorage.key(i); return [k, k ? localStorage.getItem(k) : null]; }));
     const session = Object.fromEntries(Array.from({length: sessionStorage.length}, (_, i) => { const k = sessionStorage.key(i); return [k, k ? sessionStorage.getItem(k) : null]; }));
     const surfaces = { html: document.documentElement.outerHTML, inputs: [...document.querySelectorAll('input,textarea')].map((item) => item.value), local, session, cookies: document.cookie, url: location.href, savedProject: window.__agentSmokeSavedProject };
     return Object.entries(surfaces).flatMap(([surface, value]) => needles.filter((needle) => JSON.stringify(value).includes(needle)).map((needle) => ({ surface, suffix: needle.slice(-8) })));
-  })()`);
+  }`, secrets);
   if (leaks.length) throw new Error(`Agent capability leaked into browser/project surfaces: ${JSON.stringify(leaks)}`);
   if (agentNetwork.some((entry) => entry.path.includes("reveal"))) {
     throw new Error("The browser revealed a pairing bearer while using link-based Agent control.");
