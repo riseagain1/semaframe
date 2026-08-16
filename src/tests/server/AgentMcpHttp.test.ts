@@ -41,7 +41,7 @@ function setup(options: {
 } = {}) {
   const gateway = new AgentGateway({
     publicBaseUrl: PUBLIC_URL,
-    workspaceRoot: "/workspace/Scene Thread",
+    workspaceRoot: "/workspace/SemaFrame",
     commandTimeoutMs: 1_000,
     pollTimeoutMs: options.pollTimeoutMs ?? 1_000,
     browserTtlMs: 5_000,
@@ -76,7 +76,7 @@ async function browserPost(
   path: string,
   body: unknown,
 ): Promise<Response> {
-  return handle(request(path, body, { origin: ORIGIN, "x-ttv-agent-csrf": csrfToken }));
+  return handle(request(path, body, { origin: ORIGIN, "x-semaframe-agent-csrf": csrfToken }));
 }
 
 async function enableAndRegister(handle: AgentGatewayFetchHandler) {
@@ -455,7 +455,7 @@ describe("Agent MCP connection offers", () => {
 
     const remote = new AgentGateway({
       publicBaseUrl: "https://agent.example.test",
-      workspaceRoot: "/workspace/Scene Thread",
+      workspaceRoot: "/workspace/SemaFrame",
       now: () => now,
     });
     gateways.push(remote);
@@ -463,9 +463,9 @@ describe("Agent MCP connection offers", () => {
     expect(remote.getConfig().connectionUrl).toMatch(/^https:\/\/agent\.example\.test\/mcp\/connect\//u);
 
     const network = resolveAgentGatewayNetworkConfig({
-      TTV_AGENT_GATEWAY_HOST: "127.0.0.1",
-      TTV_AGENT_GATEWAY_PORT: "8788",
-      TTV_AGENT_GATEWAY_PUBLIC_URL: "https://agent.example.test",
+      SEMAFRAME_AGENT_GATEWAY_HOST: "127.0.0.1",
+      SEMAFRAME_AGENT_GATEWAY_PORT: "8788",
+      SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: "https://agent.example.test",
     });
     expect(network).toEqual(expect.objectContaining({
       bindHost: "127.0.0.1",
@@ -474,8 +474,8 @@ describe("Agent MCP connection offers", () => {
     }));
     expect(network.allowedHostnames).toEqual(expect.arrayContaining(["127.0.0.1", "agent.example.test"]));
     expect(() => resolveAgentGatewayNetworkConfig({
-      TTV_AGENT_GATEWAY_HOST: "0.0.0.0",
-      TTV_AGENT_GATEWAY_PUBLIC_URL: "https://agent.example.test",
+      SEMAFRAME_AGENT_GATEWAY_HOST: "0.0.0.0",
+      SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: "https://agent.example.test",
     })).toThrow(/only bind to a loopback host/u);
   });
 });

@@ -160,7 +160,7 @@ describe("AgentConnectionPage", () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    const secretSetup = '{"env":{"TTV_AGENT_TOKEN":"private-bearer"}}';
+    const secretSetup = '{"env":{"SEMAFRAME_AGENT_TOKEN":"private-bearer"}}';
     const onCopySetup = vi.fn(() => ({ mcpConfig: secretSetup }));
 
     const { container } = render(<AgentConnectionPage {...connectionProps({

@@ -1,7 +1,16 @@
 {
-  "name": "real-time-visual-thinking-engine",
+  "name": "semaframe",
   "private": true,
   "version": "0.2.0",
+  "description": "A semantic spatial workspace for AI agents.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riseagain1/semaframe.git"
+  },
+  "homepage": "https://github.com/riseagain1/semaframe#readme",
+  "bugs": {
+    "url": "https://github.com/riseagain1/semaframe/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20.12"

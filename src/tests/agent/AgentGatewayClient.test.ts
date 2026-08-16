@@ -160,7 +160,7 @@ describe("AgentGatewayClient", () => {
       referrerPolicy: "same-origin",
       headers: {
         "Content-Type": "application/json",
-        "X-TTV-Agent-CSRF": "csrf-memory-only",
+        "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
       },
     });
     expect(handler).not.toHaveBeenCalled();
@@ -211,16 +211,16 @@ describe("AgentGatewayClient", () => {
       "/api/agent/feeds/fetch",
     ]);
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-before-feed-restart",
+      "X-SemaFrame-Agent-CSRF": "csrf-before-feed-restart",
     });
     expect((fetchMock.mock.calls[2]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-before-feed-restart",
+      "X-SemaFrame-Agent-CSRF": "csrf-before-feed-restart",
     });
     expect((fetchMock.mock.calls[4]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-after-feed-restart",
+      "X-SemaFrame-Agent-CSRF": "csrf-after-feed-restart",
     });
     expect((fetchMock.mock.calls[5]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-after-feed-restart",
+      "X-SemaFrame-Agent-CSRF": "csrf-after-feed-restart",
     });
     expect(requestBody(fetchMock, 2)).toMatchObject({ approvalToken: "a".repeat(43) });
     expect(requestBody(fetchMock, 5)).toMatchObject({ approvalToken: "b".repeat(43) });
@@ -431,7 +431,7 @@ describe("AgentGatewayClient", () => {
     });
     expect((fetchMock.mock.calls[3]?.[1] as RequestInit).headers).toMatchObject({
       "Content-Type": "application/json",
-      "X-TTV-Agent-CSRF": "csrf-memory-only",
+      "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
     });
     expect(statuses).toEqual(["waiting", "disabled"]);
   });
@@ -758,7 +758,7 @@ describe("AgentGatewayClient", () => {
     ]);
     expect(requestBody(fetchMock, 2)).toEqual({ claimId: "claim-01" });
     expect((fetchMock.mock.calls[2]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-memory-only",
+      "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
     });
   });
 
@@ -870,13 +870,13 @@ describe("AgentGatewayClient", () => {
       "/api/agent/browser/offer/refresh",
     ]);
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-memory-only",
+      "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
     });
     expect((fetchMock.mock.calls[3]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-after-restart",
+      "X-SemaFrame-Agent-CSRF": "csrf-after-restart",
     });
     expect((fetchMock.mock.calls[5]?.[1] as RequestInit).headers).toMatchObject({
-      "X-TTV-Agent-CSRF": "csrf-after-restart",
+      "X-SemaFrame-Agent-CSRF": "csrf-after-restart",
     });
   });
 

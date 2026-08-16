@@ -22,12 +22,12 @@ function component(data: unknown, view = "auto"): WorkspaceRenderComponent {
 describe("DataPanelView", () => {
   it("renders arbitrary record arrays as a bounded accessible table", () => {
     render(<DataPanelView component={component([
-      { symbol: "TTV", price: 188.1 },
+      { symbol: "SFRM", price: 188.1 },
       { symbol: "OPEN", price: 192.4 },
     ])} />);
 
     expect(screen.getByRole("region", { name: "Live feed" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Feed data" })).toHaveTextContent("TTV");
+    expect(screen.getByRole("table", { name: "Feed data" })).toHaveTextContent("SFRM");
     expect(screen.getByRole("table", { name: "Feed data" })).toHaveTextContent("192.4");
   });
 

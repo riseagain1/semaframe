@@ -45,8 +45,8 @@ function serverParameters(): StdioServerParameters {
     cwd: PROJECT_ROOT,
     env: {
       ...getDefaultEnvironment(),
-      TTV_AGENT_GATEWAY_URL: "http://127.0.0.1:9",
-      TTV_AGENT_TOKEN: "stdio-negotiation-test-token",
+      SEMAFRAME_AGENT_GATEWAY_URL: "http://127.0.0.1:9",
+      SEMAFRAME_AGENT_TOKEN: "stdio-negotiation-test-token",
     },
     stderr: "pipe",
   };
@@ -54,7 +54,7 @@ function serverParameters(): StdioServerParameters {
 
 async function inspectNegotiation(mode: VersionNegotiationMode): Promise<NegotiationSnapshot> {
   const client = new Client(
-    { name: "scene-thread-negotiation-test", version: "1.0.0" },
+    { name: "semaframe-negotiation-test", version: "1.0.0" },
     { versionNegotiation: { mode, probe: { timeoutMs: 5_000 } } },
   );
   const transport = new StdioClientTransport(serverParameters());
@@ -98,7 +98,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
     expect(result.era).toBe("legacy");
     expect(result.protocolVersion).toMatch(/^2025-/u);
     expect(result.discoverResult).toBeUndefined();
-    expect(result.serverVersion).toEqual({ name: "scene-thread-workspace-engine", version: "1.6.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.6.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);
@@ -114,7 +114,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
       supportedVersions: ["2026-07-28"],
       resultType: "complete",
     });
-    expect(result.serverVersion).toEqual({ name: "scene-thread-workspace-engine", version: "1.6.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.6.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);

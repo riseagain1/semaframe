@@ -61,8 +61,8 @@ type PendingAction = "enable" | "copy" | "permission" | "retry" | "refresh" | "t
 
 const GENERIC_ACTION_ERROR = "The local Agent Gateway could not complete that action. Try again.";
 const GATEWAY_UNAVAILABLE_ERROR = "Couldn’t reach the local Agent Gateway. Make sure it is running, then try again.";
-const GATEWAY_RESTARTED_ERROR = "The local Agent Gateway restarted and this browser session expired. Refresh Scene Thread, then try again.";
-const GATEWAY_VERSION_ERROR = "Scene Thread received incompatible connection data from the local Agent Gateway. Refresh the page, and restart the gateway if the problem continues.";
+const GATEWAY_RESTARTED_ERROR = "The local Agent Gateway restarted and this browser session expired. Refresh SemaFrame, then try again.";
+const GATEWAY_VERSION_ERROR = "SemaFrame received incompatible connection data from the local Agent Gateway. Refresh the page, and restart the gateway if the problem continues.";
 const SENSITIVE_ERROR_PATTERN = /(?:authorization|bearer|password|api[_ -]?key|secret|(?:approval|session|csrf)[_ -]?token|token\s*=|https?:\/\/|\/mcp\/connect\/)/iu;
 const NETWORK_ERROR_PATTERN = /(?:failed to fetch|network(?:error| request)?|load failed|connection (?:refused|reset)|econnrefused|gateway unavailable)/iu;
 const DESTRUCTIVE_SCOPES = new Set(["component:delete", "connector:delete", "workspace:clear"]);
@@ -358,7 +358,7 @@ export function AgentConnectionPage({
           <p id={detailId}>{copy.detail}</p>
           <div className="agent-engine-contract">
             <ShieldCheck size={17} aria-hidden="true" />
-            <p><strong>Scene Thread stays in charge of the workspace.</strong> Every client request uses the same deterministic transaction, validation, and revision rules as direct Workspace editing.</p>
+            <p><strong>SemaFrame stays in charge of the workspace.</strong> Every client request uses the same deterministic transaction, validation, and revision rules as direct Workspace editing.</p>
           </div>
         </div>
 

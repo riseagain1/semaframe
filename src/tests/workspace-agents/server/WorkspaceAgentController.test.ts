@@ -340,7 +340,7 @@ describe("WorkspaceAgentController", () => {
     });
     expect(instructions.guide.instructions).toContain("registered video-player component");
     expect(instructions.guide.instructions).toContain("Do not put iframe markup");
-    expect(instructions.guide.instructions).toContain("Connect through Scene Thread agent controls");
+    expect(instructions.guide.instructions).toContain("Connect through SemaFrame agent controls");
     expect(instructions.guide.instructions).toContain("there is no separate privileged authority or alternate protocol");
     expect(instructions.guide.instructions).toContain('digest: "auto"');
     expect(instructions.guide.instructions).toContain("A fresh or reset Workspace has zero components");

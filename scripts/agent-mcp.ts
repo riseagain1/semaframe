@@ -7,7 +7,7 @@ import {
 import type { AgentCommandName } from "../server/agent/contracts";
 
 const gatewayUrl = (() => {
-  const url = new URL(process.env.TTV_AGENT_GATEWAY_URL?.trim() || "http://127.0.0.1:8788");
+  const url = new URL(process.env.SEMAFRAME_AGENT_GATEWAY_URL?.trim() || "http://127.0.0.1:8788");
   const isLoopbackHttp = url.protocol === "http:" &&
     ["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
   if (
@@ -18,14 +18,14 @@ const gatewayUrl = (() => {
     url.search ||
     url.hash
   ) {
-    throw new Error("TTV_AGENT_GATEWAY_URL must be an unauthenticated HTTPS origin or loopback HTTP origin.");
+    throw new Error("SEMAFRAME_AGENT_GATEWAY_URL must be an unauthenticated HTTPS origin or loopback HTTP origin.");
   }
   return url.origin;
 })();
 
-const pairingToken = process.env.TTV_AGENT_TOKEN?.trim();
-if (!pairingToken) throw new Error("TTV_AGENT_TOKEN is required. Copy the MCP setup from Scene Thread agent controls.");
-const clientName = process.env.TTV_AGENT_NAME
+const pairingToken = process.env.SEMAFRAME_AGENT_TOKEN?.trim();
+if (!pairingToken) throw new Error("SEMAFRAME_AGENT_TOKEN is required. Copy the MCP setup from SemaFrame agent controls.");
+const clientName = process.env.SEMAFRAME_AGENT_NAME
   ?.trim()
   .replace(/[\u0000-\u001f\u007f]/gu, " ")
   .slice(0, 100) || undefined;
@@ -48,7 +48,7 @@ async function callGateway(name: AgentCommandName, input: unknown): Promise<Agen
       headers: {
         authorization: `Bearer ${pairingToken}`,
         "content-type": "application/json",
-        ...(clientName ? { "x-ttv-agent-name": clientName } : {}),
+        ...(clientName ? { "x-semaframe-agent-name": clientName } : {}),
       },
       body: JSON.stringify(restInput(name, input)),
       signal: controller.signal,
@@ -74,7 +74,7 @@ async function callGateway(name: AgentCommandName, input: unknown): Promise<Agen
           code: "gateway_unavailable",
           message: error instanceof Error && error.name === "AbortError"
             ? "The local Agent Gateway timed out."
-            : "The local Agent Gateway is unavailable. Start Scene Thread and enable agent control.",
+            : "The local Agent Gateway is unavailable. Start SemaFrame and enable agent control.",
         },
       },
     };

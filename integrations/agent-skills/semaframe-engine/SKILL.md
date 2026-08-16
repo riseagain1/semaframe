@@ -1,17 +1,17 @@
 ---
-name: scene-thread-engine
-description: Control an open Scene Thread universal 2D/3D component workspace through MCP or its OpenAPI fallback. Use when an agent, including a realtime voice or multimodal client, needs to inspect, create, arrange, update, connect, present, undo, or redo spatial objects, dashboards, text, timers, controls, charts, tables, inline video players, bound external data, or bounded declarative components through Scene Thread agent controls.
+name: semaframe-engine
+description: Control an open SemaFrame universal 2D/3D component workspace through MCP or its OpenAPI fallback. Use when an agent, including a realtime voice or multimodal client, needs to inspect, create, arrange, update, connect, present, undo, or redo spatial objects, dashboards, text, timers, controls, charts, tables, inline video players, bound external data, or bounded declarative components through SemaFrame agent controls.
 ---
 
-# Scene Thread Workspace Engine
+# SemaFrame Workspace Engine
 
-Act as the planner for the open project. Let Scene Thread remain the authoritative validator, state store, history, component registry, and hybrid renderer. Use its tools; never automate the DOM or canvas.
+Act as the planner for the open project. Let SemaFrame remain the authoritative validator, state store, history, component registry, and hybrid renderer. Use its tools; never automate the DOM or canvas.
 
 ## Connect
 
-- Ask the user to start Scene Thread, enable agent control, and copy the expiring connection URL shown in the workspace. All external controllers, including GPT Live/Realtime, voice, and multimodal clients, use this one Workspace surface.
+- Ask the user to start SemaFrame, enable agent control, and copy the expiring connection URL shown in the workspace. All external controllers, including GPT Live/Realtime, voice, and multimodal clients, use this one Workspace surface.
 - Add that URL as a remote MCP server or connector in the agent host. Pasting it into ordinary chat only works when that host can install or call MCP servers.
-- Keep the Scene Thread page open. The engine is browser-authoritative and the connection URL grants no mutation authority until the user approves the named client and scopes in the page.
+- Keep the SemaFrame page open. The engine is browser-authoritative and the connection URL grants no mutation authority until the user approves the named client and scopes in the page.
 - If remote MCP is unavailable, use the local stdio/REST setup exposed by the same connection page. Put bearer credentials only in the `Authorization` header or process environment—never in URLs, project data, logs, component props, or user-facing output.
 - Treat approval, instruction-session, and transaction tokens as short-lived secrets. Do not persist or repeat them.
 

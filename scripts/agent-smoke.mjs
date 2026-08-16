@@ -254,7 +254,7 @@ function agentPayload(result, toolName) {
       if (parsed && typeof parsed === "object" && typeof parsed.ok === "boolean") return parsed;
     } catch { /* reported below */ }
   }
-  throw new Error(`MCP tool ${toolName} returned no Scene Thread payload.`);
+  throw new Error(`MCP tool ${toolName} returned no SemaFrame payload.`);
 }
 
 async function callAgent(client, name, args) {
@@ -276,14 +276,14 @@ const vitePort = await freePort();
 const cdpPort = await freePort();
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const appUrl = `http://127.0.0.1:${vitePort}/`;
-const profile = mkdtempSync(join(tmpdir(), "scene-thread-agent-smoke-"));
+const profile = mkdtempSync(join(tmpdir(), "semaframe-agent-smoke-"));
 const stack = spawn("npm", ["run", "dev"], {
   stdio: ["ignore", "pipe", "pipe"],
   env: {
     ...process.env,
-    TTV_AGENT_GATEWAY_PORT: String(gatewayPort),
-    TTV_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
-    TTV_AGENT_VITE_PORT: String(vitePort),
+    SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
+    SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
+    SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
   },
 });
 const browser = spawn(browserExecutable(), [
@@ -496,7 +496,7 @@ try {
   }
 
   // Closing the active tab must release its lease immediately. A fresh tab
-  // should connect in seconds, not after TTV_AGENT_BROWSER_TTL_MS (65 seconds).
+  // should connect in seconds, not after SEMAFRAME_AGENT_BROWSER_TTL_MS (65 seconds).
   const reopenStartedAt = Date.now();
   await closeCdpPage(occupiedCdp);
   const reopenedPage = await openCdpPage(cdpPort, "about:blank");

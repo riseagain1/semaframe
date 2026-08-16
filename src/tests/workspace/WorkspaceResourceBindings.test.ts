@@ -435,7 +435,7 @@ describe("secure Workspace snapshot bindings", () => {
         contentHash: deterministicDigest(stockData),
         retrievedAt: new Date(1_765_765_323_000).toISOString(),
         stale: false,
-        provenance: [{ publisher: "Scene Thread inline snapshot" }],
+        provenance: [{ publisher: "SemaFrame inline snapshot" }],
       },
     });
     expect(normalized).not.toHaveProperty("lastError");

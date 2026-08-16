@@ -7,7 +7,7 @@ export default defineConfig({
     port: 4173,
     strictPort: true,
     proxy: {
-      "/api/agent": process.env.TTV_AGENT_GATEWAY_URL ?? "http://127.0.0.1:8788",
+      "/api/agent": process.env.SEMAFRAME_AGENT_GATEWAY_URL ?? "http://127.0.0.1:8788",
     },
   },
   preview: { port: 4173, strictPort: true },

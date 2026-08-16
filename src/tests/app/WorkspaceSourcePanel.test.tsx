@@ -22,7 +22,7 @@ describe("WorkspaceSourcePanel", () => {
         connectorVersion: "1.0.0",
         status: "ready",
         retrievedAt: "2026-08-15T01:02:03.000Z",
-        provenanceLabel: "Scene Thread inline snapshot",
+        provenanceLabel: "SemaFrame inline snapshot",
         bindingCount: 1,
         editableJson: '{"price":188.4}',
         reapplyable: true,
@@ -49,7 +49,7 @@ describe("WorkspaceSourcePanel", () => {
     />);
 
     expect(screen.getByText(/Retrieved .*1 binding/u)).toBeVisible();
-    expect(screen.getByText(/Provenance: Scene Thread inline snapshot/u)).toBeVisible();
+    expect(screen.getByText(/Provenance: SemaFrame inline snapshot/u)).toBeVisible();
     expect(screen.getAllByText(/source_path_not_found/u)).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Reapply" }));
     expect(onRefresh).toHaveBeenCalledWith("RES_market");

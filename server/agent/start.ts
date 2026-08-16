@@ -18,7 +18,7 @@ function allowedOrigins(value: string | undefined): string[] {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
-  if (!values.length) throw new Error("TTV_AGENT_ALLOWED_ORIGINS must contain at least one exact origin.");
+  if (!values.length) throw new Error("SEMAFRAME_AGENT_ALLOWED_ORIGINS must contain at least one exact origin.");
   return [...new Set(values.map((entry) => {
     const url = new URL(entry);
     if (url.origin !== entry || url.username || url.password || url.pathname !== "/") {
@@ -33,20 +33,20 @@ const { bindHost: host, port, publicBaseUrl } = network;
 const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/u, "");
 const browserOrigins = [
   ...new Set([
-    ...allowedOrigins(process.env.TTV_AGENT_ALLOWED_ORIGINS),
+    ...allowedOrigins(process.env.SEMAFRAME_AGENT_ALLOWED_ORIGINS),
     new URL(publicBaseUrl).origin,
   ]),
 ];
-const bodyLimitBytes = positiveInteger("TTV_AGENT_BODY_LIMIT_BYTES", 512 * 1024);
+const bodyLimitBytes = positiveInteger("SEMAFRAME_AGENT_BODY_LIMIT_BYTES", 512 * 1024);
 
 const gateway = new AgentGateway({
   publicBaseUrl,
   workspaceRoot,
-  commandTimeoutMs: positiveInteger("TTV_AGENT_COMMAND_TIMEOUT_MS", 45_000),
-  pollTimeoutMs: positiveInteger("TTV_AGENT_POLL_TIMEOUT_MS", 25_000),
-  browserTtlMs: positiveInteger("TTV_AGENT_BROWSER_TTL_MS", 65_000),
-  offerTtlMs: positiveInteger("TTV_AGENT_OFFER_TTL_MS", 10 * 60_000),
-  approvalTtlMs: positiveInteger("TTV_AGENT_APPROVAL_TTL_MS", 2 * 60_000),
+  commandTimeoutMs: positiveInteger("SEMAFRAME_AGENT_COMMAND_TIMEOUT_MS", 45_000),
+  pollTimeoutMs: positiveInteger("SEMAFRAME_AGENT_POLL_TIMEOUT_MS", 25_000),
+  browserTtlMs: positiveInteger("SEMAFRAME_AGENT_BROWSER_TTL_MS", 65_000),
+  offerTtlMs: positiveInteger("SEMAFRAME_AGENT_OFFER_TTL_MS", 10 * 60_000),
+  approvalTtlMs: positiveInteger("SEMAFRAME_AGENT_APPROVAL_TTL_MS", 2 * 60_000),
 });
 const handle = createNodeAgentGatewayHttpHandler(gateway, {
   allowedOrigins: browserOrigins,
@@ -66,7 +66,7 @@ server.on("clientError", (_error, socket) => {
 
 server.listen(port, host, () => {
   // This is intentionally the only startup log. Pairing credentials are never logged.
-  console.log(`Scene Thread Agent Gateway listening on ${publicBaseUrl}`);
+  console.log(`SemaFrame Agent Gateway listening on ${publicBaseUrl}`);
 });
 
 let shuttingDown = false;

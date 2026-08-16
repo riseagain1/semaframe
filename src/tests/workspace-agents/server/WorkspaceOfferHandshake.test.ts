@@ -34,7 +34,7 @@ async function browserPost(
   path: string,
   body: unknown,
 ): Promise<Response> {
-  return handle(request(path, body, { origin: ORIGIN, "x-ttv-agent-csrf": csrfToken }));
+  return handle(request(path, body, { origin: ORIGIN, "x-semaframe-agent-csrf": csrfToken }));
 }
 
 afterEach(async () => {
@@ -63,7 +63,7 @@ describe("Workspace MCP connection offer", () => {
   ])("completes approval when $label", async ({ requestedScopes, expectedScopes }) => {
     const gateway = new AgentGateway({
       publicBaseUrl: PUBLIC_URL,
-      workspaceRoot: "/workspace/Scene Thread",
+      workspaceRoot: "/workspace/SemaFrame",
       commandTimeoutMs: 2_000,
       pollTimeoutMs: 100,
       browserTtlMs: 5_000,

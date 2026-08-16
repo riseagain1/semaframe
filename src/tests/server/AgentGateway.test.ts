@@ -13,7 +13,7 @@ function setup(options: {
 } = {}) {
   const gateway = new AgentGateway({
     publicBaseUrl: PUBLIC_URL,
-    workspaceRoot: "/workspace/Scene Thread",
+    workspaceRoot: "/workspace/SemaFrame",
     commandTimeoutMs: options.commandTimeoutMs ?? 1_000,
     pollTimeoutMs: 1_000,
     browserTtlMs: options.browserTtlMs ?? 5_000,
@@ -51,7 +51,7 @@ async function browserPost(
   path: string,
   body: unknown,
 ): Promise<Response> {
-  return handle(jsonRequest(path, body, { origin: ORIGIN, "x-ttv-agent-csrf": csrfToken }));
+  return handle(jsonRequest(path, body, { origin: ORIGIN, "x-semaframe-agent-csrf": csrfToken }));
 }
 
 async function browserSetup(handle: (request: Request) => Promise<Response>) {
@@ -145,7 +145,7 @@ describe("Agent Gateway browser boundary", () => {
       origin: ORIGIN,
     }))).status).toBe(403);
     expect((await handle(jsonRequest("/api/agent/browser/reveal", {}, {
-      "x-ttv-agent-csrf": csrf,
+      "x-semaframe-agent-csrf": csrf,
     }))).status).toBe(403);
     expect((await browserPost(handle, csrf, "/api/agent/browser/reveal", {})).status).toBe(503);
     expect((await browserPost(handle, csrf, "/api/agent/browser/register", {
@@ -159,7 +159,7 @@ describe("Agent Gateway browser boundary", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(payload.restEndpoint).toBe(`${PUBLIC_URL}/v1`);
     expect(String(payload.mcpConfig)).toContain('"--silent"');
-    expect(String(payload.mcpConfig)).toContain('"/workspace/Scene Thread"');
+    expect(String(payload.mcpConfig)).toContain('"/workspace/SemaFrame"');
     expect(String(payload.mcpConfig)).toContain(String(payload.pairingBearer));
     expect(response.url).not.toContain(String(payload.pairingBearer));
   });
@@ -181,7 +181,7 @@ describe("Agent Gateway browser boundary", () => {
     expect(await json(response)).toEqual({
       error: {
         code: "engine_unavailable",
-        message: "Open Scene Thread before calling Workspace tools.",
+        message: "Open SemaFrame before calling Workspace tools.",
       },
     });
   });
@@ -463,7 +463,7 @@ describe("Agent Gateway browser boundary", () => {
     const browser = await browserSetup(handle);
     const externalPromise = handle(jsonRequest("/v1/workspace/instructions", {}, {
       authorization: `Bearer ${browser.bearer}`,
-      "x-ttv-agent-name": "Previously paired agent",
+      "x-semaframe-agent-name": "Previously paired agent",
     }));
     const poll = await json(await browserPost(handle, browser.csrfToken, "/api/agent/browser/poll", {
       browserConnectionId: browser.browserConnectionId,

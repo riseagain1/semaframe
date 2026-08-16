@@ -31,19 +31,19 @@ export function normalizeAgentGatewayPublicBaseUrl(value: string): string {
  * may publish trusted HTTPS while the process remains loopback-only.
  */
 export function resolveAgentGatewayNetworkConfig(env: Environment): AgentGatewayNetworkConfig {
-  const requestedHost = env.TTV_AGENT_GATEWAY_HOST?.trim() || "127.0.0.1";
+  const requestedHost = env.SEMAFRAME_AGENT_GATEWAY_HOST?.trim() || "127.0.0.1";
   if (!(LOOPBACK_HOSTS as readonly string[]).includes(requestedHost)) {
-    throw new Error("The Scene Thread Agent Gateway may only bind to a loopback host.");
+    throw new Error("The SemaFrame Agent Gateway may only bind to a loopback host.");
   }
   const bindHost = requestedHost as AgentGatewayNetworkConfig["bindHost"];
-  const rawPort = env.TTV_AGENT_GATEWAY_PORT?.trim();
+  const rawPort = env.SEMAFRAME_AGENT_GATEWAY_PORT?.trim();
   const port = rawPort ? Number(rawPort) : 8788;
   if (!Number.isSafeInteger(port) || port <= 0 || port > 65_535) {
-    throw new Error("TTV_AGENT_GATEWAY_PORT must be an integer between 1 and 65535.");
+    throw new Error("SEMAFRAME_AGENT_GATEWAY_PORT must be an integer between 1 and 65535.");
   }
   const publicHost = bindHost === "::1" ? "[::1]" : bindHost;
   const publicBaseUrl = normalizeAgentGatewayPublicBaseUrl(
-    env.TTV_AGENT_GATEWAY_PUBLIC_URL?.trim() || `http://${publicHost}:${port}`,
+    env.SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL?.trim() || `http://${publicHost}:${port}`,
   );
   const advertisedHostname = new URL(publicBaseUrl).hostname;
   return Object.freeze({

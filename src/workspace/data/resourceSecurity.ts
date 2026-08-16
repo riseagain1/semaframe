@@ -398,7 +398,7 @@ export function assertWorkspaceResourceSafe(resource: Readonly<WorkspaceResource
   const snapshot = resource.snapshot!;
   const expectedProvenance = [{
     title: resource.label,
-    publisher: "Scene Thread inline snapshot",
+    publisher: "SemaFrame inline snapshot",
     retrievedAt: snapshot.retrievedAt,
   }];
   const canonicalTime = new Date(snapshot.retrievedAt).toISOString();
@@ -595,7 +595,7 @@ export function normalizeInlineSnapshotResource(
       stale: false,
       provenance: [{
         title: resource.label,
-        publisher: "Scene Thread inline snapshot",
+        publisher: "SemaFrame inline snapshot",
         retrievedAt,
       }],
     },

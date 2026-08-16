@@ -202,7 +202,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
   return {
     openapi: "3.1.0",
     info: {
-      title: "Scene Thread Agent Gateway",
+      title: "SemaFrame Agent Gateway",
       version: "1.0.0",
       description: "Provider-neutral control of the browser-authoritative universal Workspace. Obtain the ephemeral bearer from the in-app agent setup; never place it in a URL.",
     },

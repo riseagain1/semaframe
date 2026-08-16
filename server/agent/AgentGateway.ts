@@ -324,13 +324,13 @@ export class AgentGateway {
       ...this.#offerView(offer),
       mcpConfig: JSON.stringify({
         mcpServers: {
-          "scene-thread": {
+          "semaframe": {
             command: "npm",
             // npm's normal run banner is stdout and would corrupt MCP stdio.
             args: ["--silent", "--prefix", this.#workspaceRoot, "run", "agent:mcp"],
             env: {
-              TTV_AGENT_GATEWAY_URL: this.#publicBaseUrl,
-              TTV_AGENT_TOKEN: this.#pairingBearer,
+              SEMAFRAME_AGENT_GATEWAY_URL: this.#publicBaseUrl,
+              SEMAFRAME_AGENT_TOKEN: this.#pairingBearer,
             },
           },
         },
@@ -509,12 +509,12 @@ export class AgentGateway {
     ) {
       throw new AgentGatewayError(
         "browser_already_connected",
-        "Another active Scene Thread tab already owns the agent engine. Return to it, retry after it closes, or explicitly take control.",
+        "Another active SemaFrame tab already owns the agent engine. Return to it, retry after it closes, or explicitly take control.",
       );
     }
     this.#revokeBrowser(new AgentGatewayError(
       "browser_replaced",
-      "A newer Scene Thread browser connection replaced this one.",
+      "A newer SemaFrame browser connection replaced this one.",
     ));
     const id = secret();
     this.#browser = { id, clientInstanceId, lastSeenAt: this.#now() };
@@ -527,7 +527,7 @@ export class AgentGateway {
     this.#validateClientInstanceId(clientInstanceId);
     this.#revokeBrowser(new AgentGatewayError(
       "browser_replaced",
-      "The user moved Agent control to another Scene Thread tab.",
+      "The user moved Agent control to another SemaFrame tab.",
     ));
     const id = secret();
     this.#browser = { id, clientInstanceId, lastSeenAt: this.#now() };
@@ -541,7 +541,7 @@ export class AgentGateway {
     }
     this.#revokeBrowser(new AgentGatewayError(
       "engine_unavailable",
-      "The Scene Thread browser tab released the agent engine.",
+      "The SemaFrame browser tab released the agent engine.",
     ));
     return { unregistered: true };
   }
@@ -585,7 +585,7 @@ export class AgentGateway {
           // replacement bridge.
           this.#revokeBrowser(new AgentGatewayError(
             "engine_unavailable",
-            "The Scene Thread browser tab disconnected from the agent engine.",
+            "The SemaFrame browser tab disconnected from the agent engine.",
           ));
         };
         signal.addEventListener("abort", abort, { once: true });
@@ -646,8 +646,8 @@ export class AgentGateway {
     this.#assertOpen();
     this.#assertEnabled();
     if (!this.#isBrowserConnected()) {
-      this.#revokeBrowser(new AgentGatewayError("engine_unavailable", "The Scene Thread browser engine is not connected."));
-      throw new AgentGatewayError("engine_unavailable", "Open Scene Thread before calling Workspace tools.");
+      this.#revokeBrowser(new AgentGatewayError("engine_unavailable", "The SemaFrame browser engine is not connected."));
+      throw new AgentGatewayError("engine_unavailable", "Open SemaFrame before calling Workspace tools.");
     }
     if (this.#pendingCommand) {
       throw new AgentGatewayError(
@@ -692,7 +692,7 @@ export class AgentGateway {
   }
 
   #assertEnabled(): void {
-    if (!this.#enabled) throw new AgentGatewayError("agent_mode_disabled", "Agent control is disabled in Scene Thread.");
+    if (!this.#enabled) throw new AgentGatewayError("agent_mode_disabled", "Agent control is disabled in SemaFrame.");
   }
 
   #validateClientInstanceId(clientInstanceId: string): void {
@@ -806,7 +806,7 @@ export class AgentGateway {
         offer,
         "The incomplete connection offer expired before the instruction handshake completed.",
       );
-      throw new AgentGatewayError("connection_offer_expired", "This connection offer expired. Create a fresh link in Scene Thread.");
+      throw new AgentGatewayError("connection_offer_expired", "This connection offer expired. Create a fresh link in SemaFrame.");
     }
     return offer;
   }
@@ -866,7 +866,7 @@ export class AgentGateway {
       return this.#agentError(
         428,
         "approval_pending",
-        "Scene Thread is waiting for the user to approve this client. Ask the user to compare approval_fingerprint with the code shown in Scene Thread. Keep approval_token private, then retry the same instruction tool with it after approval.",
+        "SemaFrame is waiting for the user to approve this client. Ask the user to compare approval_fingerprint with the code shown in SemaFrame. Keep approval_token private, then retry the same instruction tool with it after approval.",
         true,
         "request_user_approval",
         {
@@ -882,7 +882,7 @@ export class AgentGateway {
       return this.#agentError(
         428,
         "approval_token_required",
-        "A request already claimed this link. Retry with its private approval_token, or create a fresh link in Scene Thread.",
+        "A request already claimed this link. Retry with its private approval_token, or create a fresh link in SemaFrame.",
         false,
         "request_user_approval",
       );
@@ -891,13 +891,13 @@ export class AgentGateway {
       return this.#agentError(403, "approval_invalid", "The approval token is invalid for this request.", false);
     }
     if (claim.decision === "denied") {
-      return this.#agentError(403, "approval_denied", "The Scene Thread user denied this connection request.", false);
+      return this.#agentError(403, "approval_denied", "The SemaFrame user denied this connection request.", false);
     }
     if (claim.decision === "pending") {
       return this.#agentError(
         428,
         "approval_pending",
-        "Scene Thread is still waiting for the user to approve this agent.",
+        "SemaFrame is still waiting for the user to approve this agent.",
         true,
         "request_user_approval",
         {
@@ -945,7 +945,7 @@ export class AgentGateway {
           ? error.details as Record<string, unknown>
           : undefined);
     }
-    return this.#agentError(500, "gateway_error", "The Scene Thread agent gateway could not complete the request.", false);
+    return this.#agentError(500, "gateway_error", "The SemaFrame agent gateway could not complete the request.", false);
   }
 
   #isBrowserConnected(): boolean {
@@ -975,7 +975,7 @@ export class AgentGateway {
     if (this.#now() - this.#browser.lastSeenAt > this.#browserTtlMs) {
       const error = new AgentGatewayError(
         "connection_invalid",
-        "The browser connection expired. Register the Scene Thread engine again.",
+        "The browser connection expired. Register the SemaFrame engine again.",
       );
       this.#revokeBrowser(error);
       throw error;

@@ -450,7 +450,7 @@ async function defaultRequest(
       headers: {
         accept: "application/json, text/csv;q=0.9, application/rss+xml;q=0.9, application/atom+xml;q=0.9, application/xml;q=0.8, text/xml;q=0.8",
         "accept-encoding": "gzip, deflate, br",
-        "user-agent": "TTV-Feed-Runtime/1.0",
+        "user-agent": "SemaFrame-Feed-Runtime/1.0",
       },
       lookup: (_hostname, options, callback) => {
         if (typeof options === "object" && options.all) {

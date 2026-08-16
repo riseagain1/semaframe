@@ -1,0 +1,4 @@
+interface:
+  display_name: "SemaFrame Workspace"
+  short_description: "Control a universal 2D and 3D workspace"
+  default_prompt: "Use $semaframe-engine to inspect and update the open universal component workspace."

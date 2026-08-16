@@ -171,7 +171,7 @@ const DEFAULT_ENDPOINTS: AgentGatewayEndpoints = {
 };
 
 const CLIENT_INSTANCE_ID_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/;
-const CSRF_HEADER = "X-TTV-Agent-CSRF";
+const CSRF_HEADER = "X-SemaFrame-Agent-CSRF";
 const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

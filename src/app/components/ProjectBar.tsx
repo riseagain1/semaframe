@@ -60,9 +60,9 @@ export function ProjectBar(props: ProjectBarProps) {
   };
   return (
     <header className="project-bar">
-      <div className="brand-lockup" aria-label="Scene Thread visual thinking engine">
+      <div className="brand-lockup" aria-label="SemaFrame semantic spatial workspace">
         <div className="brand-mark"><span /><span /><span /></div>
-        <div><strong>SCENE THREAD</strong><small>Visual thinking engine</small></div>
+        <div><strong>SEMAFRAME</strong><small>Semantic spatial workspace</small></div>
       </div>
       <div className="project-name-wrap">
         {dirty && <><span className="unsaved-dot" title="Unsaved changes" aria-hidden="true" /><span className="sr-only">Unsaved changes</span></>}

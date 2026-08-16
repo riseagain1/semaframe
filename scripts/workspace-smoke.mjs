@@ -131,7 +131,7 @@ function workspaceAgentPayload(result, toolName) {
       if (parsed && typeof parsed === "object" && typeof parsed.ok === "boolean") return parsed;
     } catch { /* reported below without echoing capability-bearing content */ }
   }
-  throw new Error(`MCP tool ${toolName} returned no Scene Thread payload.`);
+  throw new Error(`MCP tool ${toolName} returned no SemaFrame payload.`);
 }
 
 async function callWorkspaceAgent(client, name, args) {
@@ -360,14 +360,14 @@ const vitePort = await freePort();
 const cdpPort = await freePort();
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const appUrl = `http://127.0.0.1:${vitePort}/`;
-const profile = mkdtempSync(join(tmpdir(), "scene-thread-workspace-smoke-"));
+const profile = mkdtempSync(join(tmpdir(), "semaframe-workspace-smoke-"));
 const stack = spawn("npm", ["run", "dev"], {
   stdio: ["ignore", "pipe", "pipe"],
   env: {
     ...process.env,
-    TTV_AGENT_GATEWAY_PORT: String(gatewayPort),
-    TTV_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
-    TTV_AGENT_VITE_PORT: String(vitePort),
+    SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
+    SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
+    SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
   },
 });
 const browser = spawn(browserExecutable(), [
@@ -918,7 +918,7 @@ try {
     const input = document.querySelector('input[type="file"]');
     if (!(input instanceof HTMLInputElement)) return false;
     const transfer = new DataTransfer();
-    transfer.items.add(new File([${JSON.stringify(savedProjectText)}], 'workspace-mixed-smoke.ttv.json', { type: 'application/json' }));
+    transfer.items.add(new File([${JSON.stringify(savedProjectText)}], 'workspace-mixed-smoke.semaframe.json', { type: 'application/json' }));
     Object.defineProperty(input, 'files', { configurable: true, value: transfer.files });
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;

@@ -103,7 +103,7 @@ export function createAgentMcpHttpHandler(
       const cors = corsHeaders(origin, allowedOrigins);
 
       if (origin && !allowedOrigins.includes(origin)) {
-        return errorResponse(403, "origin_not_allowed", "This browser Origin is not allowed to access the Scene Thread MCP endpoint.");
+        return errorResponse(403, "origin_not_allowed", "This browser Origin is not allowed to access the SemaFrame MCP endpoint.");
       }
       if (request.method === "OPTIONS") {
         if (!origin) return errorResponse(403, "origin_required", "An allowed browser Origin is required for preflight requests.");
@@ -119,7 +119,7 @@ export function createAgentMcpHttpHandler(
           const document = {
             schemaVersion: 1,
             server: AGENT_MCP_SERVER_INFO,
-            title: "Scene Thread universal workspace controller",
+            title: "SemaFrame universal workspace controller",
             description: "A deterministic 2D/3D component workspace controlled through explicit in-app approval. This URL locates the engine but grants no authority by itself.",
             mcpEndpoint: offer.connectionUrl,
             transport: "streamable-http",
@@ -135,14 +135,14 @@ export function createAgentMcpHttpHandler(
               "Connect to mcpEndpoint using MCP Streamable HTTP.",
               "Read the server instructions and workspace://instructions/v1 resource.",
               "Call get_workspace_instructions with a stable client_id, human-readable client_name, and the minimum requested_scopes.",
-              "The first call creates a request in the open Scene Thread app and returns a private approval_token.",
-              "Present approval_fingerprint to the user and ask them to compare it with the code shown in Scene Thread before approving.",
+              "The first call creates a request in the open SemaFrame app and returns a private approval_token.",
+              "Present approval_fingerprint to the user and ask them to compare it with the code shown in SemaFrame before approving.",
               "After the user approves, retry get_workspace_instructions with that approval_token.",
               "Use the returned session_token on every later tool call, and set each instruction_digest field to the exact returned guide_digest value.",
             ],
             security: {
-              approval: "A user must approve the displayed client claim in the open Scene Thread app before the guide and session capability are released.",
-              verification: "The agent should display approval_fingerprint and the user should compare it with Scene Thread before approving.",
+              approval: "A user must approve the displayed client claim in the open SemaFrame app before the guide and session capability are released.",
+              verification: "The agent should display approval_fingerprint and the user should compare it with SemaFrame before approving.",
               identity: "client_id and client_name are self-reported labels, not authenticated identity.",
               authority: "An approval token is valid only for the exact connection offer and scoped Workspace request that created it.",
               secrets: "Never place approval_token, session_token, or pairing bearer values in a URL, log, or shared transcript.",
@@ -170,7 +170,7 @@ export function createAgentMcpHttpHandler(
         if (error instanceof AgentGatewayError) {
           return errorResponse(statusFor(error), error.code, error.message);
         }
-        return errorResponse(500, "gateway_error", "The Scene Thread MCP endpoint could not complete the request.");
+        return errorResponse(500, "gateway_error", "The SemaFrame MCP endpoint could not complete the request.");
       }
     },
     close: () => mcp.close(),

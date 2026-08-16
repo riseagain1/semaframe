@@ -93,15 +93,9 @@ import { buildPhysicsValidationReport } from "../workspace/physics";
 import { historyEntriesForStore } from "./workspaceHistory";
 import { safeStorageGet, safeStorageRemove, safeStorageSet } from "./browserStorage";
 
-const RECOVERY_KEY = "scene-thread-workspace-recovery-v2";
-const RETIRED_STORAGE_KEYS = [
-  "scene-thread-project-v0.2",
-  "scene-thread-draft-v0.2",
-  "scene-thread-control-mode-v1",
-  "scene-thread-workspace-recovery-v1",
-] as const;
+const RECOVERY_KEY = "semaframe-workspace-recovery-v2";
 const AGENT_CONTROL_ENDPOINT = import.meta.env.VITE_AGENT_CONTROL_ENDPOINT?.trim() || "/api/agent";
-const AGENT_BROWSER_INSTANCE_KEY = "scene-thread-agent-browser-v1";
+const AGENT_BROWSER_INSTANCE_KEY = "semaframe-agent-browser-v1";
 const MAX_VISIBLE_HISTORY_ENTRIES = 256;
 
 const ProjectBar = lazy(() => import("./components/ProjectBar").then((module) => ({ default: module.ProjectBar })));
@@ -198,7 +192,7 @@ function downloadJson(name: string, contents: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${name.trim().replace(/[^a-z0-9_-]+/gi, "-").replace(/^-|-$/g, "") || "scene-thread"}.ttv.json`;
+  anchor.download = `${name.trim().replace(/[^a-z0-9_-]+/gi, "-").replace(/^-|-$/g, "") || "semaframe"}.semaframe.json`;
   anchor.hidden = true;
   document.body.append(anchor);
   anchor.click();
@@ -342,9 +336,6 @@ export default function App() {
     setWorkspaceRenderGeneration(workspaceGenerationRef.current);
   }, []);
 
-  useEffect(() => {
-    for (const key of RETIRED_STORAGE_KEYS) safeStorageRemove(key);
-  }, []);
   useEffect(() => {
     if (!dirty) return;
     const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
@@ -515,7 +506,7 @@ export default function App() {
         const raw = await file.text();
         const project = workspaceSerializerRef.current.deserialize(raw);
         const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
-        const restoredName = file.name.replace(/\.ttv\.json$|\.json$/i, "");
+        const restoredName = file.name.replace(/\.semaframe\.json$|\.json$/i, "");
         await stopAgentForProjectChange("project_opened");
 
         workspaceStoreRef.current = nextWorkspaceStore;
@@ -2039,7 +2030,7 @@ export default function App() {
       <AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} />
     </main>}
     {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => { safeStorageRemove(RECOVERY_KEY); setRecoveryAvailable(false); }}>Dismiss</button></div>}
-    <input ref={fileRef} hidden type="file" accept=".json,.ttv.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
+    <input ref={fileRef} hidden type="file" accept=".json,.semaframe.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <ConfirmDialog open={confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
     <ConfirmDialog open={confirm === "open"} title="Open another project?" detail="Your current project has unsaved changes. Opening another file will replace it in this window." confirmLabel="Open project" tone="danger" onCancel={() => { setConfirm(null); setPendingFile(null); }} onConfirm={() => { const file = pendingFile; setConfirm(null); setPendingFile(null); if (file) void loadProject(file); }} />
     <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>

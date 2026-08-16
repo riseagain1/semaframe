@@ -99,7 +99,7 @@ function corsHeaders(origin: string, allowedOrigins: readonly string[]): Record<
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers": "content-type, x-ttv-agent-csrf",
+    "access-control-allow-headers": "content-type, x-semaframe-agent-csrf",
     "access-control-max-age": "600",
     vary: "origin",
   };
@@ -433,10 +433,10 @@ export function createAgentGatewayHttpHandler(
 
     if (isBrowserRoute) {
       if (origin && !allowedOrigins.includes(origin)) {
-        return errorResponse(403, "origin_not_allowed", "An allowed Scene Thread browser origin is required.");
+        return errorResponse(403, "origin_not_allowed", "An allowed SemaFrame browser origin is required.");
       }
       if (request.method === "OPTIONS") {
-        if (!origin) return errorResponse(403, "origin_required", "An allowed Scene Thread browser origin is required.");
+        if (!origin) return errorResponse(403, "origin_required", "An allowed SemaFrame browser origin is required.");
         return new Response(null, { status: 204, headers: { "cache-control": "no-store", ...cors } });
       }
       if (pathname === "/api/agent/config") {
@@ -444,10 +444,10 @@ export function createAgentGatewayHttpHandler(
         return jsonResponse(200, gateway.getConfig(), cors);
       }
       if (!origin) {
-        return errorResponse(403, "origin_required", "An allowed Scene Thread browser origin is required.");
+        return errorResponse(403, "origin_required", "An allowed SemaFrame browser origin is required.");
       }
       if (request.method !== "POST") return errorResponse(405, "method_not_allowed", "Use POST.");
-      if (request.headers.get("x-ttv-agent-csrf") !== gateway.csrfToken) {
+      if (request.headers.get("x-semaframe-agent-csrf") !== gateway.csrfToken) {
         return errorResponse(403, "csrf_invalid", "The agent-control browser session expired. Refresh and try again.");
       }
 
@@ -553,7 +553,7 @@ export function createAgentGatewayHttpHandler(
         ? command.input.client_name
         : undefined;
       const result = await gateway.dispatch(command.name, command.input, {
-        clientName: request.headers.get("x-ttv-agent-name") ??
+        clientName: request.headers.get("x-semaframe-agent-name") ??
           (typeof instructionClientName === "string" ? instructionClientName : undefined),
       });
       return jsonResponse(200, result);

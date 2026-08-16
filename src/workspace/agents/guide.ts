@@ -225,7 +225,7 @@ You control a deterministic universal 2D/3D component workspace. You are the
 planner; the Workspace engine validates, resolves, commits, stores, and projects.
 Never send executable code, HTML, shell commands, credentials, arbitrary network
 requests, renderer instructions, or provider-specific payloads as component data.
-Connect through Scene Thread agent controls regardless of client kind. GPT Live
+Connect through SemaFrame agent controls regardless of client kind. GPT Live
 or Realtime, voice, and multimodal controllers are ordinary external Workspace
 clients; there is no separate privileged authority or alternate protocol.
 

@@ -18,7 +18,7 @@ import {
 } from "../../src/workspace/protocol";
 
 export const WORKSPACE_MCP_SERVER_INFO = Object.freeze({
-  name: "scene-thread-workspace-engine",
+  name: "semaframe-workspace-engine",
   version: "1.6.0",
 });
 
@@ -137,7 +137,7 @@ function toolResult(name: WorkspaceAgentToolName, result: WorkspaceMcpBackendRes
       ...(name === "get_workspace_instructions" ? [{
         type: "resource_link" as const,
         uri: "workspace://instructions/v1",
-        name: "Scene Thread Workspace controller guide",
+        name: "SemaFrame Workspace controller guide",
         description: "Canonical complete instructions for the universal component workspace.",
         mimeType: "application/json",
       }] : []),
@@ -211,7 +211,7 @@ const submitWorkspaceBatchInputSchema = fromJsonSchema<SubmitWorkspaceBatchInput
 
 /**
  * Adds all Workspace tools to any MCP server. This is the integration point for
- * the existing Scene Thread offer: call this on the same McpServer before its
+ * the existing SemaFrame offer: call this on the same McpServer before its
  * transport connects, using the same gateway-backed dispatcher.
  */
 export function registerWorkspaceTools(
@@ -224,7 +224,7 @@ export function registerWorkspaceTools(
     server.registerResource(
       "workspace-controller-guide",
       "workspace://instructions/v1",
-      { title: "Scene Thread Workspace controller guide", mimeType: "application/json" },
+      { title: "SemaFrame Workspace controller guide", mimeType: "application/json" },
       async (uri) => ({
         contents: [{
           uri: uri.href,

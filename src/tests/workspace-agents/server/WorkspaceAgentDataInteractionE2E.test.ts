@@ -337,7 +337,7 @@ describe("Workspace Agent data and interaction vertical slice", () => {
       expect(store.getState().resources.get("RES_stock_snapshot")?.snapshot).toMatchObject({
         retrievedAt: "1970-01-01T00:00:42.000Z",
         stale: false,
-        provenance: [{ publisher: "Scene Thread inline snapshot" }],
+        provenance: [{ publisher: "SemaFrame inline snapshot" }],
       });
       expect(store.getState().resources.get("RES_stock_snapshot")?.snapshot?.contentHash)
         .not.toBe("caller-value-must-be-replaced");

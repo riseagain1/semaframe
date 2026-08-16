@@ -11,7 +11,7 @@ const gateways: AgentGateway[] = [];
 function setup(feedApprovalStore?: FeedFetchApprovalStore) {
   const gateway = new AgentGateway({
     publicBaseUrl: PUBLIC_URL,
-    workspaceRoot: "/workspace/Scene Thread",
+    workspaceRoot: "/workspace/SemaFrame",
     commandTimeoutMs: 1_000,
     pollTimeoutMs: 1_000,
     browserTtlMs: 5_000,
@@ -48,7 +48,7 @@ function approvalRequest(csrfToken: string | undefined, origin = ORIGIN, body: u
     headers: {
       "content-type": "application/json",
       origin,
-      ...(csrfToken ? { "x-ttv-agent-csrf": csrfToken } : {}),
+      ...(csrfToken ? { "x-semaframe-agent-csrf": csrfToken } : {}),
     },
     body: JSON.stringify(body),
   });
@@ -63,7 +63,7 @@ function feedRequest(csrfToken: string | undefined, origin = ORIGIN, body: unkno
     headers: {
       "content-type": "application/json",
       origin,
-      ...(csrfToken ? { "x-ttv-agent-csrf": csrfToken } : {}),
+      ...(csrfToken ? { "x-semaframe-agent-csrf": csrfToken } : {}),
     },
     body: JSON.stringify(body),
   });

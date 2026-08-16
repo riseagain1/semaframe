@@ -1,14 +1,16 @@
-# Scene Thread
+# SemaFrame
 
+> **Build spaces agents can understand.**
+>
 > A browser-authoritative, agent-operated workspace where 2D interfaces, 3D space, live data, interaction, animation, collision, and bounded physics share one state model.
 
-Scene Thread turns a browser canvas into a programmable visual workspace. A person or an approved external Agent can create spatial scenes, dashboards, controls, simulations, data panels, websites, charts, timers, checklists, and declarative custom components—then connect them through typed actions and events.
+SemaFrame turns a browser canvas into a programmable visual workspace. A person or an approved external Agent can create spatial scenes, dashboards, controls, simulations, data panels, websites, charts, timers, checklists, and declarative custom components—then connect them through typed actions and events.
 
 The central idea is simple: there is one authoritative `WorkspaceStore`. The UI, Agent API, data bindings, physics queries, project history, and hybrid renderer all operate on that same revisioned state. There is no hidden model-owned scene and no separate legacy Compose authority.
 
 ## Contents
 
-- [Why Scene Thread](#why-scene-thread)
+- [Why SemaFrame](#why-semaframe)
 - [What it can do](#what-it-can-do)
 - [Quick start](#quick-start)
 - [First Agent connection](#first-agent-connection)
@@ -24,9 +26,9 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
 - [Development and verification](#development-and-verification)
 - [License](#license)
 
-## Why Scene Thread
+## Why SemaFrame
 
-Most Agent interfaces expose documents, forms, or a chat transcript. Scene Thread instead exposes a persistent visual world with explicit geometry, data, behavior, history, and permissions.
+Most Agent interfaces expose documents, forms, or a chat transcript. SemaFrame instead exposes a persistent visual world with explicit geometry, data, behavior, history, and permissions.
 
 It is designed around four principles:
 
@@ -35,7 +37,7 @@ It is designed around four principles:
 3. **Inspect before acting.** Agents receive revision-bound component, space, placement, and physics projections rather than guessing from a screenshot alone.
 4. **Capability-based control.** Connections, approvals, sessions, scopes, transactions, feed fetches, and host signals are explicit and bounded.
 
-Scene Thread is useful for Agent-driven dashboards, simulation controls, spatial planning, interactive explainers, mixed 2D/3D prototypes, operational views, and feasibility preflight. It is not a general web browser, an unrestricted code sandbox, or a full engineering solver.
+SemaFrame is useful for Agent-driven dashboards, simulation controls, spatial planning, interactive explainers, mixed 2D/3D prototypes, operational views, and feasibility preflight. It is not a general web browser, an unrestricted code sandbox, or a full engineering solver.
 
 ## What it can do
 
@@ -75,6 +77,8 @@ The built-in component registry contains:
 ### Install and run
 
 ```bash
+git clone https://github.com/riseagain1/semaframe.git
+cd semaframe
 npm install
 npm run dev
 ```
@@ -101,7 +105,7 @@ npm run preview           # preview the production bundle
 
 ### What appears on first launch
 
-Before a connection completes, Scene Thread intentionally shows only the Agent connection interface—not an empty editable Workspace. The existing project remains preserved, but the canvas is unlocked only after an approved Agent completes the instruction handshake.
+Before a connection completes, SemaFrame intentionally shows only the Agent connection interface—not an empty editable Workspace. The existing project remains preserved, but the canvas is unlocked only after an approved Agent completes the instruction handshake.
 
 This makes ownership explicit: the browser is authoritative, while the external Agent receives scoped access to the open Workspace.
 
@@ -109,11 +113,11 @@ This makes ownership explicit: the browser is authoritative, while the external 
 
 Any Streamable HTTP MCP-capable client can connect:
 
-1. Start Scene Thread with `npm run dev`.
+1. Start SemaFrame with `npm run dev`.
 2. Enable Agent control and copy the short-lived connection URL.
 3. Add that URL as an MCP server or connector in the external client.
 4. The client reads `workspace://instructions/v1` and calls `get_workspace_instructions` first.
-5. Scene Thread displays the client's name, fingerprint, requested scopes, and destructive capabilities.
+5. SemaFrame displays the client's name, fingerprint, requested scopes, and destructive capabilities.
 6. Approve the request in the authoritative browser.
 7. The Agent inspects and edits the same open project through revision-bound transactions.
 
@@ -266,7 +270,7 @@ Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, 
 
 ## Agent integration
 
-Scene Thread exposes exactly 13 Workspace tools:
+SemaFrame exposes exactly 13 Workspace tools:
 
 | Phase | Tool |
 | --- | --- |
@@ -293,7 +297,7 @@ The normal Agent flow is:
 5. submit one bounded atomic operation batch;
 6. retry safely with the same request ID, or inspect the new revision before continuing.
 
-Voice, realtime, and multimodal clients use this same contract. Partial model output stays in client-side preview state; only final intent becomes a Workspace transaction. Scene Thread owns validation, rendering, history, permissions, and persistence. It does not bundle a model, speech recognizer, or voice transport.
+Voice, realtime, and multimodal clients use this same contract. Partial model output stays in client-side preview state; only final intent becomes a Workspace transaction. SemaFrame owns validation, rendering, history, permissions, and persistence. It does not bundle a model, speech recognizer, or voice transport.
 
 For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. `npm run agent:mcp` exposes the same Workspace surface over stdio.
 
@@ -332,7 +336,7 @@ Protocol source of truth:
 
 Open validates the closed schema, registry digests, counters, command continuity, resource invariants, and replay before replacing the current project. It never reruns actions, models, assets, or connector reads.
 
-Legacy Scene v0.2 projects and the former dual `scene-thread-workspace` envelope are intentionally unsupported. Local recovery uses the same Workspace-only representation. Provider credentials, feed approvals, MCP approvals, session tokens, and transaction tokens are never saved.
+Projects from the removed pre-Workspace runtime and its dual-envelope format are intentionally unsupported. Local recovery uses the same Workspace-only representation. Provider credentials, feed approvals, MCP approvals, session tokens, and transaction tokens are never saved.
 
 Project schema: [`src/workspace/persistence/workspaceProject.schema.json`](src/workspace/persistence/workspaceProject.schema.json).
 
@@ -357,7 +361,7 @@ Older commands are compacted into a checkpoint rather than allowing undo memory 
 
 ## Security and trust model
 
-Scene Thread treats the browser as the authoritative host and external clients as scoped callers.
+SemaFrame treats the browser as the authoritative host and external clients as scoped callers.
 
 Important boundaries include:
 
@@ -378,14 +382,14 @@ This is an application-level local capability model, not an operating-system sec
 
 ## Current boundaries
 
-Scene Thread deliberately does not claim the following:
+SemaFrame deliberately does not claim the following:
 
 - **Not any website.** Remote sites may reject framing; authenticated arbitrary browsing needs a trusted browser surface.
 - **Not any API.** Host feeds are public HTTPS JSON, CSV, RSS, or Atom only. There are no arbitrary headers, request bodies, cookies, credentialed URLs, private-network targets, SSE, or WebSockets.
 - **Not a general code sandbox.** Recipe components use a closed declarative vocabulary.
 - **Not a general physics engine.** Current physics focuses on collision, support, conservative stability, constraints, and bounded settle previews.
 - **Not structural certification.** Material properties, stress, fatigue, fracture, tolerances, and safety factors are not modeled.
-- **Not OpenUSD.** Universal Space Data is Scene Thread's bounded JSON projection for Agent reasoning.
+- **Not OpenUSD.** Universal Space Data is SemaFrame's bounded JSON projection for Agent reasoning.
 - **Not a bundled AI model.** Model choice, voice, and realtime transport live in the connecting client.
 - **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project format.
 
@@ -475,4 +479,4 @@ When changing a public contract, update the schema, TypeScript type, controller/
 
 ## License
 
-Scene Thread is available under the [MIT License](LICENSE).
+SemaFrame is available under the [MIT License](LICENSE).
