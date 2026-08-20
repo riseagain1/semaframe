@@ -8,6 +8,7 @@ import {
 } from "../components/componentTypes";
 import { ComponentRegistryError } from "../components/ComponentRegistry";
 import { workspaceConnectorCapabilityManifest } from "../data/connectorCatalog";
+import { parseParametricPrimitive } from "../modeling/parametricGeometry";
 import {
   isCanonicalHostFeedResource,
   isCanonicalInlineSnapshotResource,
@@ -24,8 +25,8 @@ import {
 import { WorkspaceValidationError } from "../protocol/validateWorkspaceBatch";
 import { ComponentActionError } from "../runtime/componentActions";
 import {
-  buildUniversalSpaceData,
-  UNIVERSAL_SPACE_DATA_VERSION,
+  buildSemaFrameSpatialGraph,
+  SEMAFRAME_SPATIAL_GRAPH_VERSION,
   parseSpatialCollisionConfig,
   querySpatialPlacement,
   spatialCollisionConfigFromProps,
@@ -64,8 +65,10 @@ import {
   type WorkspaceEvent,
   type WorkspaceEventPage,
   type WorkspaceHistoryReceipt,
+  type WorkspaceModelDefinitionView,
   type WorkspacePermissionScope,
   type WorkspacePreparedUpdate,
+  type WorkspaceRealityAssetView,
   type WorkspaceSpatialPlacementView,
   type WorkspaceSpatialStateView,
   type WorkspacePhysicsPlacementView,
@@ -101,6 +104,9 @@ export const WORKSPACE_OPERATION_NAMES = [
   "connect_event",
   "disconnect_event",
   "present_view",
+  "publish_model",
+  "instantiate_model",
+  "delete_model_definition",
   "clear_workspace",
 ] as const satisfies readonly WorkspaceOperationName[];
 
@@ -166,7 +172,7 @@ function spatialConflictForAgent(conflict: {
   };
 }
 
-function universalSpaceDataForAgent(snapshot: ReturnType<typeof buildUniversalSpaceData>): JSONValue {
+function spatialGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameSpatialGraph>): JSONValue {
   return asJSON({
     format: snapshot.format,
     version: snapshot.version,
@@ -193,8 +199,51 @@ function universalSpaceDataForAgent(snapshot: ReturnType<typeof buildUniversalSp
       prim_path: node.primPath,
       label: node.label,
       ...(node.parentId ? { parent_id: node.parentId } : {}),
-      asset_id: node.assetId,
+      node_kind: node.nodeKind,
+      ...(node.assetId ? { asset_id: node.assetId } : {}),
       entity_kind: node.entityKind,
+      ...(node.geometry ? {
+        geometry: {
+          kind: node.geometry.kind,
+          digest: node.geometry.digest,
+          parameters: node.geometry.parameters,
+          dimensions_m: node.geometry.dimensionsM,
+          local_bounds: node.geometry.localBounds,
+          volume_m3: node.geometry.volumeM3,
+          collider: node.geometry.collider,
+          ...(node.geometry.material ? { material: node.geometry.material } : {}),
+        },
+      } : {}),
+      ...(node.assembly ? {
+        assembly: {
+          collision_policy: node.assembly.collisionPolicy,
+          ...(node.assembly.modelRef ? { model_ref: node.assembly.modelRef } : {}),
+        },
+      } : {}),
+      ...(node.reality ? {
+        reality: {
+          ...(node.reality.assetId ? { asset_id: node.reality.assetId } : {}),
+          ...(node.reality.digest ? { digest: node.reality.digest } : {}),
+          descriptor_available: node.reality.descriptorAvailable,
+          binary_availability: node.reality.binaryAvailability,
+          ...(node.reality.format ? { format: node.reality.format } : {}),
+          ...(node.reality.splatCount === undefined ? {} : { splat_count: node.reality.splatCount }),
+          engineering_authority: node.reality.engineeringAuthority,
+          calibration_status: node.reality.calibrationStatus,
+          source_coordinate_system: node.reality.sourceCoordinateSystem,
+          target_coordinate_system: node.reality.targetCoordinateSystem,
+          ...(node.reality.metersPerSourceUnit === undefined
+            ? {}
+            : { meters_per_source_unit: node.reality.metersPerSourceUnit }),
+          bounds_are_metric: node.reality.boundsAreMetric,
+          semantic_proxy_ids: node.reality.semanticProxyIds,
+        },
+      } : {}),
+      assembly_ancestry: node.assemblyAncestry.map((ancestor) => ({
+        id: ancestor.id,
+        collision_policy: ancestor.collisionPolicy,
+        ...(ancestor.modelRef ? { model_ref: ancestor.modelRef } : {}),
+      })),
       visibility: node.visibility,
       local_placement: node.localPlacement,
       world_transform: {
@@ -230,6 +279,10 @@ function universalSpaceDataForAgent(snapshot: ReturnType<typeof buildUniversalSp
           enabled: node.physics.enabled,
           body_type: node.physics.bodyType,
           mass_kg: node.physics.massKg,
+          mass_source: node.physics.massSource,
+          ...(node.physics.geometryVolumeM3 === undefined
+            ? {}
+            : { geometry_volume_m3: node.physics.geometryVolumeM3 }),
           center_of_mass: node.physics.centerOfMass,
           friction: node.physics.friction,
           restitution: node.physics.restitution,
@@ -253,6 +306,8 @@ function physicsBodyForAgent(body: PhysicsBodyReport) {
       enabled: body.enabled,
       body_type: body.bodyType,
       mass_kg: body.massKg,
+      ...(body.massSource ? { mass_source: body.massSource } : {}),
+      ...(body.geometryVolumeM3 === undefined ? {} : { geometry_volume_m3: body.geometryVolumeM3 }),
       center_of_mass_world: body.centerOfMassWorld,
       friction: body.friction,
       restitution: body.restitution,
@@ -341,7 +396,7 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
     });
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set(["component_id", "componentId", "asset_id", "assetId", "entity_kind", "entityKind", "placement", "collision", "physics"]);
+  const allowed = new Set(["component_id", "componentId", "asset_id", "assetId", "entity_kind", "entityKind", "geometry", "placement", "collision", "physics"]);
   if (Object.keys(record).some((key) => !allowed.has(key))) {
     throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate contains unsupported fields", { retryable: true });
   }
@@ -379,6 +434,18 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
   const componentId = record.component_id ?? record.componentId;
   const assetId = record.asset_id ?? record.assetId;
   const entityKind = record.entity_kind ?? record.entityKind;
+  let geometry;
+  if (record.geometry !== undefined) {
+    try {
+      geometry = parseParametricPrimitive(record.geometry);
+    } catch (error) {
+      throw new WorkspaceEngineError(
+        "invalid_spatial_candidate",
+        error instanceof Error ? `candidate.geometry is invalid: ${error.message}` : "candidate.geometry is invalid",
+        { retryable: true, requiredAction: "query_spatial_placement" },
+      );
+    }
+  }
   if (componentId !== undefined && (typeof componentId !== "string" || !componentId)) {
     throw new WorkspaceEngineError("invalid_spatial_candidate", "component_id must be a non-empty string", { retryable: true });
   }
@@ -388,10 +455,18 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
   if (entityKind !== undefined && (typeof entityKind !== "string" || !entityKind)) {
     throw new WorkspaceEngineError("invalid_spatial_candidate", "entity_kind must be a non-empty string", { retryable: true });
   }
+  if (geometry && (assetId !== undefined || entityKind !== undefined)) {
+    throw new WorkspaceEngineError(
+      "invalid_spatial_candidate",
+      "candidate.geometry is mutually exclusive with asset_id and entity_kind",
+      { retryable: true, requiredAction: "query_spatial_placement" },
+    );
+  }
   return {
     ...(componentId ? { componentId: componentId as string } : {}),
     ...(assetId ? { assetId: assetId as string } : {}),
     ...(entityKind ? { entityKind: entityKind as string } : {}),
+    ...(geometry ? { geometry } : {}),
     placement: {
       space: "world3d",
       position: vector(placementRecord.position, "candidate.placement.position", -1_000_000, 1_000_000),
@@ -674,6 +749,8 @@ function workspaceSummary(
     .sort((left, right) => left.id.localeCompare(right.id));
   const resources = [...state.resources.values()]
     .sort((left, right) => left.id.localeCompare(right.id));
+  const realityAssets = [...state.realityAssets.values()]
+    .sort((left, right) => left.assetId.localeCompare(right.assetId));
   const componentCandidates = components.slice(0, maxComponents).map((component) => {
     const manifest = store.getComponentManifest(component.type.typeId, component.type.version);
     const policy = manifest
@@ -732,6 +809,18 @@ function workspaceSummary(
       last_error: resource.lastError ? "[redacted connector error]" : undefined,
     });
   });
+  const realityAssetCandidates = realityAssets.slice(0, Math.min(maxResources, 50)).map((asset) => ({
+    asset_id: asset.assetId,
+    digest: asset.digest,
+    format: asset.format,
+    byte_length: asset.byteLength,
+    splat_count: asset.splatCount,
+    spherical_harmonics_degree: asset.sphericalHarmonicsDegree,
+    model: asset.model,
+    coordinate_system: asset.coordinateSystem,
+    ...(asset.sourceBounds ? { source_bounds: asset.sourceBounds } : {}),
+    engineering_authority: asset.engineeringAuthority,
+  }));
   const connectionCandidates = [...state.connections.values()]
     .sort((left, right) => left.id.localeCompare(right.id))
     .slice(0, 100)
@@ -766,6 +855,7 @@ function workspaceSummary(
 
   const includedComponents: typeof componentCandidates = [];
   const includedResources: typeof resourceCandidates = [];
+  const includedRealityAssets: typeof realityAssetCandidates = [];
   const includedConnections: typeof connectionCandidates = [];
   const includedViews: typeof viewCandidates = [];
   const build = () => ({
@@ -774,16 +864,36 @@ function workspaceSummary(
     registry_digest: state.registryDigest,
     component_count: components.length,
     resource_count: resources.length,
+    reality_asset_count: realityAssets.length,
     connection_count: state.connections.size,
     recipe_count: state.recipes.size,
     shared_view_count: state.sharedViews.size,
-    universal_space_data: {
-      format: "universal-space-data",
-      version: UNIVERSAL_SPACE_DATA_VERSION,
+    model_definition_count: state.modelDefinitions.size,
+    model_definitions: [...state.modelDefinitions.values()]
+      .sort((left, right) => `${left.modelId}@${left.version}`.localeCompare(`${right.modelId}@${right.version}`))
+      .slice(0, 50)
+      .map((definition) => ({
+        model_id: definition.modelId,
+        version: definition.version,
+        digest: definition.digest,
+        display_name: definition.displayName,
+        root_node_id: definition.rootNodeId,
+        node_count: definition.nodes.length,
+        source_revision: definition.sourceRevision,
+      })),
+    omitted_model_definition_count: Math.max(0, state.modelDefinitions.size - 50),
+    spatial_graph: {
+      format: "semaframe-spatial-graph",
+      version: SEMAFRAME_SPATIAL_GRAPH_VERSION,
       workspace_revision: state.revision,
-      spatial_node_count: components.filter((component) => component.type.typeId === "spatial-entity").length,
+      spatial_node_count: components.filter((component) => (
+        component.type.typeId === "spatial-entity"
+        || component.type.typeId === "spatial-primitive"
+        || component.type.typeId === "model-assembly"
+        || component.type.typeId === "gaussian-splat"
+      )).length,
       collision_enabled_node_count: components.filter((component) => {
-        if (component.type.typeId !== "spatial-entity") return false;
+        if (component.type.typeId !== "spatial-entity" && component.type.typeId !== "spatial-primitive") return false;
         const collision = spatialCollisionConfigFromProps(component.props);
         return Boolean(collision?.enabled && collision.role !== "none");
       }).length,
@@ -808,6 +918,8 @@ function workspaceSummary(
     omitted_component_count: components.length - includedComponents.length,
     resources: includedResources,
     omitted_resource_count: resources.length - includedResources.length,
+    reality_assets: includedRealityAssets,
+    omitted_reality_asset_count: realityAssets.length - includedRealityAssets.length,
     connections: includedConnections,
     omitted_connection_count: state.connections.size - includedConnections.length,
     shared_views: includedViews,
@@ -831,6 +943,12 @@ function workspaceSummary(
     includedResources.pop();
     break;
   }
+  for (const candidate of realityAssetCandidates) {
+    includedRealityAssets.push(candidate);
+    if (encodedBytes(build()) <= maxBytes) continue;
+    includedRealityAssets.pop();
+    break;
+  }
   for (const candidate of connectionCandidates) {
     includedConnections.push(candidate);
     if (encodedBytes(build()) <= maxBytes) continue;
@@ -849,9 +967,9 @@ function workspaceSummary(
 function authorizationFor(principal: WorkspaceAgentPrincipal): WorkspaceAuthorization {
   return {
     actor: "agent",
-    permissions: principal.scopes.filter(
-      (scope): scope is WorkspacePermission => CORE_PERMISSIONS.has(scope as WorkspacePermission),
-    ),
+    permissions: principal.scopes
+      .filter((scope) => CORE_PERMISSIONS.has(scope as WorkspacePermission))
+      .map((scope) => scope as WorkspacePermission),
   };
 }
 
@@ -970,6 +1088,97 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
       ),
       capabilityManifest: capabilityManifest(this.store, this.maxCapabilityBytes),
     };
+  }
+
+  inspectRealityAsset(
+    assetId: string,
+    principal: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceRealityAssetView> {
+    return this.runSerialized(() => {
+      requireAgentScope(principal, "workspace:read");
+      const state = this.store.getState();
+      const descriptor = state.realityAssets.get(assetId);
+      if (!descriptor) {
+        throw new WorkspaceEngineError(
+          "reality_asset_not_found",
+          `Reality Asset ${assetId} does not exist`,
+          { retryable: true, requiredAction: "inspect_workspace" },
+        );
+      }
+      return {
+        workspaceId: state.workspaceId,
+        revision: state.revision,
+        registryDigest: state.registryDigest,
+        descriptor: asJSON(descriptor),
+        binaryAvailability: "host_local_unknown",
+      };
+    });
+  }
+
+  inspectModel(
+    modelId: string,
+    version: string,
+    principal: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceModelDefinitionView> {
+    return this.runSerialized(() => {
+      requireAgentScope(principal, "workspace:read");
+      const state = this.store.getState();
+      const key = `${modelId}@${version}`;
+      const definition = state.modelDefinitions.get(key);
+      if (!definition) {
+        throw new WorkspaceEngineError(
+          "model_definition_not_found",
+          `Published model ${key} does not exist`,
+          { retryable: true, requiredAction: "inspect_workspace" },
+        );
+      }
+      const nodes = definition.nodes.map((node) => {
+        const redactedFields: string[] = [];
+        const props = redactCredentialFields(node.props, `model.nodes.${node.nodeId}.props`, redactedFields);
+        const durableState = redactCredentialFields(
+          node.durableState,
+          `model.nodes.${node.nodeId}.durable_state`,
+          redactedFields,
+        );
+        if (redactedFields.length) {
+          throw new WorkspaceEngineError(
+            "engine_contract_violation",
+            `Published model ${key} contains a redacted capability field`,
+          );
+        }
+        return {
+          node_id: node.nodeId,
+          source_component_id: node.sourceComponentId,
+          ...(node.parentNodeId ? { parent_node_id: node.parentNodeId } : {}),
+          component_type: node.componentType,
+          label: node.label,
+          props,
+          durable_state: durableState,
+          placement: node.placement,
+          tags: node.tags,
+          visibility: node.visibility,
+          ...(node.visualEffects ? { visual_effects: node.visualEffects } : {}),
+        };
+      });
+      return {
+        workspaceId: state.workspaceId,
+        revision: state.revision,
+        registryDigest: state.registryDigest,
+        modelDefinition: asJSON({
+          format_version: definition.formatVersion,
+          model_id: definition.modelId,
+          version: definition.version,
+          digest: definition.digest,
+          display_name: definition.displayName,
+          root_node_id: definition.rootNodeId,
+          source_revision: definition.sourceRevision,
+          generator_version: definition.generatorVersion,
+          node_count: nodes.length,
+          id_map_keys: definition.nodes.map((node) => node.nodeId),
+          nodes,
+        }),
+      };
+    });
   }
 
   inspectComponent(
@@ -1185,9 +1394,9 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
 
       let space;
       if (sinceRevision === undefined || sinceRevision === 0) {
-        space = buildUniversalSpaceData(state);
+        space = buildSemaFrameSpatialGraph(state);
       } else if (sinceRevision === state.revision) {
-        space = buildUniversalSpaceData(state, {
+        space = buildSemaFrameSpatialGraph(state, {
           mode: "delta",
           sinceRevision,
           changedNodeIds: new Set(),
@@ -1229,14 +1438,14 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           }
         }
         space = requireFull
-          ? buildUniversalSpaceData(state)
-          : buildUniversalSpaceData(state, { mode: "delta", sinceRevision, changedNodeIds: changed });
+          ? buildSemaFrameSpatialGraph(state)
+          : buildSemaFrameSpatialGraph(state, { mode: "delta", sinceRevision, changedNodeIds: changed });
       }
       return {
         workspaceId: state.workspaceId,
         revision: state.revision,
         registryDigest: state.registryDigest,
-        universalSpaceData: universalSpaceDataForAgent(space),
+        spatialGraph: spatialGraphForAgent(space),
       };
     });
   }
@@ -1372,7 +1581,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         throw new WorkspaceEngineError("invalid_physics_simulation", "componentIds are invalid", { retryable: true });
       }
       const state = this.store.getState();
-      const known = new Set(buildUniversalSpaceData(state, { maxNodes: 2_000 }).nodes.map((node) => node.id));
+      const known = new Set(buildSemaFrameSpatialGraph(state, { maxNodes: 2_000 }).nodes.map((node) => node.id));
       const missing = (componentIds as string[] | undefined)?.find((id) => !known.has(id));
       if (missing) {
         throw new WorkspaceEngineError("unknown_spatial_component", `Unknown spatial component ${missing}`, {

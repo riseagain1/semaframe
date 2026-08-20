@@ -60,6 +60,9 @@ describe("public Workspace Agent surface", () => {
       connect_event: "event:connect",
       disconnect_event: "event:connect",
       present_view: "view:present",
+      publish_model: "component:update",
+      instantiate_model: "component:create",
+      delete_model_definition: "component:delete",
       clear_workspace: "workspace:clear",
     } as const;
 
@@ -75,7 +78,8 @@ describe("public Workspace Agent surface", () => {
     })).toEqual([
       { index: 4, op: "delete_component", op_id: "operation_4" },
       { index: 12, op: "delete_resource", op_id: "operation_12" },
-      { index: 18, op: "clear_workspace", op_id: "operation_18" },
+      { index: 20, op: "delete_model_definition", op_id: "operation_20" },
+      { index: 21, op: "clear_workspace", op_id: "operation_21" },
     ]);
   });
 

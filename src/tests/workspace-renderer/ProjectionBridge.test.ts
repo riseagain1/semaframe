@@ -131,6 +131,23 @@ describe("ProjectionBridge", () => {
     });
   });
 
+  it("keeps native primitives and model assemblies exclusively in the 3D renderer", () => {
+    const bridge = new ProjectionBridge();
+    bridge.setViewport({ width: 800, height: 600 });
+    const placement = {
+      space: "world3d" as const,
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    };
+    const primitive = component("primitive", "spatial-primitive", placement);
+    const assembly = component("assembly", "model-assembly", placement);
+    bridge.setComponents([primitive, assembly]);
+
+    expect(bridge.project(primitive).spatialOnly).toBe(true);
+    expect(bridge.project(assembly).spatialOnly).toBe(true);
+  });
+
   it("does not apply privileged host projection behavior to suffix-colliding recipe IDs", () => {
     const bridge = new ProjectionBridge();
     bridge.setViewport({ width: 390, height: 844 });

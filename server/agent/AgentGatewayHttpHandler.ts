@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentGateway, PairingReveal } from "./AgentGateway";
 import { AgentGatewayError } from "./AgentGateway";
 import type { AgentCommandName, BrowserCommandResult } from "./contracts";
@@ -12,6 +13,14 @@ import {
 } from "../feed/FeedFetchApprovalStore";
 import { createAgentMcpHttpHandler } from "./AgentMcpHttpHandler";
 import { createAgentGatewayOpenApi } from "./openapi";
+import {
+  AGENT_ASSET_IMPORT_SCOPE,
+  AgentAssetIngress,
+  AgentAssetIngressError,
+  toAgentAssetImportGrantWire,
+  type AgentAssetCandidateDescriptor,
+  type AgentAssetFormat,
+} from "./AgentAssetIngress";
 
 const DEFAULT_BODY_LIMIT_BYTES = 512 * 1024;
 
@@ -21,6 +30,7 @@ export type AgentGatewayHttpOptions = Readonly<{
   bodyLimitBytes?: number;
   feedRuntime?: FeedFetchRuntime;
   feedApprovalStore?: FeedFetchApprovalStore;
+  assetIngress?: AgentAssetIngress;
 }>;
 
 export type NodeRequestLike = AsyncIterable<Uint8Array | string> & {
@@ -38,8 +48,8 @@ export type NodeResponseLike = {
   setHeader(name: string, value: string): void;
   write?(body: string | Uint8Array): boolean;
   end(body?: string): void;
-  on?(event: "close", listener: () => void): void;
-  off?(event: "close", listener: () => void): void;
+  on?(event: "close" | "drain", listener: () => void): void;
+  off?(event: "close" | "drain", listener: () => void): void;
 };
 
 export type AgentGatewayFetchHandler = ((request: Request) => Promise<Response>) & {
@@ -55,6 +65,32 @@ class InvalidRequestError extends Error {}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSuccessfulWorkspaceResult(value: unknown): value is { ok: true; data: unknown } {
+  return isObject(value) && value.ok === true && Object.hasOwn(value, "data");
+}
+
+function sessionBoundAssetImporter(
+  validation: { ok: true; data: unknown },
+  sessionToken: string,
+): Readonly<{ authorizationId: string; clientId?: string; clientName?: string; scopes: readonly string[] }> {
+  if (!isObject(validation.data) || typeof validation.data.client_id !== "string") {
+    throw new AgentGatewayError(
+      "invalid_response",
+      "The browser returned an invalid asset-import session validation.",
+    );
+  }
+  const clientId = boundedString(validation.data.client_id, "client_id", 1, 128);
+  const clientName = validation.data.client_name === undefined
+    ? undefined
+    : boundedString(validation.data.client_name, "client_name", 1, 160);
+  return Object.freeze({
+    authorizationId: `session:${createHash("sha256").update(sessionToken).digest("hex")}`,
+    clientId,
+    ...(clientName ? { clientName } : {}),
+    scopes: Object.freeze([AGENT_ASSET_IMPORT_SCOPE]),
+  });
 }
 
 function exactObject(
@@ -100,9 +136,98 @@ function corsHeaders(origin: string, allowedOrigins: readonly string[]): Record<
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "content-type, x-semaframe-agent-csrf",
+    "access-control-expose-headers": "content-length, x-semaframe-asset-digest, x-semaframe-asset-media-type",
     "access-control-max-age": "600",
     vary: "origin",
   };
+}
+
+function contentLength(request: Request): number | undefined {
+  const value = request.headers.get("content-length");
+  if (value === null || !/^\d+$/u.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function assetErrorResponse(error: AgentAssetIngressError, headers: HeadersInit = {}): Response {
+  const responseHeaders = new Headers(headers);
+  if (error.status === 401) responseHeaders.set("www-authenticate", "Bearer");
+  return errorResponse(error.status, error.code, error.message, undefined, responseHeaders);
+}
+
+function readableBody(body: ReadableStream<Uint8Array> | null): AsyncIterable<Uint8Array> | undefined {
+  if (!body) return undefined;
+  return {
+    async *[Symbol.asyncIterator]() {
+      const reader = body.getReader();
+      let finished = false;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            finished = true;
+            return;
+          }
+          yield value;
+        }
+      } finally {
+        if (!finished) await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      }
+    },
+  };
+}
+
+function binaryAssetResponse(
+  candidate: AgentAssetCandidateDescriptor,
+  body: ReadableStream<Uint8Array>,
+  extraHeaders: HeadersInit,
+  release: () => void,
+): Response {
+  const reader = body.getReader();
+  let released = false;
+  const releaseOnce = () => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+    release();
+  };
+  const releasableBody = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          releaseOnce();
+        } else {
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        controller.error(error);
+        releaseOnce();
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        releaseOnce();
+      }
+    },
+  });
+  return new Response(releasableBody, {
+    status: 200,
+    headers: {
+      "content-type": candidate.mediaType,
+      "content-length": String(candidate.byteLength),
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "content-disposition": "attachment",
+      "x-semaframe-asset-digest": candidate.sha256,
+      "x-semaframe-asset-media-type": candidate.mediaType,
+      ...Object.fromEntries(new Headers(extraHeaders)),
+    },
+  });
 }
 
 function jsonResponse(
@@ -139,6 +264,9 @@ function errorResponse(
 
 function statusFor(error: AgentGatewayError): number {
   switch (error.code) {
+    case "instructions_required":
+    case "authorization_scope_missing":
+      return 403;
     case "agent_mode_disabled":
     case "engine_unavailable":
     case "gateway_closed":
@@ -247,6 +375,39 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
         session_token: boundedString(body.session_token, "session_token", 8, 256),
         instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
         component_id: componentId,
+      },
+    };
+  }
+  if (pathname === "/v1/workspace/assets/inspect" && method === "POST") {
+    const body = exactObject(value, ["session_token", "instruction_digest", "asset_id"]);
+    const assetId = boundedString(body.asset_id, "asset_id", 67, 67);
+    if (!/^ra_[a-f0-9]{64}$/u.test(assetId)) {
+      throw new InvalidRequestError("asset_id must be an exact content-addressed Reality Asset identifier.");
+    }
+    return {
+      name: "inspect_workspace_asset",
+      input: {
+        session_token: boundedString(body.session_token, "session_token", 8, 256),
+        instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
+        asset_id: assetId,
+      },
+    };
+  }
+  if (pathname === "/v1/workspace/models/inspect" && method === "POST") {
+    const body = exactObject(value, ["session_token", "instruction_digest", "model_id", "version"]);
+    const modelId = boundedString(body.model_id, "model_id", 1, 128);
+    const version = boundedString(body.version, "version", 5, 64);
+    if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(modelId)
+      || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(version)) {
+      throw new InvalidRequestError("model_id and version must identify an exact published model.");
+    }
+    return {
+      name: "inspect_workspace_model",
+      input: {
+        session_token: boundedString(body.session_token, "session_token", 8, 256),
+        instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
+        model_id: modelId,
+        version,
       },
     };
   }
@@ -410,9 +571,12 @@ export function createAgentGatewayHttpHandler(
     throw new RangeError("bodyLimitBytes must be a positive integer.");
   }
   const openApi = createAgentGatewayOpenApi(options.publicBaseUrl);
-  const mcp = createAgentMcpHttpHandler(gateway, { allowedOrigins });
   const feedRuntime = options.feedRuntime ?? new FeedFetchRuntime();
   const feedApprovals = options.feedApprovalStore ?? new FeedFetchApprovalStore();
+  const assetIngress = options.assetIngress ?? new AgentAssetIngress({
+    publicBaseUrl: options.publicBaseUrl,
+  });
+  const mcp = createAgentMcpHttpHandler(gateway, { allowedOrigins, assetIngress });
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -430,6 +594,36 @@ export function createAgentGatewayHttpHandler(
       return jsonResponse(200, openApi);
     }
     if (mcp.matches(pathname)) return mcp.fetch(request);
+
+    // Asset bytes use a dedicated, capability-bound streaming route. It must
+    // run before normal /v1 bearer handling: the upload token is intentionally
+    // distinct from the broad pairing bearer and cannot authorize any command.
+    if (assetIngress.matchesUploadPath(pathname)) {
+      if (url.search || url.hash) {
+        await request.body?.cancel().catch(() => undefined);
+        return errorResponse(404, "asset_upload_not_found", "Use the exact upload URL without query parameters or a fragment.");
+      }
+      if (request.method !== "PUT") {
+        await request.body?.cancel().catch(() => undefined);
+        return errorResponse(405, "method_not_allowed", "Use PUT.");
+      }
+      const grantId = pathname.slice(pathname.lastIndexOf("/") + 1);
+      try {
+        const descriptor = await assetIngress.upload(
+          grantId,
+          parseAuthorization(request),
+          request.headers.get("content-type") ?? undefined,
+          contentLength(request),
+          readableBody(request.body),
+          request.signal,
+        );
+        return jsonResponse(200, toAgentAssetImportGrantWire(descriptor));
+      } catch (error) {
+        await request.body?.cancel().catch(() => undefined);
+        if (error instanceof AgentAssetIngressError) return assetErrorResponse(error);
+        return errorResponse(500, "asset_ingress_error", "The local gateway could not receive the asset.");
+      }
+    }
 
     if (isBrowserRoute) {
       if (origin && !allowedOrigins.includes(origin)) {
@@ -460,15 +654,18 @@ export function createAgentGatewayHttpHandler(
         } else if (pathname === "/api/agent/browser/rotate") {
           emptyInput(value);
           result = gateway.rotatePairing();
+          await assetIngress.revokeAll();
         } else if (pathname === "/api/agent/browser/enable") {
           emptyInput(value);
           result = gateway.setEnabled(true);
         } else if (pathname === "/api/agent/browser/disable") {
           emptyInput(value);
           result = gateway.setEnabled(false);
+          await assetIngress.revokeAll();
         } else if (pathname === "/api/agent/browser/offer/refresh") {
           emptyInput(value);
           result = gateway.refreshOffer();
+          await assetIngress.revokeAll();
         } else if (pathname === "/api/agent/browser/approval/approve") {
           const body = exactObject(value, ["claimId"]);
           result = gateway.approveClaim(boundedString(body.claimId, "claimId", 36, 128));
@@ -520,6 +717,31 @@ export function createAgentGatewayHttpHandler(
           };
           feedApprovals.consume(body.approvalToken, feedRequest);
           result = await feedRuntime.fetch(feedRequest, request.signal);
+        } else if (pathname === "/api/agent/assets/candidates/inspect") {
+          const body = exactObject(value, ["candidateHandle", "workspaceId"]);
+          result = await assetIngress.inspect(
+            boundedString(body.candidateHandle, "candidateHandle", 43, 43),
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
+        } else if (pathname === "/api/agent/assets/candidates/open") {
+          const body = exactObject(value, ["candidateHandle", "workspaceId"]);
+          const opened = await assetIngress.open(
+            boundedString(body.candidateHandle, "candidateHandle", 43, 43),
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
+          return binaryAssetResponse(opened.descriptor, opened.body, cors, opened.release);
+        } else if (pathname === "/api/agent/assets/candidates/complete") {
+          const body = exactObject(value, ["candidateHandle", "workspaceId"]);
+          result = await assetIngress.complete(
+            boundedString(body.candidateHandle, "candidateHandle", 43, 43),
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
+        } else if (pathname === "/api/agent/assets/candidates/cancel") {
+          const body = exactObject(value, ["candidateHandle", "workspaceId"]);
+          result = await assetIngress.cancelFromBrowser(
+            boundedString(body.candidateHandle, "candidateHandle", 43, 43),
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
         } else {
           return errorResponse(404, "not_found", "Not found.");
         }
@@ -529,6 +751,7 @@ export function createAgentGatewayHttpHandler(
         if (error instanceof InvalidRequestError) return errorResponse(400, "invalid_request", error.message, undefined, cors);
         if (error instanceof FeedFetchApprovalError) return errorResponse(error.status, error.code, error.message, undefined, cors);
         if (error instanceof FeedFetchError) return errorResponse(error.status, error.code, error.message, error.details, cors);
+        if (error instanceof AgentAssetIngressError) return assetErrorResponse(error, cors);
         if (error instanceof AgentGatewayError) return errorResponse(statusFor(error), error.code, error.message, error.details, cors);
         return errorResponse(500, "gateway_error", "The local agent gateway could not complete the browser request.", undefined, cors);
       }
@@ -547,6 +770,64 @@ export function createAgentGatewayHttpHandler(
     try {
       let value: unknown;
       if (request.method === "POST") value = await readJson(request, bodyLimitBytes);
+      if (pathname === "/v1/assets/imports/begin" && request.method === "POST") {
+        const body = exactObject(value, [
+          "session_token",
+          "instruction_digest",
+          "request_id",
+          "workspace_id",
+          "display_name",
+          "format",
+          "media_type",
+          "byte_length",
+          "sha256",
+        ]);
+        const validation = await gateway.dispatch("begin_workspace_asset_import", body, {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        if (!isSuccessfulWorkspaceResult(validation)) return jsonResponse(200, validation);
+        const principal = sessionBoundAssetImporter(
+          validation,
+          boundedString(body.session_token, "session_token", 8, 256),
+        );
+        const result = await assetIngress.begin(principal, {
+          requestId: boundedString(body.request_id, "request_id", 8, 128),
+          workspaceId: boundedString(body.workspace_id, "workspace_id", 1, 256),
+          displayName: boundedString(body.display_name, "display_name", 1, 255),
+          format: boundedString(body.format, "format", 3, 3) as AgentAssetFormat,
+          mediaType: boundedString(body.media_type, "media_type", 3, 192),
+          byteLength: safeInteger(body.byte_length, "byte_length"),
+          sha256: boundedString(body.sha256, "sha256", 71, 71),
+        });
+        const wire = toAgentAssetImportGrantWire(result);
+        return jsonResponse(200, { ok: true, data: wire });
+      }
+      if (pathname === "/v1/assets/imports/cancel" && request.method === "POST") {
+        const body = exactObject(
+          value,
+          ["session_token", "instruction_digest", "candidate_handle"],
+        );
+        const validation = await gateway.dispatch("cancel_workspace_asset_import", body, {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        if (!isSuccessfulWorkspaceResult(validation)) return jsonResponse(200, validation);
+        const principal = sessionBoundAssetImporter(
+          validation,
+          boundedString(body.session_token, "session_token", 8, 256),
+        );
+        const result = await assetIngress.cancelFromAgent(
+          boundedString(body.candidate_handle, "candidate_handle", 43, 43),
+          principal.authorizationId,
+        );
+        return jsonResponse(200, { ok: true, data: result });
+      }
+      if (pathname === "/v1/assets/imports/complete" && request.method === "POST") {
+        const body = exactObject(value, ["session_token", "instruction_digest", "candidate_handle"]);
+        const result = await gateway.dispatch("complete_workspace_asset_import", body, {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        return jsonResponse(200, result);
+      }
       const command = externalCommand(pathname, request.method, value);
       if (!command) return errorResponse(404, "not_found", "Not found.");
       const instructionClientName = command.name === "get_workspace_instructions" && isObject(command.input)
@@ -560,6 +841,7 @@ export function createAgentGatewayHttpHandler(
     } catch (error) {
       if (error instanceof BodyTooLargeError) return errorResponse(413, "body_too_large", "Request body is too large.");
       if (error instanceof InvalidRequestError) return errorResponse(400, "invalid_request", error.message);
+      if (error instanceof AgentAssetIngressError) return assetErrorResponse(error);
       if (error instanceof AgentGatewayError) return errorResponse(statusFor(error), error.code, error.message, error.details);
       return errorResponse(500, "gateway_error", "The local agent gateway could not complete the request.");
     }
@@ -567,7 +849,7 @@ export function createAgentGatewayHttpHandler(
   return Object.assign(handle, {
     close: async () => {
       feedApprovals.clear();
-      await mcp.close();
+      await Promise.all([mcp.close(), assetIngress.close()]);
     },
   });
 }
@@ -581,11 +863,59 @@ function nodeHeaders(headers: NodeRequestLike["headers"]): Headers {
   return result;
 }
 
+async function waitForNodeResponseDrain(
+  response: NodeResponseLike,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (response.destroyed || response.writableEnded || signal.aborted) return false;
+  // Real Node ServerResponse implements on/off. A minimal adapter without
+  // lifecycle events cannot safely advertise backpressure, so fail closed and
+  // cancel the remaining source stream instead of buffering ahead.
+  if (!response.on || !response.off) return false;
+  return new Promise<boolean>((resolve) => {
+    const finish = (drained: boolean) => {
+      response.off?.("drain", onDrain);
+      response.off?.("close", onClose);
+      signal.removeEventListener("abort", onAbort);
+      resolve(drained);
+    };
+    const onDrain = () => finish(true);
+    const onClose = () => finish(false);
+    const onAbort = () => finish(false);
+    response.on?.("drain", onDrain);
+    response.on?.("close", onClose);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (response.destroyed || response.writableEnded || signal.aborted) finish(false);
+  });
+}
+
+function nodeFetchRequest(
+  target: URL,
+  init: RequestInit & { duplex?: "half" },
+  signal: AbortSignal,
+): Request {
+  try {
+    return new Request(target, { ...init, signal } as RequestInit & { duplex?: "half" });
+  } catch (signalError) {
+    // Test DOMs and embedded runtimes can expose Request and AbortSignal from
+    // distinct Web IDL realms. Retry only if the otherwise-identical request is
+    // valid; production Node uses the first, cancellable branch.
+    try {
+      return new Request(target, init as RequestInit);
+    } catch {
+      throw signalError;
+    }
+  }
+}
+
 export function createNodeAgentGatewayHttpHandler(
   gateway: AgentGateway,
   options: AgentGatewayHttpOptions,
 ): AgentGatewayNodeHandler {
-  const fetchHandler = createAgentGatewayHttpHandler(gateway, options);
+  const assetIngress = options.assetIngress ?? new AgentAssetIngress({
+    publicBaseUrl: options.publicBaseUrl,
+  });
+  const fetchHandler = createAgentGatewayHttpHandler(gateway, { ...options, assetIngress });
   const bodyLimitBytes = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES;
   const handle = async (request: NodeRequestLike, response: NodeResponseLike): Promise<void> => {
     const controller = new AbortController();
@@ -596,34 +926,68 @@ export function createNodeAgentGatewayHttpHandler(
     request.on?.("aborted", abortRequest);
     response.on?.("close", abortClosedResponse);
     try {
-      const chunks: Uint8Array[] = [];
-      let byteLength = 0;
-      for await (const chunk of request) {
-        const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
-        byteLength += bytes.byteLength;
-        if (byteLength > bodyLimitBytes) {
-          response.statusCode = 413;
-          response.setHeader("content-type", "application/json; charset=utf-8");
-          response.setHeader("cache-control", "no-store");
-          response.end(JSON.stringify({ error: { code: "body_too_large", message: "Request body is too large." } }));
-          return;
-        }
-        chunks.push(bytes);
-      }
-      if (controller.signal.aborted) return;
-      const body = new Uint8Array(byteLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        body.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
       const method = request.method ?? "GET";
-      const fetchRequest = new Request(new URL(request.url ?? "/", `${options.publicBaseUrl}/`), {
-        method,
-        headers: nodeHeaders(request.headers),
-        ...(method === "GET" || method === "HEAD" ? {} : { body }),
-        signal: controller.signal,
-      });
+      const target = new URL(request.url ?? "/", `${options.publicBaseUrl}/`);
+      let fetchRequest: Request;
+      if (assetIngress.matchesUploadPath(target.pathname)) {
+        const iterator = request[Symbol.asyncIterator]();
+        const stream = new ReadableStream<Uint8Array>({
+          async pull(streamController) {
+            try {
+              const next = await iterator.next();
+              if (next.done) {
+                streamController.close();
+                return;
+              }
+              streamController.enqueue(
+                typeof next.value === "string"
+                  ? new TextEncoder().encode(next.value)
+                  : next.value,
+              );
+            } catch (error) {
+              streamController.error(error);
+            }
+          },
+          async cancel() {
+            await iterator.return?.();
+          },
+        });
+        fetchRequest = nodeFetchRequest(target, {
+          method,
+          headers: nodeHeaders(request.headers),
+          body: stream,
+          // Node's Fetch implementation requires this flag for streaming
+          // request bodies. It is intentionally kept at this adapter boundary.
+          duplex: "half",
+        }, controller.signal);
+      } else {
+        const chunks: Uint8Array[] = [];
+        let byteLength = 0;
+        for await (const chunk of request) {
+          const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
+          byteLength += bytes.byteLength;
+          if (byteLength > bodyLimitBytes) {
+            response.statusCode = 413;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.setHeader("cache-control", "no-store");
+            response.end(JSON.stringify({ error: { code: "body_too_large", message: "Request body is too large." } }));
+            return;
+          }
+          chunks.push(bytes);
+        }
+        if (controller.signal.aborted) return;
+        const body = new Uint8Array(byteLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+          body.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        fetchRequest = nodeFetchRequest(target, {
+          method,
+          headers: nodeHeaders(request.headers),
+          ...(method === "GET" || method === "HEAD" ? {} : { body }),
+        }, controller.signal);
+      }
       const result = await fetchHandler(fetchRequest);
       if (response.destroyed || response.writableEnded) return;
       response.statusCode = result.status;
@@ -632,10 +996,24 @@ export function createNodeAgentGatewayHttpHandler(
         response.end();
       } else if (response.write) {
         const reader = result.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done || response.destroyed || response.writableEnded) break;
-          response.write(value);
+        let consumed = false;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              consumed = true;
+              break;
+            }
+            if (response.destroyed || response.writableEnded) break;
+            const accepted = response.write(value);
+            if (!accepted && !await waitForNodeResponseDrain(response, controller.signal)) break;
+          }
+        } finally {
+          // A browser that disconnects mid-download must release the underlying
+          // AgentAssetIngress reader immediately. Otherwise completion remains
+          // blocked by activeReaders until the candidate's long expiry timer.
+          if (!consumed) await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
         }
         if (!response.destroyed && !response.writableEnded) response.end();
       } else {

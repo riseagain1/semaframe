@@ -9,11 +9,16 @@ export const AGENT_GATEWAY_COMMAND_NAMES = [
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_component",
+  "inspect_workspace_asset",
+  "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
   "inspect_workspace_physics",
   "query_stable_placement",
   "simulate_workspace_physics",
+  "begin_workspace_asset_import",
+  "cancel_workspace_asset_import",
+  "complete_workspace_asset_import",
   "begin_workspace_update",
   "submit_workspace_batch",
   "undo_workspace_batch",
@@ -77,6 +82,25 @@ export type AgentGatewayPairingRotation = AgentGatewayPairing & Readonly<{
   config: AgentGatewayConfig;
 }>;
 
+export type AgentAssetCandidateDescriptor = Readonly<{
+  version: 1;
+  candidateHandle: string;
+  requestId: string;
+  workspaceId: string;
+  displayName: string;
+  format: "ply" | "spz" | "sog";
+  mediaType: string;
+  byteLength: number;
+  sha256: string;
+  status: "ready";
+  expiresAt: string;
+}>;
+
+export type AgentAssetCandidateStream = Readonly<{
+  descriptor: AgentAssetCandidateDescriptor;
+  body: ReadableStream<Uint8Array>;
+}>;
+
 export type AgentGatewayStatus =
   | "disabled"
   | "waiting"
@@ -119,6 +143,10 @@ export type AgentGatewayEndpoints = Readonly<{
   result: string;
   feedApprovalMint: string;
   feedFetch: string;
+  assetCandidateInspect: string;
+  assetCandidateOpen: string;
+  assetCandidateComplete: string;
+  assetCandidateCancel: string;
 }>;
 
 export class AgentGatewayError extends Error {
@@ -168,6 +196,10 @@ const DEFAULT_ENDPOINTS: AgentGatewayEndpoints = {
   result: "/api/agent/browser/result",
   feedApprovalMint: "/api/agent/feeds/approval/mint",
   feedFetch: "/api/agent/feeds/fetch",
+  assetCandidateInspect: "/api/agent/assets/candidates/inspect",
+  assetCandidateOpen: "/api/agent/assets/candidates/open",
+  assetCandidateComplete: "/api/agent/assets/candidates/complete",
+  assetCandidateCancel: "/api/agent/assets/candidates/cancel",
 };
 
 const CLIENT_INSTANCE_ID_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/;
@@ -201,6 +233,55 @@ function parseFeedApprovalToken(value: unknown, expected: HostFeedFetchRequest):
     throw new AgentGatewayError("invalid_response", "The feed approval does not match the requested URL and format.");
   }
   return value.approvalToken;
+}
+
+const ASSET_CANDIDATE_HANDLE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const ASSET_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u;
+
+function assetCandidateRequest(candidateHandle: string, workspaceId: string): {
+  candidateHandle: string;
+  workspaceId: string;
+} {
+  if (!ASSET_CANDIDATE_HANDLE_PATTERN.test(candidateHandle) || !WORKSPACE_ID_PATTERN.test(workspaceId)) {
+    throw new AgentGatewayError("invalid_configuration", "The asset candidate reference is invalid.");
+  }
+  return { candidateHandle, workspaceId };
+}
+
+function parseAssetCandidate(value: unknown): AgentAssetCandidateDescriptor {
+  if (!isRecord(value) || Object.keys(value).some((key) => ![
+    "version", "candidateHandle", "requestId", "workspaceId", "displayName", "format",
+    "mediaType", "byteLength", "sha256", "status", "expiresAt",
+  ].includes(key)) || value.version !== 1 ||
+      typeof value.candidateHandle !== "string" || !ASSET_CANDIDATE_HANDLE_PATTERN.test(value.candidateHandle) ||
+      typeof value.requestId !== "string" || value.requestId.length < 8 || value.requestId.length > 128 ||
+      typeof value.workspaceId !== "string" || !WORKSPACE_ID_PATTERN.test(value.workspaceId) ||
+      typeof value.displayName !== "string" || value.displayName.length < 1 || value.displayName.length > 255 ||
+      !["ply", "spz", "sog"].includes(String(value.format)) ||
+      typeof value.mediaType !== "string" || value.mediaType.length < 3 || value.mediaType.length > 192 ||
+      !Number.isSafeInteger(value.byteLength) || Number(value.byteLength) < 1 ||
+      typeof value.sha256 !== "string" || !ASSET_DIGEST_PATTERN.test(value.sha256) ||
+      value.status !== "ready" || typeof value.expiresAt !== "string") {
+    throw new AgentGatewayError("invalid_response", "The agent gateway returned an invalid asset candidate.");
+  }
+  const expiresAt = new Date(value.expiresAt);
+  if (Number.isNaN(expiresAt.valueOf()) || expiresAt.toISOString() !== value.expiresAt) {
+    throw new AgentGatewayError("invalid_response", "The agent gateway returned an invalid asset candidate expiry.");
+  }
+  return Object.freeze({
+    version: 1,
+    candidateHandle: value.candidateHandle,
+    requestId: value.requestId,
+    workspaceId: value.workspaceId,
+    displayName: value.displayName,
+    format: value.format as "ply" | "spz" | "sog",
+    mediaType: value.mediaType,
+    byteLength: Number(value.byteLength),
+    sha256: value.sha256,
+    status: "ready",
+    expiresAt: value.expiresAt,
+  });
 }
 
 function isCommandName(value: unknown): value is AgentGatewayCommandName {
@@ -571,6 +652,97 @@ export class AgentGatewayClient {
   }
 
   /**
+   * Reads the bounded, host-authored descriptor for a candidate uploaded by an
+   * approved Agent. No local path, upload bearer, or raw asset bytes cross this
+   * metadata boundary.
+   */
+  async inspectAssetCandidate(
+    candidateHandle: string,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<AgentAssetCandidateDescriptor> {
+    const body = assetCandidateRequest(candidateHandle, workspaceId);
+    await this.ensureConfig(signal);
+    const descriptor = parseAssetCandidate(
+      await this.postJson(this.endpoints.assetCandidateInspect, body, signal),
+    );
+    if (descriptor.candidateHandle !== candidateHandle || descriptor.workspaceId !== workspaceId) {
+      throw new AgentGatewayError("invalid_response", "The returned asset candidate does not match the request.");
+    }
+    return descriptor;
+  }
+
+  /**
+   * Opens a streaming, same-origin handoff into the browser-owned AssetVault.
+   * Call completeAssetCandidate only after the durable browser write and its
+   * own digest validation succeed; cancellation leaves no registered asset.
+   */
+  async openAssetCandidate(
+    candidateHandle: string,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<AgentAssetCandidateStream> {
+    const requestBody = assetCandidateRequest(candidateHandle, workspaceId);
+    const descriptor = await this.inspectAssetCandidate(candidateHandle, workspaceId, signal);
+    if (!this.csrfToken) {
+      throw new AgentGatewayError("invalid_configuration", "The agent gateway CSRF token is unavailable.");
+    }
+    const response = await this.fetchResponse(this.endpoints.assetCandidateOpen, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [CSRF_HEADER]: this.csrfToken,
+      },
+      body: JSON.stringify(requestBody),
+      signal,
+    });
+    const byteLength = Number(response.headers.get("content-length"));
+    if (
+      !response.body ||
+      response.headers.get("content-type") !== descriptor.mediaType ||
+      response.headers.get("x-semaframe-asset-media-type") !== descriptor.mediaType ||
+      response.headers.get("x-semaframe-asset-digest") !== descriptor.sha256 ||
+      byteLength !== descriptor.byteLength
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new AgentGatewayError("invalid_response", "The asset stream headers do not match its inspected descriptor.");
+    }
+    return Object.freeze({ descriptor, body: response.body });
+  }
+
+  async completeAssetCandidate(
+    candidateHandle: string,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.ensureConfig(signal);
+    const value = await this.postJson(
+      this.endpoints.assetCandidateComplete,
+      assetCandidateRequest(candidateHandle, workspaceId),
+      signal,
+    );
+    if (!isRecord(value) || Object.keys(value).some((key) => key !== "completed") || value.completed !== true) {
+      throw new AgentGatewayError("invalid_response", "The agent gateway did not confirm asset completion.");
+    }
+  }
+
+  async cancelAssetCandidate(
+    candidateHandle: string,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.ensureConfig(signal);
+    const value = await this.postJson(
+      this.endpoints.assetCandidateCancel,
+      assetCandidateRequest(candidateHandle, workspaceId),
+      signal,
+    );
+    if (!isRecord(value) || Object.keys(value).some((key) => key !== "cancelled") || value.cancelled !== true) {
+      throw new AgentGatewayError("invalid_response", "The agent gateway did not confirm asset cancellation.");
+    }
+  }
+
+  /**
    * Claims the browser engine only when no other active tab owns it. This finite
    * operation lets UI retry safely before starting the long-running poll loop.
    */
@@ -862,6 +1034,20 @@ export class AgentGatewayClient {
   }
 
   private async fetchJson(endpoint: string, init: RequestInit): Promise<unknown> {
+    const response = await this.fetchResponse(endpoint, init);
+    if (response.status === 204) return undefined;
+    try {
+      return await response.json() as unknown;
+    } catch (cause) {
+      throw new AgentGatewayError(
+        "invalid_response",
+        "The local agent gateway returned invalid JSON.",
+        { cause },
+      );
+    }
+  }
+
+  private async fetchResponse(endpoint: string, init: RequestInit): Promise<Response> {
     let response: Response;
     const callerSignal = init.signal ?? undefined;
     const timeoutController = callerSignal ? undefined : new AbortController();
@@ -913,16 +1099,7 @@ export class AgentGatewayClient {
         { status: response.status, ...(gatewayCode ? { gatewayCode } : {}) },
       );
     }
-    if (response.status === 204) return undefined;
-    try {
-      return await response.json() as unknown;
-    } catch (cause) {
-      throw new AgentGatewayError(
-        "invalid_response",
-        "The local agent gateway returned invalid JSON.",
-        { cause },
-      );
-    }
+    return response;
   }
 
   private setStatus(status: AgentGatewayStatus): void {

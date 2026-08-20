@@ -9,7 +9,10 @@ docs/media/semaframe-x-avatar.svg
 video/src/SemaFrameXiaohongshu.tsx
 
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
+.npmrc
 .DS_Store
 coverage/
 *.tsbuildinfo

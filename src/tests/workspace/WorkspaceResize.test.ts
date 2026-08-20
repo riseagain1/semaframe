@@ -701,8 +701,8 @@ describe("Workspace Protocol 1.1 resize_component", () => {
     });
     const migrated = new WorkspaceStore({ initialState: legacy });
     expect(migrated.getState()).toMatchObject({
-      protocolVersion: "1.2",
-      workspaceSchemaVersion: "1.2",
+      protocolVersion: "1.3",
+      workspaceSchemaVersion: "1.3",
     });
     expect(migrated.getState().components.get("CMP_000001")).toMatchObject({
       type: { version: "1.0.0" },

@@ -164,10 +164,10 @@ const Interaction = ({ duration }: { duration: number }) => {
   );
 };
 
-const USDScene = ({ duration }: { duration: number }) => {
+const SSGScene = ({ duration }: { duration: number }) => {
   const frame = useCurrentFrame();
   const lines = [
-    ["format", '"universal-space-data"'],
+    ["format", '"semaframe-spatial-graph"'],
     ["version", '"2.0"'],
     ["prim_path", '"/World/CMP_000005"'],
     ["world_bounds", "{ min, max, center, size }"],
@@ -179,7 +179,7 @@ const USDScene = ({ duration }: { duration: number }) => {
       <AbsoluteFill style={{ padding: "92px 110px" }}>
         <div style={{ width: 720 }}>
           <Kicker>05 · Understand space</Kicker>
-          <Title style={{ fontSize: 82, marginTop: 20 }}>Universal Space Data 2.0</Title>
+          <Title style={{ fontSize: 82, marginTop: 20 }}>SemaFrame Spatial Graph 3.0</Title>
           <Body style={{ marginTop: 32 }}>Revision-bound identity, transforms, world bounds, colliders and spatial relations—not a screenshot guess.</Body>
           <div style={{ display: "flex", gap: 12, marginTop: 40 }}>
             <Badge tone="ink">REVISION 2</Badge>
@@ -310,7 +310,7 @@ export const SemaFrameDemo = () => {
       {scene(510, 225, <Approval duration={225} />)}
       {scene(720, 270, <Build duration={270} />)}
       {scene(975, 270, <Interaction duration={270} />)}
-      {scene(1230, 270, <USDScene duration={270} />)}
+      {scene(1230, 270, <SSGScene duration={270} />)}
       {scene(1485, 330, <Physics duration={330} />)}
       {scene(1800, 225, <Inspector duration={225} />)}
       {scene(2010, 195, <History duration={195} />)}

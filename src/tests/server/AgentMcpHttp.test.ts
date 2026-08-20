@@ -14,10 +14,15 @@ import { resolveAgentGatewayNetworkConfig } from "../../../server/agent/AgentGat
 const ORIGIN = "http://127.0.0.1:4173";
 const PUBLIC_URL = "http://127.0.0.1:8788";
 const expectedTools = [
+  "begin_workspace_asset_import",
   "begin_workspace_update",
+  "cancel_workspace_asset_import",
+  "complete_workspace_asset_import",
   "get_workspace_instructions",
   "inspect_workspace",
+  "inspect_workspace_asset",
   "inspect_workspace_component",
+  "inspect_workspace_model",
   "inspect_workspace_physics",
   "inspect_workspace_space",
   "query_spatial_placement",

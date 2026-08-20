@@ -149,25 +149,25 @@ async function captureMotion(cdp, folder, frameCount = 48, frameDelayMs = 80) {
 }
 
 function compactDemoEvidence({ space, physicsBefore, physicsAfter, overlap, simulation }) {
-  const spaceData = space?.data?.universal_space_data ?? {};
+  const spatialGraph = space?.data?.spatial_graph ?? {};
   const before = physicsBefore?.data?.physics_validation ?? {};
   const after = physicsAfter?.data?.physics_validation ?? {};
   const placement = overlap?.data?.placement_check ?? {};
   const settle = simulation?.data?.simulation ?? {};
   return {
-    universalSpaceData: {
-      format: spaceData.format,
-      version: spaceData.version,
+    spatialGraph: {
+      format: spatialGraph.format,
+      version: spatialGraph.version,
       workspaceRevision: space?.data?.workspace_revision,
-      stage: spaceData.stage,
-      nodes: (spaceData.nodes ?? []).map((node) => ({
+      stage: spatialGraph.stage,
+      nodes: (spatialGraph.nodes ?? []).map((node) => ({
         id: node.id,
         primPath: node.prim_path,
         label: node.label,
         bounds: node.world_bounds,
         collision: node.collision ? { enabled: node.collision.enabled, role: node.collision.role, shape: node.collision.shape } : undefined,
       })),
-      relations: (spaceData.relations ?? []).slice(0, 12),
+      relations: (spatialGraph.relations ?? []).slice(0, 12),
     },
     physicsBefore: {
       model: before.model,

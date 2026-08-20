@@ -44,10 +44,15 @@ class RecordingMcpServer {
 }
 
 const EXPECTED_WORKSPACE_TOOLS = [
+  "begin_workspace_asset_import",
   "begin_workspace_update",
+  "cancel_workspace_asset_import",
+  "complete_workspace_asset_import",
   "get_workspace_instructions",
   "inspect_workspace",
+  "inspect_workspace_asset",
   "inspect_workspace_component",
+  "inspect_workspace_model",
   "inspect_workspace_physics",
   "inspect_workspace_space",
   "query_spatial_placement",
@@ -60,7 +65,7 @@ const EXPECTED_WORKSPACE_TOOLS = [
 ];
 
 describe("composable Workspace MCP tools", () => {
-  it("registers all thirteen Workspace tools and its guide", async () => {
+  it("registers all eighteen Workspace tools and its guide", async () => {
     const recorder = new RecordingMcpServer();
     const dispatch = vi.fn(async (name: WorkspaceAgentToolName, input: unknown) => ({
       responseOk: true,
@@ -100,6 +105,50 @@ describe("composable Workspace MCP tools", () => {
       instruction_digest: "guide_digest_1234567890",
       component_id: "bad component id",
     }).success).toBe(false);
+
+    const spatialPlacementInput = recorder.tools.get("query_spatial_placement")
+      ?.definition.inputSchema as ZodType | undefined;
+    const exactParametricCandidate = {
+      session_token: "workspace_session_1234567890",
+      instruction_digest: "guide_digest_1234567890",
+      candidate: {
+        geometry: {
+          kind: "capsule",
+          radiusM: 0.25,
+          cylinderHeightM: 1.5,
+          axis: "z",
+        },
+        placement: {
+          space: "world3d",
+          position: { x: 1, y: 2, z: 3 },
+          rotation: { x: 0, y: 0.25, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      },
+    };
+    expect(spatialPlacementInput?.safeParse(exactParametricCandidate).success).toBe(true);
+    expect(spatialPlacementInput?.safeParse({
+      ...exactParametricCandidate,
+      candidate: {
+        ...exactParametricCandidate.candidate,
+        geometry: { kind: "capsule", radiusM: 0, cylinderHeightM: 1.5, axis: "z" },
+      },
+    }).success).toBe(false);
+    expect(spatialPlacementInput?.safeParse({
+      ...exactParametricCandidate,
+      candidate: {
+        ...exactParametricCandidate.candidate,
+        geometry: { kind: "box", sizeM: { x: 1, y: 1, z: 1 }, rendererScale: 2 },
+      },
+    }).success).toBe(false);
+    expect(spatialPlacementInput?.safeParse({
+      ...exactParametricCandidate,
+      candidate: {
+        ...exactParametricCandidate.candidate,
+        geometry: { kind: "mesh", uri: "https://example.invalid/model.glb" },
+      },
+    }).success).toBe(false);
+
     const componentOutput = recorder.tools.get("inspect_workspace_component")
       ?.definition.outputSchema as ZodType | undefined;
     const validComponentOutput = {

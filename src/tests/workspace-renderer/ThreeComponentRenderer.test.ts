@@ -54,6 +54,125 @@ describe("ThreeComponentRenderer", () => {
     expect(scene.environment.preset).toBe("simple_room");
   });
 
+  it("projects exact parametric primitives and transform-only model assemblies", () => {
+    const source = snapshot();
+    const scene = workspaceToSceneState({
+      ...source,
+      components: [
+        source.components[0]!,
+        {
+          id: "assembly",
+          type: { typeId: "model-assembly", version: "1.0.0", digest: "assembly" },
+          label: "Assembly",
+          props: { description: "fixture", collisionPolicy: "external_only" },
+          durableState: {},
+          placement: { space: "world3d", position: { x: 2, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+          tags: [],
+          visibility: "visible",
+          locks: { placement: false },
+        },
+        {
+          id: "primitive",
+          type: { typeId: "spatial-primitive", version: "1.0.0", digest: "primitive" },
+          label: "Exact box",
+          props: {
+            geometry: { kind: "box", sizeM: { x: 1.2, y: 0.4, z: 2.5 } },
+            material: { baseColor: "#123456", metallic: 0.2, roughness: 0.3, opacity: 0.8, emissiveColor: "#010203", emissiveIntensity: 0.4 },
+            castShadow: true,
+            receiveShadow: false,
+          },
+          durableState: {},
+          placement: { space: "world3d", position: { x: 0, y: 0.2, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+          parentId: "assembly",
+          tags: [],
+          visibility: "visible",
+          locks: { placement: false },
+        },
+      ],
+    });
+    expect(scene.entities.get("assembly")?.renderGeometry).toEqual({ kind: "assembly" });
+    expect(scene.entities.get("primitive")).toMatchObject({
+      parentId: "assembly",
+      renderGeometry: {
+        kind: "parametric",
+        definition: { kind: "box", sizeM: { x: 1.2, y: 0.4, z: 2.5 } },
+        material: { baseColor: "#123456", metallic: 0.2, roughness: 0.3 },
+      },
+    });
+  });
+
+  it("projects a calibrated Reality layer as visual-only digest-pinned geometry", () => {
+    const source = snapshot();
+    const digest = `sha256:${"a".repeat(64)}` as const;
+    const scene = workspaceToSceneState({
+      ...source,
+      realityAssets: [{
+        version: 1,
+        assetId: "ra_pole",
+        digest,
+        format: "spz-v4",
+        formatVersion: 4,
+        mediaType: "application/x-spz",
+        byteLength: 2048,
+        splatCount: 800,
+        sphericalHarmonicsDegree: 1,
+        model: "gaussian-3d",
+        antialiased: false,
+        coordinateSystem: { system: "LDF", provenance: "embedded" },
+        sourceBounds: { min: { x: 1, y: 2, z: 3 }, max: { x: 5, y: 8, z: 9 } },
+        engineeringAuthority: "visual_only",
+      }],
+      components: [
+        source.components[0]!,
+        {
+          id: "reality-pole",
+          type: { typeId: "gaussian-splat", version: "1.0.0", digest: "manifest" },
+          label: "Captured utility pole",
+          props: {
+            assetRef: { assetId: "ra_pole", digest },
+            calibration: {
+              version: 1,
+              status: "reference-distance",
+              sourceCoordinateSystem: "LDF",
+              targetCoordinateSystem: "RUB",
+              metersPerSourceUnit: 0.01,
+              sourceDistance: 200,
+              referenceDistanceM: 2,
+            },
+            quality: "high",
+            semanticProxyIds: [],
+          },
+          durableState: {},
+          placement: {
+            space: "world3d",
+            position: { x: 4, y: 0, z: 2 },
+            rotation: { x: 0, y: 0.5, z: 0 },
+            scale: { x: 2, y: 2, z: 2 },
+          },
+          tags: [],
+          visibility: "visible",
+          locks: { placement: false },
+        },
+      ],
+    });
+    expect(scene.entities.get("reality-pole")).toMatchObject({
+      assetId: "reality:ra_pole",
+      transform: {
+        position: { x: 4, y: 0, z: 2 },
+        scale: { x: 0.02, y: 0.02, z: 0.02 },
+      },
+      renderGeometry: {
+        kind: "reality",
+        asset: { assetId: "ra_pole", digest, format: "spz-v4", byteLength: 2048, splatCount: 800 },
+        bounds: { min: { x: 1, y: 2, z: 3 }, max: { x: 5, y: 8, z: 9 } },
+        sourceAxisSigns: { x: -1, y: -1, z: -1 },
+        metersPerSourceUnit: 0.01,
+        quality: "high",
+        engineeringAuthority: "visual_only",
+      },
+    });
+  });
+
   it("projects durable spatial playback instead of relying on opaque props", () => {
     const source = snapshot();
     const scene = workspaceToSceneState({

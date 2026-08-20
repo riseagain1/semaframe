@@ -143,8 +143,8 @@ describe("Workspace resize migration", () => {
     expect(() => serializer.deserialize(mixedVersion)).toThrow(/versions disagree/);
 
     const migrated = serializer.deserialize(legacy);
-    expect(migrated.protocolVersion).toBe("1.2");
-    expect(migrated.workspaceSchemaVersion).toBe("1.2");
+    expect(migrated.protocolVersion).toBe("1.3");
+    expect(migrated.workspaceSchemaVersion).toBe("1.3");
     const reopened = serializer.openStore(migrated);
     expect(reopened.getState().components.get("CMP_000001")).toMatchObject({
       type: oldRef,

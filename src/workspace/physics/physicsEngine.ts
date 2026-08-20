@@ -1,6 +1,6 @@
 import type { ComponentInstance, ComponentPlacement, JSONObject, Vec3, World3DPlacement } from "../components/componentTypes";
 import {
-  buildUniversalSpaceData,
+  buildSemaFrameSpatialGraph,
   cloneStateWithSpatialCandidate,
   convexHull2,
   groundContactPatches,
@@ -13,7 +13,7 @@ import {
   verticalSupportGaps,
   type SpatialPlacementCandidate,
   type SpatialPoint2,
-  type UniversalSpaceDataNode,
+  type SemaFrameSpatialGraphNode,
 } from "../spatial";
 import type { WorkspaceState } from "../state/workspaceState";
 import { effectiveSpatialPhysicsConfig } from "./physicsConfig";
@@ -118,14 +118,14 @@ function stageGroundSurface(state: Readonly<WorkspaceState>): GroundSurface | un
   };
 }
 
-function hasSolidPhysicsCollider(node: UniversalSpaceDataNode): boolean {
+function hasSolidPhysicsCollider(node: SemaFrameSpatialGraphNode): boolean {
   return node.visibility === "visible"
     && node.physics?.enabled === true
     && node.collision?.enabled === true
     && node.collision.role === "solid";
 }
 
-function worldPoint(node: UniversalSpaceDataNode, local: Vec3): Vec3 {
+function worldPoint(node: SemaFrameSpatialGraphNode, local: Vec3): Vec3 {
   return add(node.worldTransform.position, rotate(
     node.worldTransform.rotationQuaternion,
     multiply(local, node.worldTransform.scale),
@@ -138,9 +138,9 @@ type ConstraintAnalysis = Readonly<{
 }>;
 
 function analyzeConstraints(
-  node: UniversalSpaceDataNode,
+  node: SemaFrameSpatialGraphNode,
   constraints: readonly PhysicsConstraint[],
-  byId: ReadonlyMap<string, UniversalSpaceDataNode>,
+  byId: ReadonlyMap<string, SemaFrameSpatialGraphNode>,
 ): ConstraintAnalysis {
   const issues: PhysicsIssue[] = [];
   const valid: PhysicsConstraint[] = [];
@@ -198,7 +198,7 @@ function dot(left: Vec3, right: Vec3): number {
 
 /** Conservative equilibrium check for the remaining joint degree of freedom. */
 function constraintHoldsAgainstGravity(
-  node: UniversalSpaceDataNode,
+  node: SemaFrameSpatialGraphNode,
   centerOfMassWorld: Vec3,
   physics: SpatialPhysicsConfig,
   constraint: PhysicsConstraint,
@@ -225,7 +225,7 @@ function constraintHoldsAgainstGravity(
 }
 
 type RawBodyAnalysis = Readonly<{
-  node: UniversalSpaceDataNode;
+  node: SemaFrameSpatialGraphNode;
   physics: SpatialPhysicsConfig;
   centerOfMassWorld: Vec3;
   constraintAnalysis: ConstraintAnalysis;
@@ -255,9 +255,9 @@ function lowerBoundByHeight(entries: readonly Readonly<{ height: number; id: str
 }
 
 export function buildPhysicsValidationReport(state: Readonly<WorkspaceState>): PhysicsValidationReport {
-  const space = buildUniversalSpaceData(state, { maxNodes: 2_000 });
+  const space = buildSemaFrameSpatialGraph(state, { maxNodes: 2_000 });
   const nodes = [...space.nodes]
-    .filter((node) => node.visibility === "visible")
+    .filter((node) => node.visibility === "visible" && node.physics !== undefined)
     .sort((left, right) => left.id.localeCompare(right.id));
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const ground = stageGroundSurface(state);
@@ -455,6 +455,10 @@ export function buildPhysicsValidationReport(state: Readonly<WorkspaceState>): P
       enabled: analysis.physics.enabled,
       bodyType: analysis.physics.bodyType,
       massKg: analysis.physics.massKg,
+      massSource: "explicit",
+      ...(node.physics?.geometryVolumeM3 === undefined
+        ? {}
+        : { geometryVolumeM3: node.physics.geometryVolumeM3 }),
       centerOfMassWorld: analysis.centerOfMassWorld,
       friction: analysis.physics.friction,
       restitution: analysis.physics.restitution,
@@ -498,8 +502,8 @@ function cloneState(state: Readonly<WorkspaceState>): WorkspaceState {
 }
 
 function minimumVerticalDropGap(
-  node: UniversalSpaceDataNode,
-  groundedNodes: readonly UniversalSpaceDataNode[],
+  node: SemaFrameSpatialGraphNode,
+  groundedNodes: readonly SemaFrameSpatialGraphNode[],
   ground: GroundSurface | undefined,
 ): number | undefined {
   if (!node.collision) return undefined;
@@ -532,8 +536,9 @@ export function simulatePhysicsSettle(
   const selected = options.componentIds ? new Set(options.componentIds) : undefined;
   const working = cloneState(state);
   const proposals: PhysicsSettleProposal[] = [];
-  const initialSpace = buildUniversalSpaceData(working);
-  const nodes = [...initialSpace.nodes].sort((left, right) => left.worldBounds.min.y - right.worldBounds.min.y
+  const initialSpace = buildSemaFrameSpatialGraph(working);
+  const nodes = [...initialSpace.nodes].filter((node) => node.physics !== undefined)
+    .sort((left, right) => left.worldBounds.min.y - right.worldBounds.min.y
     || left.id.localeCompare(right.id));
 
   for (const node of nodes) {
@@ -542,7 +547,7 @@ export function simulatePhysicsSettle(
     const physics = effectiveSpatialPhysicsConfig(component.props);
     if (!physics.enabled || physics.bodyType !== "dynamic" || component.placement.space !== "world3d") continue;
     const from = structuredClone(component.placement);
-    const currentSpace = buildUniversalSpaceData(working, { maxNodes: 2_000 });
+    const currentSpace = buildSemaFrameSpatialGraph(working, { maxNodes: 2_000 });
     const currentNode = currentSpace.nodes.find((entry) => entry.id === node.id);
     const currentReport = buildPhysicsValidationReport(working);
     const currentBody = currentReport.bodies.find((entry) => entry.componentId === node.id);
@@ -629,7 +634,7 @@ function stageContainmentSuggestion(
 ): ComponentPlacement | undefined {
   const component = state.components.get(componentId);
   if (!component || component.placement.space !== "world3d") return undefined;
-  const snapshot = buildUniversalSpaceData(state, { maxNodes: 2_000 });
+  const snapshot = buildSemaFrameSpatialGraph(state, { maxNodes: 2_000 });
   const node = snapshot.nodes.find((entry) => entry.id === componentId);
   const stage = snapshot.stage;
   if (!node?.collision || !stage || stage.visibility !== "visible") return undefined;
@@ -716,7 +721,7 @@ export function queryStablePlacement(state: Readonly<WorkspaceState>, candidate:
 
 export function enforcedPhysicsIssues(state: Readonly<WorkspaceState>): readonly PhysicsIssue[] {
   const hasEnforcedPhysics = [...state.components.values()].some((component) => {
-    if (component.type.typeId !== "spatial-entity") return false;
+    if (component.type.typeId !== "spatial-entity" && component.type.typeId !== "spatial-primitive") return false;
     const physics = effectiveSpatialPhysicsConfig(component.props);
     return physics.enabled && (physics.stabilityMode === "enforce" || physics.constraints.length > 0);
   });

@@ -9,6 +9,8 @@ describe("WorkspaceCanvasOverlay", () => {
   it("exposes a synchronized accessible component tree including 3D entities", () => {
     const components = [
       component("desk", "spatial-entity", "Desk"),
+      component("primitive", "spatial-primitive", "Exact box"),
+      component("assembly", "model-assembly", "Workbench assembly"),
       component("brief", "panel", "Mission brief"),
       component("timer", "timer", "Launch timer", {
         durationMs: 600_000,
@@ -23,6 +25,8 @@ describe("WorkspaceCanvasOverlay", () => {
     ];
     const projections = new Map<string, ProjectedComponent>([
       ["desk", projected("desk", true)],
+      ["primitive", projected("primitive", true)],
+      ["assembly", projected("assembly", true)],
       ["brief", projected("brief", false)],
       ["timer", projected("timer", false)],
     ]);
@@ -34,8 +38,13 @@ describe("WorkspaceCanvasOverlay", () => {
     />);
 
     const tree = screen.getByRole("tree", { name: "Workspace components" });
-    expect(within(tree).getAllByRole("treeitem")).toHaveLength(3);
+    expect(within(tree).getAllByRole("treeitem")).toHaveLength(5);
+    expect(within(tree).queryByRole("button")).not.toBeInTheDocument();
     expect(within(tree).getByRole("treeitem", { name: /Desk, spatial-entity, visible/i })).toHaveAttribute("aria-selected", "true");
+    expect(within(tree).getByRole("treeitem", { name: /Exact box, spatial-primitive, visible/i })).toBeInTheDocument();
+    expect(within(tree).getByRole("treeitem", { name: /Workbench assembly, model-assembly, visible/i })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Exact box, spatial-primitive component/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Workbench assembly, model-assembly component/i })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: /Mission brief, panel component/i })).toBeVisible();
     expect(screen.getByRole("region", { name: /Launch timer, timer component/i })).toBeVisible();
     expect(screen.getByLabelText("05:00 remaining")).toBeInTheDocument();
@@ -163,7 +172,7 @@ function component(
     label,
     props,
     durableState,
-    placement: typeId === "spatial-entity"
+    placement: ["spatial-entity", "spatial-primitive", "model-assembly"].includes(typeId)
       ? { space: "world3d", position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } }
       : { space: "viewport", anchor: "center", offset: { x: 0, y: 0 } },
     tags: [],

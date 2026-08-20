@@ -67,6 +67,26 @@ function feedApproval(
   };
 }
 
+const assetDigest = `sha256:${"a".repeat(64)}`;
+const assetCandidateHandle = "c".repeat(43);
+
+function assetCandidate(overrides: Record<string, unknown> = {}) {
+  return {
+    version: 1,
+    candidateHandle: assetCandidateHandle,
+    requestId: "asset-request-client-01",
+    workspaceId: "workspace_main",
+    displayName: "utility-pole.spz",
+    format: "spz",
+    mediaType: "model/spz",
+    byteLength: 4,
+    sha256: assetDigest,
+    status: "ready",
+    expiresAt: "2026-08-21T03:04:35.000Z",
+    ...overrides,
+  };
+}
+
 function requestBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
   const init = fetchMock.mock.calls[index]?.[1] as RequestInit | undefined;
   return JSON.parse(String(init?.body));
@@ -246,6 +266,86 @@ describe("AgentGatewayClient", () => {
       message: "feed response contains unsupported field unexpected",
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("streams an inspected opaque asset candidate and completes it only after the caller persists it", async () => {
+    const bytes = new Uint8Array([0x53, 0x50, 0x5a, 0x04]);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: true })))
+      .mockResolvedValueOnce(jsonResponse(assetCandidate()))
+      .mockResolvedValueOnce(new Response(bytes, {
+        status: 200,
+        headers: {
+          "content-type": "model/spz",
+          "content-length": "4",
+          "x-semaframe-asset-digest": assetDigest,
+          "x-semaframe-asset-media-type": "model/spz",
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse({ completed: true }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-asset-ingress",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    const opened = await client.openAssetCandidate(assetCandidateHandle, "workspace_main");
+    expect(opened.descriptor).toEqual(assetCandidate());
+    expect(Array.from(new Uint8Array(await new Response(opened.body).arrayBuffer()))).toEqual(Array.from(bytes));
+    await client.completeAssetCandidate(assetCandidateHandle, "workspace_main");
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/assets/candidates/inspect",
+      "/api/agent/assets/candidates/open",
+      "/api/agent/assets/candidates/complete",
+    ]);
+    expect(requestBody(fetchMock, 1)).toEqual({
+      candidateHandle: assetCandidateHandle,
+      workspaceId: "workspace_main",
+    });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      method: "POST",
+      credentials: "same-origin",
+      redirect: "error",
+      headers: {
+        "Content-Type": "application/json",
+        "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
+      },
+    });
+  });
+
+  it("rejects an asset stream whose digest-bearing headers drift from its inspected descriptor", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+        controller.close();
+      },
+    });
+    const cancel = vi.spyOn(stream, "cancel");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: true })))
+      .mockResolvedValueOnce(jsonResponse(assetCandidate()))
+      .mockResolvedValueOnce(new Response(stream, {
+        headers: {
+          "content-type": "model/spz",
+          "content-length": "4",
+          "x-semaframe-asset-digest": `sha256:${"b".repeat(64)}`,
+          "x-semaframe-asset-media-type": "model/spz",
+        },
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-asset-header-drift",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.openAssetCandidate(assetCandidateHandle, "workspace_main")).rejects.toMatchObject({
+      code: "invalid_response",
+    });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("serializes overlapping config reads so browser start order cannot invert server observation order", async () => {

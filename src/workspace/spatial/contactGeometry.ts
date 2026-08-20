@@ -1,5 +1,5 @@
 import type { Vec3 } from "../components/componentTypes";
-import type { SpatialResolvedCollisionPart, UniversalSpaceDataNode } from "./spatialTypes";
+import type { SemaFrameSpatialGraphNode, SpatialResolvedCollisionPart } from "./spatialTypes";
 
 export type SpatialPoint2 = Readonly<{ x: number; z: number }>;
 
@@ -134,8 +134,8 @@ export function horizontalExtremeFace(
 }
 
 export function supportContactPatches(
-  upper: UniversalSpaceDataNode,
-  lower: UniversalSpaceDataNode,
+  upper: SemaFrameSpatialGraphNode,
+  lower: SemaFrameSpatialGraphNode,
   toleranceM: number,
 ): SpatialContactPatch[] {
   if (!upper.collision || !lower.collision) return [];
@@ -155,7 +155,7 @@ export function supportContactPatches(
 }
 
 export function groundContactPatches(
-  node: UniversalSpaceDataNode,
+  node: SemaFrameSpatialGraphNode,
   groundPolygon: readonly SpatialPoint2[],
   groundHeight: number,
   toleranceM: number,
@@ -184,16 +184,16 @@ export function partIntersectsGroundVolume(
 
 /** Horizontal overlap used by the vertical-drop preview before faces touch. */
 export function projectedSupportOverlap(
-  upper: UniversalSpaceDataNode,
-  lower: UniversalSpaceDataNode,
+  upper: SemaFrameSpatialGraphNode,
+  lower: SemaFrameSpatialGraphNode,
 ): boolean {
   return verticalSupportGaps(upper, lower).length > 0;
 }
 
 /** Candidate vertical gaps whose horizontal extreme faces overlap. */
 export function verticalSupportGaps(
-  upper: UniversalSpaceDataNode,
-  lower: UniversalSpaceDataNode,
+  upper: SemaFrameSpatialGraphNode,
+  lower: SemaFrameSpatialGraphNode,
 ): number[] {
   if (!upper.collision || !lower.collision) return [];
   const gaps: number[] = [];

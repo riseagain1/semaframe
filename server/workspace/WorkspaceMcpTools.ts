@@ -19,7 +19,7 @@ import {
 
 export const WORKSPACE_MCP_SERVER_INFO = Object.freeze({
   name: "semaframe-workspace-engine",
-  version: "1.6.0",
+  version: "1.7.0",
 });
 
 export type WorkspaceMcpBackendResult = Readonly<{
@@ -40,6 +40,14 @@ export interface WorkspaceMcpBackend {
     input: unknown,
     client: WorkspaceMcpClientContext,
   ): Promise<WorkspaceMcpBackendResult>;
+  beginAssetImport?(
+    input: unknown,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
+  cancelAssetImport?(
+    input: unknown,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
 }
 
 export type RegisterWorkspaceToolsOptions = Readonly<{
@@ -51,11 +59,16 @@ const requiredActionSchema = z.enum([
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_component",
+  "inspect_workspace_asset",
+  "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
   "inspect_workspace_physics",
   "query_stable_placement",
   "simulate_workspace_physics",
+  "begin_workspace_asset_import",
+  "cancel_workspace_asset_import",
+  "complete_workspace_asset_import",
   "begin_workspace_update",
   "submit_workspace_batch",
   "undo_workspace_batch",
@@ -189,7 +202,7 @@ const {
 
 /**
  * Keep the transport advertisement and runtime validation on the canonical
- * Protocol 1.2 schema. Nesting the batch behind a local definition preserves
+ * Protocol 1.3 schema. Nesting the batch behind a local definition preserves
  * every operation definition and its root-relative references in tools/list.
  */
 const submitWorkspaceBatchInputSchema = fromJsonSchema<SubmitWorkspaceBatchInput>({
@@ -295,10 +308,47 @@ export function registerWorkspaceTools(
   );
 
   server.registerTool(
+    "inspect_workspace_asset",
+    {
+      title: "Inspect one registered Reality Asset",
+      description: "Reads one exact content-addressed Reality Asset descriptor by asset ID. This returns safe metadata only: never raw bytes, file names, local paths, upload capabilities, or a claim about browser-local binary availability.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        asset_id: z.string().length(67).regex(/^ra_[a-f0-9]{64}$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "inspect_workspace_asset",
+      await backend.dispatch("inspect_workspace_asset", input, clientContext({}, context, protocolEra)),
+    ),
+  );
+
+  server.registerTool(
+    "inspect_workspace_model",
+    {
+      title: "Inspect one published parametric model",
+      description: "Reads an exact digest-pinned reusable model definition, including all node IDs required to construct instantiate_model.id_map. This is read-only and never reserves component IDs.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        model_id: z.string().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u),
+        version: z.string().min(5).max(64).regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "inspect_workspace_model",
+      await backend.dispatch("inspect_workspace_model", input, clientContext({}, context, protocolEra)),
+    ),
+  );
+
+  server.registerTool(
     "inspect_workspace_space",
     {
-      title: "Inspect Universal Space Data",
-      description: "Reads the authoritative derived 3D spatial graph with world transforms, asset-derived bounds, collision volumes, hierarchy, support/intersection relations, and optional revision deltas. This is the model-facing Universal Space Data view, not a second persisted scene authority.",
+      title: "Inspect SemaFrame Spatial Graph",
+      description: "Reads the authoritative derived SemaFrame Spatial Graph with world transforms, asset-derived bounds, collision volumes, hierarchy, support/intersection relations, and optional revision deltas. This is the model-facing spatial view, not a second persisted scene authority.",
       inputSchema: z.strictObject({
         ...sessionFields,
         since_revision: z.number().int().nonnegative().optional(),
@@ -374,24 +424,89 @@ export function registerWorkspaceTools(
     stabilityMode: z.enum(["report", "enforce"]),
     constraints: z.array(physicsConstraintSchema).max(16),
   });
-  const spatialCandidateSchema = z.strictObject({
-    component_id: z.string().min(1).max(256).optional(),
-    asset_id: z.string().min(1).max(256).optional(),
-    entity_kind: z.enum(["character", "animal", "prop", "structure", "effect", "primitive"]).optional(),
+  const parametricDimensionSchema = z.number().finite().min(0.000001).max(1_000);
+  const parametricRadiusSchema = z.number().finite().min(0.000001).max(500);
+  const parametricAxisSchema = z.enum(["x", "y", "z"]);
+  const parametricPrimitiveSchema = z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("box"),
+      sizeM: z.strictObject({
+        x: parametricDimensionSchema,
+        y: parametricDimensionSchema,
+        z: parametricDimensionSchema,
+      }),
+    }),
+    z.strictObject({ kind: z.literal("sphere"), radiusM: parametricRadiusSchema }),
+    z.strictObject({
+      kind: z.literal("cylinder"),
+      radiusM: parametricRadiusSchema,
+      heightM: parametricDimensionSchema,
+      axis: parametricAxisSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("cone"),
+      radiusM: parametricRadiusSchema,
+      heightM: parametricDimensionSchema,
+      axis: parametricAxisSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("capsule"),
+      radiusM: parametricRadiusSchema,
+      cylinderHeightM: parametricDimensionSchema,
+      axis: parametricAxisSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("plane"),
+      sizeM: z.strictObject({ x: parametricDimensionSchema, y: parametricDimensionSchema }),
+      normalAxis: parametricAxisSchema,
+    }),
+  ]);
+  const spatialCandidateBase = {
     placement: z.strictObject({
       space: z.literal("world3d"),
-      position: spatialVectorSchema,
-      rotation: spatialVectorSchema,
-      scale: spatialVectorSchema,
+      position: z.strictObject({
+        x: z.number().finite().min(-1_000_000).max(1_000_000),
+        y: z.number().finite().min(-1_000_000).max(1_000_000),
+        z: z.number().finite().min(-1_000_000).max(1_000_000),
+      }),
+      rotation: z.strictObject({
+        x: z.number().finite().min(-1_000_000).max(1_000_000),
+        y: z.number().finite().min(-1_000_000).max(1_000_000),
+        z: z.number().finite().min(-1_000_000).max(1_000_000),
+      }),
+      scale: z.strictObject({
+        x: z.number().finite().min(0.01).max(100),
+        y: z.number().finite().min(0.01).max(100),
+        z: z.number().finite().min(0.01).max(100),
+      }),
     }),
     collision: spatialCollisionSchema.optional(),
     physics: spatialPhysicsSchema.optional(),
-  });
+  };
+  const componentIdSchema = z.string().min(1).max(256);
+  const assetIdSchema = z.string().min(1).max(256);
+  const entityKindSchema = z.enum(["character", "animal", "prop", "structure", "effect", "primitive"]);
+  // The union makes geometry-vs-asset identity visible in tools/list instead
+  // of relying only on the controller's authoritative fail-closed check.
+  const spatialCandidateSchema = z.union([
+    z.strictObject({ ...spatialCandidateBase, component_id: componentIdSchema }),
+    z.strictObject({ ...spatialCandidateBase, component_id: componentIdSchema, asset_id: assetIdSchema }),
+    z.strictObject({ ...spatialCandidateBase, component_id: componentIdSchema, entity_kind: entityKindSchema }),
+    z.strictObject({
+      ...spatialCandidateBase,
+      component_id: componentIdSchema,
+      asset_id: assetIdSchema,
+      entity_kind: entityKindSchema,
+    }),
+    z.strictObject({ ...spatialCandidateBase, component_id: componentIdSchema, geometry: parametricPrimitiveSchema }),
+    z.strictObject({ ...spatialCandidateBase, asset_id: assetIdSchema, entity_kind: entityKindSchema }),
+    z.strictObject({ ...spatialCandidateBase, geometry: parametricPrimitiveSchema }),
+  ]);
   server.registerTool(
     "query_spatial_placement",
     {
       title: "Preflight a collision-aware 3D placement",
-      description: "Checks a proposed new or existing spatial entity placement against authoritative asset-bound, explicit-box, or compound colliders without mutating the Workspace. Returns conflicts and deterministic nearby placement suggestions.",
+      description: "Checks a proposed asset or exact parametric primitive placement against authoritative geometry, explicit-box, or compound colliders without mutating the Workspace. For a new primitive pass geometry instead of asset_id/entity_kind. Returns conflicts and deterministic nearby placement suggestions.",
       inputSchema: z.strictObject({
         ...sessionFields,
         candidate: spatialCandidateSchema,
@@ -455,6 +570,70 @@ export function registerWorkspaceTools(
     async (input, context) => toolResult(
       "simulate_workspace_physics",
       await backend.dispatch("simulate_workspace_physics", input, clientContext({}, context, protocolEra)),
+    ),
+  );
+
+  server.registerTool(
+    "begin_workspace_asset_import",
+    {
+      title: "Begin a Reality Asset import",
+      description: "After explicit asset:import approval, mint a one-time streaming PUT grant for a user-provided PLY, SPZ, or SOG file. Bytes never enter MCP JSON. Compute the exact SHA-256 and byte length before calling this tool.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        request_id: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._~-]*$/u),
+        workspace_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/u),
+        display_name: z.string().min(1).max(255),
+        format: z.enum(["ply", "spz", "sog"]),
+        media_type: z.string().min(3).max(192),
+        byte_length: z.number().int().positive().max(256 * 1024 * 1024),
+        sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "begin_workspace_asset_import",
+      await (backend.beginAssetImport
+        ? backend.beginAssetImport(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("begin_workspace_asset_import", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "cancel_workspace_asset_import",
+    {
+      title: "Cancel a staged Reality Asset import",
+      description: "Cancels and deletes one pending upload candidate belonging to this approved connection.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        candidate_handle: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "cancel_workspace_asset_import",
+      await (backend.cancelAssetImport
+        ? backend.cancelAssetImport(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("cancel_workspace_asset_import", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "complete_workspace_asset_import",
+    {
+      title: "Validate and register an uploaded Reality Asset",
+      description: "Asks the authoritative SemaFrame browser to stream, independently preflight, content-hash, store, and register a ready candidate. Returns a digest-pinned asset reference; create a gaussian-splat component in a normal prepared Workspace batch afterward.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        candidate_handle: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "complete_workspace_asset_import",
+      await backend.dispatch("complete_workspace_asset_import", input, clientContext({}, context, protocolEra)),
     ),
   );
 
@@ -559,7 +738,7 @@ export function createWorkspaceMcpServer(
       "Copy begin_workspace_update.data.envelope unchanged, use one of its reserved_component_ids, and copy the exact typeId/version/digest tuple for the chosen type from its capability_manifest.component_types.",
       "Submit those exact fields plus the create_component operation through submit_workspace_batch with the returned transaction_token.",
       "Use inspect_workspace_component when a target is omitted from the bounded summary, and inspect exact current geometry and resize policy before any absolute resize_component operation.",
-      "Before spatial creation or movement, inspect Universal Space Data and preflight collision plus physical stability. inspect_workspace_physics reports support, center of mass, constraints, and feasibility; simulate_workspace_physics returns non-mutating settle proposals.",
+      "Before spatial creation or movement, inspect the SemaFrame Spatial Graph and preflight collision plus physical stability. inspect_workspace_physics reports support, center of mass, constraints, and feasibility; simulate_workspace_physics returns non-mutating settle proposals.",
       "For a data-backed chart, use data_interaction_quickstart: create an inline.snapshot@1.0.0 resource and bind $.labels and $.series in snapshot mode.",
       "For 2D and 3D interaction, connect declared semantic events to declared actions; button.pressed can invoke spatial play_animation, and spatial.activated can invoke a window visibility action.",
       "Copy exact asset IDs and supported animation clips from capability_manifest.asset_library; never guess them.",

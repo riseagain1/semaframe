@@ -12,10 +12,15 @@ import { describe, expect, it } from "vitest";
 
 const PROJECT_ROOT = process.cwd();
 const EXPECTED_TOOLS = [
+  "begin_workspace_asset_import",
   "begin_workspace_update",
+  "cancel_workspace_asset_import",
+  "complete_workspace_asset_import",
   "get_workspace_instructions",
   "inspect_workspace",
+  "inspect_workspace_asset",
   "inspect_workspace_component",
+  "inspect_workspace_model",
   "inspect_workspace_physics",
   "inspect_workspace_space",
   "query_spatial_placement",
@@ -98,7 +103,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
     expect(result.era).toBe("legacy");
     expect(result.protocolVersion).toMatch(/^2025-/u);
     expect(result.discoverResult).toBeUndefined();
-    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.6.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.7.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);
@@ -114,7 +119,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
       supportedVersions: ["2026-07-28"],
       resultType: "complete",
     });
-    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.6.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.7.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);

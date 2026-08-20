@@ -15,6 +15,9 @@ Describe the user-visible result and why it is needed.
 - [ ] `npm run typecheck`
 - [ ] `npm run demo:typecheck`
 - [ ] `npm run build`
+- [ ] `npm run test:cad:bundle`
+- [ ] `npm run test:csg:bundle`
+- [ ] `npm run test:reality:runtime`
 - [ ] `npm test -- --run --maxWorkers=2`
 
 List any additional smoke tests or manual checks performed.

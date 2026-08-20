@@ -109,7 +109,7 @@ describe("WorkspaceStoreEngineAdapter", () => {
     const prepared = await adapter.prepare("Create a focus timer", 3, actor);
 
     expect(prepared.envelope).toEqual({
-      protocol_version: "1.2",
+      protocol_version: "1.3",
       request_id: "agent_request_1",
       workspace_id: "workspace_main",
       input_revision: 1,
@@ -122,10 +122,10 @@ describe("WorkspaceStoreEngineAdapter", () => {
     expect(textBytes(prepared.workspace_summary)).toBeLessThanOrEqual(300_000);
     expect(textBytes(prepared.capability_manifest)).toBeLessThanOrEqual(200_000);
     expect(prepared.capability_manifest).toMatchObject({
-      protocol_version: "1.2",
+      protocol_version: "1.3",
       registry_digest: store.getRegistryDigest(),
       allowed_operations: WORKSPACE_OPERATION_NAMES,
-      component_type_count: 16,
+      component_type_count: 19,
       connector_types: expect.arrayContaining([
         expect.objectContaining({
           connectorType: "inline.snapshot",

@@ -19,12 +19,19 @@ import type {
   SceneState,
 } from "../../renderer/sceneRenderTypes";
 import type { WorkspaceOperation } from "../protocol/workspaceTypes";
+import {
+  parametricGeometryDigest,
+  parseParametricPrimitive,
+} from "../modeling/parametricGeometry";
+import type { ParametricRenderMaterial } from "../../renderer/sceneRenderTypes";
 import { ThreeRenderer } from "../../renderer/ThreeRenderer";
 import {
   computeSceneDelta,
   createEnvironmentState,
   createInitialScene,
 } from "../../renderer/sceneRenderState";
+import { isSpatialRenderTypeId } from "../spatial/spatialComponentKinds";
+import type { RealityAssetDescriptor } from "../assets";
 import {
   type AnimationCompletionRequest,
   isRecord,
@@ -60,6 +67,12 @@ export type ThreeComponentRendererOptions = Readonly<{
   onActivate?: (componentId: string) => void;
   onAnimationComplete?: (request: AnimationCompletionRequest) => void;
   reducedMotion?: boolean;
+  /** Reads immutable RealityAsset bytes from the host AssetVault. */
+  openRealityAsset?: (
+    assetId: string,
+    digest: string,
+    signal?: AbortSignal,
+  ) => Promise<Blob | Uint8Array | ArrayBuffer | undefined>;
 }>;
 
 /** Adapts Workspace spatial components to the existing deterministic ThreeRenderer. */
@@ -82,6 +95,7 @@ export class ThreeComponentRenderer {
         generation: completion.generation,
       }),
       reducedMotion: options.reducedMotion,
+      openRealityAsset: options.openRealityAsset,
     });
   }
 
@@ -198,7 +212,7 @@ export function workspaceOperationsToSceneOperations(
   snapshot: WorkspaceRenderSnapshot,
 ): SceneOperation[] {
   const spatialIds = new Set(snapshot.components
-    .filter((component) => component.type.typeId === "spatial-entity")
+    .filter((component) => isSpatialRenderTypeId(component.type.typeId))
     .map((component) => component.id));
   const stageIds = new Set(snapshot.components
     .filter((component) => component.type.typeId === "stage-3d")
@@ -249,11 +263,13 @@ export function workspaceToSceneState(snapshot: WorkspaceRenderSnapshot): SceneS
   else scene.environment = createEnvironmentState(EMPTY_WORKSPACE_ENVIRONMENT_PRESET);
 
   const spatialIds = new Set((stage ? snapshot.components : [])
-    .filter((component) => component.type.typeId === "spatial-entity" && component.visibility !== "collapsed")
+    .filter((component) => isSpatialRenderTypeId(component.type.typeId) && component.visibility !== "collapsed")
     .map((component) => component.id));
+  const realityAssets = new Map((snapshot.realityAssets ?? [])
+    .map((asset) => [asset.assetId, asset] as const));
   for (const component of snapshot.components) {
     if (!spatialIds.has(component.id) || component.placement.space !== "world3d") continue;
-    scene.entities.set(component.id, toEntity(component, spatialIds));
+    scene.entities.set(component.id, toEntity(component, spatialIds, realityAssets));
   }
   return scene;
 }
@@ -298,11 +314,133 @@ function applyStage(scene: SceneState, stage: WorkspaceRenderComponent): void {
   if (camera) scene.activeCamera = camera;
 }
 
-function toEntity(component: WorkspaceRenderComponent, spatialIds: ReadonlySet<string>): EntityState {
+function toEntity(
+  component: WorkspaceRenderComponent,
+  spatialIds: ReadonlySet<string>,
+  realityAssets: ReadonlyMap<string, RealityAssetDescriptor>,
+): EntityState {
   const visualEffects = component.visualEffects ?? DEFAULT_COMPONENT_VISUAL_EFFECTS;
-  const kind = entityKind(component.props.entityKind);
   const placement = component.placement;
   if (placement.space !== "world3d") throw new Error("Spatial entities require world3d placement.");
+  if (component.type.typeId === "model-assembly") {
+    return {
+      id: component.id,
+      kind: "primitive",
+      assetId: "__semaframe_model_assembly__",
+      label: component.label,
+      transform: {
+        position: { ...placement.position },
+        rotation: { ...placement.rotation },
+        scale: { ...placement.scale },
+      },
+      appearance: {
+        opacity: component.visibility === "visible" ? visualEffects.opacity : 0,
+        emissiveColor: visualEffects.emissive.color,
+        emissiveIntensity: visualEffects.emissive.intensity,
+        glowColor: visualEffects.glow.color,
+        glowIntensity: visualEffects.glow.intensity,
+        glowSpread: visualEffects.glow.spread,
+      },
+      state: { type: "generic", properties: {} },
+      renderGeometry: { kind: "assembly" },
+      ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
+      tags: [...component.tags],
+      locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
+    };
+  }
+  if (component.type.typeId === "spatial-primitive") {
+    const definition = parseParametricPrimitive(component.props.geometry);
+    const material = parametricMaterial(component.props.material);
+    return {
+      id: component.id,
+      kind: "primitive",
+      assetId: `parametric:${definition.kind}`,
+      label: component.label,
+      transform: {
+        position: { ...placement.position },
+        rotation: { ...placement.rotation },
+        scale: { ...placement.scale },
+      },
+      appearance: {
+        color: material.baseColor,
+        opacity: component.visibility === "visible" ? material.opacity * visualEffects.opacity : 0,
+        emissiveColor: material.emissiveColor,
+        emissiveIntensity: material.emissiveIntensity + visualEffects.emissive.intensity,
+        glowColor: visualEffects.glow.color,
+        glowIntensity: visualEffects.glow.intensity,
+        glowSpread: visualEffects.glow.spread,
+      },
+      state: { type: "generic", properties: {} },
+      renderGeometry: {
+        kind: "parametric",
+        definition,
+        digest: parametricGeometryDigest(definition),
+        material,
+        castShadow: component.props.castShadow !== false,
+        receiveShadow: component.props.receiveShadow !== false,
+      },
+      ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
+      tags: [...component.tags],
+      locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
+    };
+  }
+  if (component.type.typeId === "gaussian-splat") {
+    const reference = realityAssetReference(component.props.assetRef);
+    const descriptor = reference ? realityAssets.get(reference.assetId) : undefined;
+    const exactDescriptor = descriptor?.digest === reference?.digest ? descriptor : undefined;
+    const calibration = realityRenderCalibration(component.props.calibration);
+    const sourceBounds = exactDescriptor?.sourceBounds ?? {
+      min: { x: -0.5, y: -0.5, z: -0.5 },
+      max: { x: 0.5, y: 0.5, z: 0.5 },
+    };
+    const sourceAxisSigns = realityCoordinateSigns(calibration.sourceCoordinateSystem);
+    const metersPerSourceUnit = calibration.metersPerSourceUnit ?? 1;
+    return {
+      id: component.id,
+      kind: "primitive",
+      assetId: exactDescriptor ? `reality:${exactDescriptor.assetId}` : "__semaframe_reality_unlinked__",
+      label: component.label,
+      transform: {
+        position: { ...placement.position },
+        rotation: { ...placement.rotation },
+        scale: {
+          x: placement.scale.x * metersPerSourceUnit,
+          y: placement.scale.y * metersPerSourceUnit,
+          z: placement.scale.z * metersPerSourceUnit,
+        },
+      },
+      appearance: {
+        opacity: component.visibility === "visible" ? visualEffects.opacity : 0,
+        emissiveColor: visualEffects.emissive.color,
+        emissiveIntensity: visualEffects.emissive.intensity,
+        glowColor: visualEffects.glow.color,
+        glowIntensity: visualEffects.glow.intensity,
+        glowSpread: visualEffects.glow.spread,
+      },
+      state: { type: "generic", properties: {} },
+      renderGeometry: {
+        kind: "reality",
+        ...(exactDescriptor ? {
+          asset: {
+            assetId: exactDescriptor.assetId,
+            digest: exactDescriptor.digest,
+            format: exactDescriptor.format,
+            byteLength: exactDescriptor.byteLength,
+            splatCount: exactDescriptor.splatCount,
+          },
+        } : {}),
+        bounds: structuredClone(sourceBounds),
+        sourceAxisSigns,
+        metersPerSourceUnit,
+        quality: realityQuality(component.props.quality),
+        engineeringAuthority: "visual_only",
+      },
+      ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
+      tags: [...component.tags],
+      locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
+    };
+  }
+  const kind = entityKind(component.props.entityKind);
   return {
     id: component.id,
     kind,
@@ -335,6 +473,64 @@ function toEntity(component: WorkspaceRenderComponent, spatialIds: ReadonlySet<s
     tags: [...component.tags],
     locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
   };
+}
+
+function realityAssetReference(value: unknown): { assetId: string; digest: string } | undefined {
+  if (!isRecord(value) || typeof value.assetId !== "string" || typeof value.digest !== "string") return undefined;
+  return { assetId: value.assetId, digest: value.digest };
+}
+
+function realityRenderCalibration(value: unknown): {
+  sourceCoordinateSystem: string;
+  metersPerSourceUnit?: number;
+} {
+  if (!isRecord(value)) return { sourceCoordinateSystem: "UNKNOWN" };
+  return {
+    sourceCoordinateSystem: typeof value.sourceCoordinateSystem === "string"
+      ? value.sourceCoordinateSystem
+      : "UNKNOWN",
+    ...(typeof value.metersPerSourceUnit === "number"
+      && Number.isFinite(value.metersPerSourceUnit)
+      && value.metersPerSourceUnit > 0
+      ? { metersPerSourceUnit: value.metersPerSourceUnit }
+      : {}),
+  };
+}
+
+function realityCoordinateSigns(system: string): { x: number; y: number; z: number } {
+  if (!/^[LR][UD][BF]$/u.test(system)) return { x: 1, y: 1, z: 1 };
+  return {
+    x: system[0] === "R" ? 1 : -1,
+    y: system[1] === "U" ? 1 : -1,
+    z: system[2] === "B" ? 1 : -1,
+  };
+}
+
+function realityQuality(value: unknown): "auto" | "low" | "medium" | "high" {
+  return value === "low" || value === "medium" || value === "high" ? value : "auto";
+}
+
+function parametricMaterial(value: unknown): ParametricRenderMaterial {
+  const record = isRecord(value) ? value : {};
+  return {
+    baseColor: renderColor(record.baseColor, "#68D5FF"),
+    metallic: boundedNumber(record.metallic, 0, 1, 0),
+    roughness: boundedNumber(record.roughness, 0, 1, 0.55),
+    opacity: boundedNumber(record.opacity, 0, 1, 1),
+    emissiveColor: renderColor(record.emissiveColor, "#000000"),
+    emissiveIntensity: boundedNumber(record.emissiveIntensity, 0, 8, 0),
+  };
+}
+
+function renderColor(value: unknown, fallback: `#${string}`): `#${string}` {
+  const color = colorValue(value);
+  return color?.startsWith("#") ? color as `#${string}` : fallback;
+}
+
+function boundedNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, value))
+    : fallback;
 }
 
 function entityState(

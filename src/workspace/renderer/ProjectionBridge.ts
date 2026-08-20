@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { INFINITE_NAVIGATION_LIMITS } from "../../renderer/infiniteNavigation";
 import { DEFAULT_DECLARATIVE_COMPONENT_SIZE } from "../components/componentTypes";
 import {
+  isSpatialComponent,
   type CameraProjectionState,
   type CanvasViewTransform,
   type ProjectedComponent,
@@ -151,8 +152,7 @@ export class ProjectionBridge {
       ? responsiveViewportSize(component, intrinsicSize, this.viewport)
       : intrinsicSize;
     const zIndex = "zIndex" in placement ? finite(placement.zIndex, defaultZIndex(placement)) : defaultZIndex(placement);
-    const spatialOnly = component.type.typeId === "spatial-entity"
-      || component.type.typeId === "stage-3d";
+    const spatialOnly = isSpatialComponent(component);
     let point: WorkspaceVec2;
     let visible = component.visibility === "visible";
 

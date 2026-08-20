@@ -228,7 +228,7 @@ export function validateWorkspaceCommandBatch(value: unknown): WorkspaceCommandB
   if (!batchValidator(value)) {
     const details = schemaErrors(batchValidator.errors);
     throw new WorkspaceValidationError(
-      `Workspace batch does not match protocol 1.2/compatible 1.1/1.0: ${details.join("; ")}`,
+      `Workspace batch does not match protocol 1.3/compatible 1.2/1.1/1.0: ${details.join("; ")}`,
       "invalid_batch",
       details,
     );
@@ -244,7 +244,7 @@ export function validateWorkspaceCommandBatch(value: unknown): WorkspaceCommandB
     );
   }
   if (
-    batch.protocol_version !== "1.2"
+    batch.protocol_version !== "1.2" && batch.protocol_version !== "1.3"
     && batch.operations.some((operation) => operation.op === "set_component_visual_effects")
   ) {
     throw new WorkspaceValidationError(
@@ -253,7 +253,7 @@ export function validateWorkspaceCommandBatch(value: unknown): WorkspaceCommandB
     );
   }
   if (
-    batch.protocol_version !== "1.2"
+    batch.protocol_version !== "1.2" && batch.protocol_version !== "1.3"
     && batch.operations.some((operation) => operation.op === "upgrade_component_manifest")
   ) {
     throw new WorkspaceValidationError(
@@ -262,7 +262,7 @@ export function validateWorkspaceCommandBatch(value: unknown): WorkspaceCommandB
     );
   }
   if (
-    batch.protocol_version !== "1.2"
+    batch.protocol_version !== "1.2" && batch.protocol_version !== "1.3"
     && batch.operations.some((operation) => (
       ("transition" in operation && operation.transition !== undefined)
       || (operation.op === "connect_event" && (
@@ -273,6 +273,34 @@ export function validateWorkspaceCommandBatch(value: unknown): WorkspaceCommandB
   ) {
     throw new WorkspaceValidationError(
       "Component and event-connection transitions require Workspace Protocol 1.2",
+      "protocol_version_mismatch",
+    );
+  }
+  if (
+    batch.protocol_version !== "1.2" && batch.protocol_version !== "1.3"
+    && batch.operations.some((operation) => (
+      operation.op === "publish_model"
+      || operation.op === "instantiate_model"
+      || operation.op === "delete_model_definition"
+      || ((operation.op === "attach_component" || operation.op === "detach_component")
+        && operation.transform_mode !== undefined)
+    ))
+  ) {
+    throw new WorkspaceValidationError(
+      "Reusable models and explicit reparent transform modes require Workspace Protocol 1.2",
+      "protocol_version_mismatch",
+    );
+  }
+  if (
+    batch.protocol_version !== "1.3"
+    && batch.operations.some((operation) => (
+      operation.op === "register_reality_asset"
+      || operation.op === "delete_reality_asset"
+      || (operation.op === "clear_workspace" && operation.include_reality_assets !== undefined)
+    ))
+  ) {
+    throw new WorkspaceValidationError(
+      "Reality Asset operations require Workspace Protocol 1.3",
       "protocol_version_mismatch",
     );
   }

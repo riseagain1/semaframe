@@ -1,6 +1,7 @@
 import {
   DEFAULT_WORKSPACE_AGENT_SCOPES,
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
+  WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WORKSPACE_PROTOCOL_VERSION,
   type JSONValue,
   type WorkspaceAgentError,
@@ -12,9 +13,11 @@ import {
   type WorkspaceEnginePort,
   WorkspaceEngineError,
   type WorkspaceHistoryReceipt,
+  type WorkspaceModelDefinitionView,
   type WorkspacePermissionScope,
   type WorkspacePreparedEnvelope,
   type WorkspacePreparedUpdate,
+  type WorkspaceRealityAssetView,
   type WorkspaceStateView,
   isWorkspaceAgentToolName,
   isWorkspacePermissionScope,
@@ -54,6 +57,12 @@ type TransactionRecord = {
   result?: WorkspaceAgentResult<SubmitWorkspaceBatchData>;
 };
 
+type RealityAssetCompletionRecord = {
+  sessionToken: string;
+  completion?: Promise<JSONValue>;
+  result?: JSONValue;
+};
+
 export type WorkspaceScopeGrantRequest = Readonly<{
   clientId: string;
   clientName?: string;
@@ -68,6 +77,11 @@ export type WorkspaceAgentControllerOptions = Readonly<{
   grantScopes?: (
     request: WorkspaceScopeGrantRequest,
   ) => readonly WorkspacePermissionScope[] | Promise<readonly WorkspacePermissionScope[]>;
+  /** Browser-hosted finalization seam; candidate bytes never enter an MCP JSON body. */
+  completeRealityAssetImport?: (
+    candidateHandle: string,
+    principal: WorkspaceAgentPrincipal,
+  ) => JSONValue | Promise<JSONValue>;
 }>;
 
 export type WorkspaceInstructionsData = Readonly<{
@@ -114,13 +128,32 @@ export type InspectWorkspaceComponentData = Readonly<{
   manifest_truncated: false;
 }>;
 
+export type InspectWorkspaceModelData = Readonly<{
+  client_id: string;
+  client_name?: string;
+  workspace_id: string;
+  workspace_revision: number;
+  registry_digest: string;
+  model_definition: JSONValue;
+}>;
+
+export type InspectWorkspaceAssetData = Readonly<{
+  client_id: string;
+  client_name?: string;
+  workspace_id: string;
+  workspace_revision: number;
+  registry_digest: string;
+  descriptor: JSONValue;
+  binary_availability: "host_local_unknown";
+}>;
+
 export type InspectWorkspaceSpaceData = Readonly<{
   client_id: string;
   client_name?: string;
   workspace_id: string;
   workspace_revision: number;
   registry_digest: string;
-  universal_space_data: JSONValue;
+  spatial_graph: JSONValue;
 }>;
 
 export type QuerySpatialPlacementData = Readonly<{
@@ -354,10 +387,15 @@ export function requiredScopesForWorkspaceBatch(batch: unknown): WorkspacePermis
       case "set_component_visual_effects":
       case "attach_component":
       case "detach_component":
+      case "publish_model":
         required.add("component:update");
         break;
       case "delete_component":
+      case "delete_model_definition":
         required.add("component:delete");
+        break;
+      case "instantiate_model":
+        required.add("component:create");
         break;
       case "invoke_component_action":
         required.add("component:invoke");
@@ -396,6 +434,7 @@ export function destructiveWorkspaceOperations(batch: unknown): JSONValue[] {
   return operationRecords(batch).flatMap((operation, index) => {
     if (
       operation.op !== "delete_component" &&
+      operation.op !== "delete_model_definition" &&
       operation.op !== "clear_workspace" &&
       operation.op !== "delete_resource"
     ) return [];
@@ -452,11 +491,13 @@ function validPrepared(prepared: WorkspacePreparedUpdate): boolean {
 export class WorkspaceAgentController {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly transactions = new Map<string, TransactionRecord>();
+  private readonly realityAssetCompletions = new Map<string, RealityAssetCompletionRecord>();
   private readonly sessionTtlMs: number;
   private readonly transactionTtlMs: number;
   private readonly now: () => number;
   private readonly randomToken: (prefix: string) => string;
   private readonly grantScopes: NonNullable<WorkspaceAgentControllerOptions["grantScopes"]>;
+  private readonly completeRealityAssetImport?: WorkspaceAgentControllerOptions["completeRealityAssetImport"];
 
   constructor(
     private readonly engine: WorkspaceEnginePort,
@@ -467,6 +508,7 @@ export class WorkspaceAgentController {
     this.now = options.now ?? Date.now;
     this.randomToken = options.randomToken ?? defaultToken;
     this.grantScopes = options.grantScopes ?? (() => ["workspace:read"]);
+    this.completeRealityAssetImport = options.completeRealityAssetImport;
     for (const [name, value] of [
       ["sessionTtlMs", this.sessionTtlMs],
       ["transactionTtlMs", this.transactionTtlMs],
@@ -593,6 +635,81 @@ export class WorkspaceAgentController {
     }
   }
 
+  async inspectWorkspaceModel(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<InspectWorkspaceModelData>> {
+    try {
+      const body = exactRecord(
+        input,
+        ["session_token", "instruction_digest", "model_id", "version"],
+        [],
+      );
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["workspace:read"]);
+      const modelId = requiredString(body.model_id, "model_id", 1, 128);
+      const version = requiredString(body.version, "version", 5, 64);
+      if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(modelId)
+        || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(version)) {
+        throw new WorkspaceEngineError(
+          "invalid_request",
+          "model_id and version must identify an exact published model",
+          { retryable: true },
+        );
+      }
+      const inspection = await this.consistentModelState(modelId, version, principal(session));
+      const result = ok({
+        ...publicIdentity(session),
+        workspace_id: inspection.workspaceId,
+        workspace_revision: inspection.revision,
+        registry_digest: inspection.registryDigest,
+        model_definition: structuredClone(inspection.modelDefinition),
+      });
+      if (encodedBytes(result) > WORKSPACE_MODEL_INSPECTION_MAX_BYTES) {
+        throw new WorkspaceEngineError(
+          "model_inspection_too_large",
+          "Published model inspection exceeds the public response limit",
+          { retryable: false },
+        );
+      }
+      return result;
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
+  async inspectWorkspaceAsset(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<InspectWorkspaceAssetData>> {
+    try {
+      const body = exactRecord(
+        input,
+        ["session_token", "instruction_digest", "asset_id"],
+        [],
+      );
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["workspace:read"]);
+      const assetId = requiredString(body.asset_id, "asset_id", 67, 67);
+      if (!/^ra_[a-f0-9]{64}$/u.test(assetId)) {
+        throw new WorkspaceEngineError(
+          "invalid_request",
+          "asset_id must be an exact content-addressed Reality Asset identifier",
+          { retryable: true },
+        );
+      }
+      const inspection = await this.consistentRealityAssetState(assetId, principal(session));
+      return ok({
+        ...publicIdentity(session),
+        workspace_id: inspection.workspaceId,
+        workspace_revision: inspection.revision,
+        registry_digest: inspection.registryDigest,
+        descriptor: structuredClone(inspection.descriptor),
+        binary_availability: inspection.binaryAvailability,
+      });
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
   async inspectWorkspaceSpace(input: unknown): Promise<WorkspaceAgentResult<InspectWorkspaceSpaceData>> {
     try {
       const body = exactRecord(
@@ -611,7 +728,7 @@ export class WorkspaceAgentController {
         workspace_id: result.workspaceId,
         workspace_revision: result.revision,
         registry_digest: result.registryDigest,
-        universal_space_data: structuredClone(result.universalSpaceData),
+        spatial_graph: structuredClone(result.spatialGraph),
       });
     } catch (cause) {
       return fail(this.mapError(cause));
@@ -788,6 +905,98 @@ export class WorkspaceAgentController {
     }
   }
 
+  async validateWorkspaceAssetImport(input: unknown): Promise<WorkspaceAgentResult<JSONValue>> {
+    try {
+      this.purgeExpired();
+      const body = exactRecord(input, [
+        "session_token", "instruction_digest", "request_id", "workspace_id", "display_name",
+        "format", "media_type", "byte_length", "sha256",
+      ], []);
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["asset:import"]);
+      const workspaceId = requiredString(body.workspace_id, "workspace_id", 1, 256);
+      const state = await this.engine.getState();
+      if (state.workspaceId !== workspaceId) {
+        throw new WorkspaceEngineError(
+          "workspace_id_mismatch",
+          "The asset import targets a different Workspace. Inspect the current Workspace and begin again.",
+          { retryable: true, requiredAction: "inspect_workspace" },
+        );
+      }
+      return ok({
+        ...publicIdentity(session),
+        workspace_id: state.workspaceId,
+        workspace_revision: state.revision,
+      });
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
+  async validateWorkspaceAssetImportCancellation(input: unknown): Promise<WorkspaceAgentResult<JSONValue>> {
+    try {
+      this.purgeExpired();
+      const body = exactRecord(input, ["session_token", "instruction_digest", "candidate_handle"], []);
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["asset:import"]);
+      requiredString(body.candidate_handle, "candidate_handle", 43, 43);
+      const state = await this.engine.getState();
+      return ok({ ...publicIdentity(session), workspace_id: state.workspaceId });
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
+  async completeWorkspaceAssetImport(input: unknown): Promise<WorkspaceAgentResult<JSONValue>> {
+    try {
+      this.purgeExpired();
+      const body = exactRecord(input, ["session_token", "instruction_digest", "candidate_handle"], []);
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["asset:import"]);
+      const candidateHandle = requiredString(body.candidate_handle, "candidate_handle", 43, 43);
+      if (!this.completeRealityAssetImport) {
+        throw new WorkspaceEngineError(
+          "asset_import_unavailable",
+          "The authoritative browser cannot finalize Reality Asset imports right now.",
+          { retryable: true },
+        );
+      }
+      const existing = this.realityAssetCompletions.get(candidateHandle);
+      if (existing?.sessionToken !== undefined && existing.sessionToken !== session.token) {
+        throw new WorkspaceEngineError(
+          "asset_import_session_mismatch",
+          "This staged Reality Asset belongs to a different Agent session.",
+          { retryable: false },
+        );
+      }
+      if (existing?.result !== undefined) {
+        return ok({ ...publicIdentity(session), result: structuredClone(existing.result) });
+      }
+      let completion = existing?.completion;
+      if (!completion) {
+        completion = Promise.resolve(this.completeRealityAssetImport(candidateHandle, principal(session)));
+        this.realityAssetCompletions.set(candidateHandle, { sessionToken: session.token, completion });
+      }
+      let result: JSONValue;
+      try {
+        result = await completion;
+      } catch (cause) {
+        const current = this.realityAssetCompletions.get(candidateHandle);
+        if (current?.sessionToken === session.token && current.completion === completion) {
+          this.realityAssetCompletions.delete(candidateHandle);
+        }
+        throw cause;
+      }
+      this.realityAssetCompletions.set(candidateHandle, {
+        sessionToken: session.token,
+        result: structuredClone(result),
+      });
+      return ok({ ...publicIdentity(session), result: structuredClone(result) });
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
   async submitWorkspaceBatch(input: unknown): Promise<WorkspaceAgentResult<SubmitWorkspaceBatchData>> {
     try {
       this.purgeExpired();
@@ -928,6 +1137,10 @@ export class WorkspaceAgentController {
         return this.inspectWorkspace(input);
       case "inspect_workspace_component":
         return this.inspectWorkspaceComponent(input);
+      case "inspect_workspace_asset":
+        return this.inspectWorkspaceAsset(input);
+      case "inspect_workspace_model":
+        return this.inspectWorkspaceModel(input);
       case "inspect_workspace_space":
         return this.inspectWorkspaceSpace(input);
       case "query_spatial_placement":
@@ -938,6 +1151,12 @@ export class WorkspaceAgentController {
         return this.queryStablePlacement(input);
       case "simulate_workspace_physics":
         return this.simulateWorkspacePhysics(input);
+      case "begin_workspace_asset_import":
+        return this.validateWorkspaceAssetImport(input);
+      case "cancel_workspace_asset_import":
+        return this.validateWorkspaceAssetImportCancellation(input);
+      case "complete_workspace_asset_import":
+        return this.completeWorkspaceAssetImport(input);
       case "begin_workspace_update":
         return this.beginWorkspaceUpdate(input);
       case "submit_workspace_batch":
@@ -961,6 +1180,7 @@ export class WorkspaceAgentController {
   revokeAll(): void {
     this.sessions.clear();
     this.transactions.clear();
+    this.realityAssetCompletions.clear();
   }
 
   private async executeSubmission(
@@ -1136,6 +1356,45 @@ export class WorkspaceAgentController {
     );
   }
 
+  private async consistentModelState(
+    modelId: string,
+    version: string,
+    actor: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceModelDefinitionView> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const inspection = await this.engine.inspectModel(modelId, version, actor);
+      const revision = await this.engine.getRevision();
+      const registryDigest = await this.engine.getRegistryDigest();
+      if (inspection.revision === revision && inspection.registryDigest === registryDigest) {
+        return inspection;
+      }
+    }
+    throw new WorkspaceEngineError(
+      "workspace_busy",
+      "Workspace changed during model inspection; retry the targeted inspection",
+      { retryable: true, requiredAction: "inspect_workspace_model" },
+    );
+  }
+
+  private async consistentRealityAssetState(
+    assetId: string,
+    actor: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceRealityAssetView> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const inspection = await this.engine.inspectRealityAsset(assetId, actor);
+      const revision = await this.engine.getRevision();
+      const registryDigest = await this.engine.getRegistryDigest();
+      if (inspection.revision === revision && inspection.registryDigest === registryDigest) {
+        return inspection;
+      }
+    }
+    throw new WorkspaceEngineError(
+      "workspace_busy",
+      "Workspace changed during Reality Asset inspection; retry the targeted inspection",
+      { retryable: true, requiredAction: "inspect_workspace_asset" },
+    );
+  }
+
   private assertReceipt(receipt: WorkspaceCommitReceipt, envelope: WorkspacePreparedEnvelope): void {
     if (
       receipt.requestId !== envelope.request_id ||
@@ -1170,6 +1429,9 @@ export class WorkspaceAgentController {
       this.sessions.delete(token);
       for (const [transactionToken, transaction] of this.transactions) {
         if (transaction.sessionToken === token) this.transactions.delete(transactionToken);
+      }
+      for (const [candidateHandle, completion] of this.realityAssetCompletions) {
+        if (completion.sessionToken === token) this.realityAssetCompletions.delete(candidateHandle);
       }
     }
     for (const [token, transaction] of this.transactions) {

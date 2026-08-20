@@ -1,6 +1,6 @@
 {
-  "universalSpaceData": {
-    "format": "universal-space-data",
+  "spatialGraph": {
+    "format": "semaframe-spatial-graph",
     "version": "2.0",
     "workspaceRevision": 2,
     "stage": {

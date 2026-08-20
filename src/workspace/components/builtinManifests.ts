@@ -10,6 +10,10 @@ import type {
 import { deterministicDigest } from "./manifestDigest";
 import { DEFAULT_SPATIAL_COLLISION } from "../spatial/spatialTypes";
 import { DEFAULT_SPATIAL_PHYSICS } from "../physics/physicsTypes";
+import {
+  PARAMETRIC_PRIMITIVE_JSON_SCHEMA,
+  type ParametricPrimitive,
+} from "../modeling/parametricGeometry";
 
 type ManifestInput = Omit<ComponentManifest, "digest" | "trustTier" | "requiredPermissions" | "resizePolicy"> & {
   requiredPermissions?: string[];
@@ -43,12 +47,156 @@ function objectSchema(
   };
 }
 
+const modelReferenceSchema = objectSchema({
+  modelId: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+  version: { type: "string", minLength: 1, maxLength: 64 },
+  digest: { type: "string", minLength: 1, maxLength: 256 },
+}, ["modelId", "version", "digest"]);
+
+const parametricMaterialSchema = objectSchema({
+  baseColor: colorSchema,
+  metallic: { type: "number", minimum: 0, maximum: 1 },
+  roughness: { type: "number", minimum: 0, maximum: 1 },
+  opacity: { type: "number", minimum: 0, maximum: 1 },
+  emissiveColor: colorSchema,
+  emissiveIntensity: { type: "number", minimum: 0, maximum: 8 },
+}, ["baseColor", "metallic", "roughness", "opacity", "emissiveColor", "emissiveIntensity"]);
+
+const realityAssetReferenceSchema: JSONSchema = {
+  oneOf: [
+    { type: "null" },
+    objectSchema({
+      assetId: { type: "string", pattern: "^ra_[0-9a-f]{64}$" },
+      digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    }, ["assetId", "digest"]),
+  ],
+};
+
+const realityCoordinateSystemSchema: JSONSchema = {
+  enum: [
+    "UNKNOWN",
+    "LDB", "RDB", "LUB", "RUB", "LDF", "RDF", "LUF", "RUF",
+    "LFD", "RFD", "LFU", "RFU", "LBD", "RBD", "LBU", "RBU",
+  ],
+};
+
+const realityCalibrationCommon = {
+  version: { const: 1 },
+  sourceCoordinateSystem: realityCoordinateSystemSchema,
+  targetCoordinateSystem: { const: "RUB" },
+};
+
+const realityCalibrationSchema: JSONSchema = {
+  oneOf: [
+    objectSchema({
+      ...realityCalibrationCommon,
+      status: { const: "uncalibrated" },
+      metersPerSourceUnit: { type: "null" },
+    }, ["version", "status", "sourceCoordinateSystem", "targetCoordinateSystem", "metersPerSourceUnit"]),
+    objectSchema({
+      ...realityCalibrationCommon,
+      status: { const: "metadata-declared" },
+      metersPerSourceUnit: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 },
+      declaredUnit: { enum: ["metre", "centimetre", "millimetre", "inch", "foot"] },
+    }, ["version", "status", "sourceCoordinateSystem", "targetCoordinateSystem", "metersPerSourceUnit", "declaredUnit"]),
+    objectSchema({
+      ...realityCalibrationCommon,
+      status: { const: "reference-distance" },
+      metersPerSourceUnit: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 },
+      sourceDistance: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000_000 },
+      referenceDistanceM: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 },
+    }, ["version", "status", "sourceCoordinateSystem", "targetCoordinateSystem", "metersPerSourceUnit", "sourceDistance", "referenceDistanceM"]),
+  ],
+};
+
 function action(inputSchema: JSONSchema = emptyObjectSchema) {
   return { inputSchema, effectClass: "semantic" as const };
 }
 
 function noResizePolicies(placements: readonly PlacementSpace[]): ComponentResizePolicies {
   return Object.fromEntries(placements.map((placement) => [placement, { kind: "none", mode: "none" }])) as ComponentResizePolicies;
+}
+
+function spatialVectorSchema(positive = false): JSONSchema {
+  return objectSchema({
+    x: positive
+      ? { type: "number", exclusiveMinimum: 0, maximum: 1_000 }
+      : { type: "number", minimum: -1_000, maximum: 1_000 },
+    y: positive
+      ? { type: "number", exclusiveMinimum: 0, maximum: 1_000 }
+      : { type: "number", minimum: -1_000, maximum: 1_000 },
+    z: positive
+      ? { type: "number", exclusiveMinimum: 0, maximum: 1_000 }
+      : { type: "number", minimum: -1_000, maximum: 1_000 },
+  }, ["x", "y", "z"]);
+}
+
+function currentSpatialCollisionSchema(): JSONSchema {
+  const vectorSchema = spatialVectorSchema();
+  const positiveVectorSchema = spatialVectorSchema(true);
+  const collisionBase = {
+    enabled: { type: "boolean" },
+    role: { enum: ["solid", "trigger", "none"] },
+    margin: { type: "number", minimum: 0, maximum: 10 },
+  };
+  return {
+    oneOf: [
+      objectSchema({ ...collisionBase, shape: { const: "asset_bounds" } }, ["enabled", "role", "shape", "margin"]),
+      objectSchema({
+        ...collisionBase,
+        shape: { const: "box" },
+        center: vectorSchema,
+        size: positiveVectorSchema,
+      }, ["enabled", "role", "shape", "margin", "center", "size"]),
+      objectSchema({
+        ...collisionBase,
+        shape: { const: "compound" },
+        parts: {
+          type: "array",
+          minItems: 1,
+          maxItems: 16,
+          items: objectSchema({
+            id: { type: "string", minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+            center: vectorSchema,
+            size: positiveVectorSchema,
+            rotation: vectorSchema,
+          }, ["id", "center", "size", "rotation"]),
+        },
+      }, ["enabled", "role", "shape", "margin", "parts"]),
+    ],
+  };
+}
+
+function currentSpatialPhysicsSchema(): JSONSchema {
+  const vectorSchema = spatialVectorSchema();
+  const constraintSchema = objectSchema({
+    id: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+    type: { enum: ["fixed", "hinge", "slider", "ball"] },
+    targetId: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+    anchor: vectorSchema,
+    targetAnchor: vectorSchema,
+    axis: objectSchema({
+      x: { type: "number", minimum: -1, maximum: 1 },
+      y: { type: "number", minimum: -1, maximum: 1 },
+      z: { type: "number", minimum: -1, maximum: 1 },
+    }, ["x", "y", "z"]),
+    limits: objectSchema({
+      min: { type: "number", minimum: -1_000_000, maximum: 1_000_000 },
+      max: { type: "number", minimum: -1_000_000, maximum: 1_000_000 },
+    }, ["min", "max"]),
+    enabled: { type: "boolean" },
+  }, ["id", "type", "targetId", "anchor", "targetAnchor", "axis", "enabled"]);
+  return objectSchema({
+    enabled: { type: "boolean" },
+    bodyType: { enum: ["static", "dynamic", "kinematic"] },
+    massKg: { type: "number", minimum: 0.001, maximum: 1_000_000 },
+    centerOfMass: vectorSchema,
+    friction: { type: "number", minimum: 0, maximum: 2 },
+    restitution: { type: "number", minimum: 0, maximum: 1 },
+    gravityScale: { type: "number", minimum: 0, maximum: 10 },
+    stabilityMode: { enum: ["report", "enforce"] },
+    constraints: { type: "array", maxItems: 16, items: constraintSchema },
+  }, ["enabled", "bodyType", "massKg", "centerOfMass", "friction", "restitution", "gravityScale", "stabilityMode", "constraints"]);
 }
 
 /**
@@ -67,6 +215,20 @@ function manifest(input: ManifestInput): ComponentManifest {
     resizePolicy: noResizePolicies(input.allowedPlacements),
     digest: deterministicDigest(content),
   });
+}
+
+type ModernManifestInput = Omit<ComponentManifest, "digest" | "trustTier" | "requiredPermissions"> & {
+  requiredPermissions?: string[];
+};
+
+/** New built-ins hash every authoritative manifest field, including resize policy. */
+function modernManifest(input: ModernManifestInput): ComponentManifest {
+  const content: Omit<ComponentManifest, "digest"> = {
+    ...structuredClone(input),
+    trustTier: "builtin",
+    requiredPermissions: structuredClone(input.requiredPermissions ?? []),
+  };
+  return Object.freeze({ ...content, digest: deterministicDigest(content) });
 }
 
 function boxPolicy(
@@ -667,6 +829,134 @@ const document = manifest({
   events: { citation_selected: objectSchema({ citation: { type: "string" } }, ["citation"]) },
 });
 
+export const BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS: Readonly<Record<ParametricPrimitive["kind"], ParametricPrimitive>> = Object.freeze({
+  box: Object.freeze({ kind: "box", sizeM: Object.freeze({ x: 1, y: 1, z: 1 }) }),
+  sphere: Object.freeze({ kind: "sphere", radiusM: 0.5 }),
+  cylinder: Object.freeze({ kind: "cylinder", radiusM: 0.5, heightM: 1, axis: "y" }),
+  cone: Object.freeze({ kind: "cone", radiusM: 0.5, heightM: 1, axis: "y" }),
+  capsule: Object.freeze({ kind: "capsule", radiusM: 0.25, cylinderHeightM: 0.5, axis: "y" }),
+  plane: Object.freeze({ kind: "plane", sizeM: Object.freeze({ x: 2, y: 2 }), normalAxis: "y" }),
+});
+
+export const BUILTIN_PARAMETRIC_MATERIAL_DEFAULT: Readonly<JSONObject> = Object.freeze({
+  baseColor: "#68D5FF",
+  metallic: 0,
+  roughness: 0.55,
+  opacity: 1,
+  emissiveColor: "#000000",
+  emissiveIntensity: 0,
+});
+
+const spatialPrimitive = modernManifest({
+  typeId: "spatial-primitive",
+  version: "1.0.0",
+  displayName: "Parametric Primitive",
+  allowedPlacements: ["world3d"],
+  resizePolicy: noResizePolicies(["world3d"]),
+  propsSchema: objectSchema({
+    geometry: PARAMETRIC_PRIMITIVE_JSON_SCHEMA,
+    material: parametricMaterialSchema,
+    collision: currentSpatialCollisionSchema(),
+    physics: currentSpatialPhysicsSchema(),
+    castShadow: { type: "boolean" },
+    receiveShadow: { type: "boolean" },
+  }, ["geometry", "material", "collision", "physics", "castShadow", "receiveShadow"]),
+  durableStateSchema: emptyObjectSchema,
+  defaultProps: {
+    geometry: structuredClone(BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS.box) as unknown as JSONObject,
+    material: structuredClone(BUILTIN_PARAMETRIC_MATERIAL_DEFAULT),
+    collision: structuredClone(DEFAULT_SPATIAL_COLLISION) as unknown as JSONObject,
+    physics: structuredClone(DEFAULT_SPATIAL_PHYSICS) as unknown as JSONObject,
+    castShadow: true,
+    receiveShadow: true,
+  },
+  defaultDurableState: {},
+  writableProps: ["geometry", "material", "collision", "physics", "castShadow", "receiveShadow"],
+  actions: structuredClone(visibilityActions),
+  events: structuredClone(visibilityEvents),
+});
+
+const modelAssembly = modernManifest({
+  typeId: "model-assembly",
+  version: "1.0.0",
+  displayName: "Model Assembly",
+  allowedPlacements: ["world3d"],
+  resizePolicy: {
+    world3d: {
+      kind: "scale3d",
+      mode: "uniform",
+      defaultScale: { x: 1, y: 1, z: 1 },
+      minScale: { x: 0.01, y: 0.01, z: 0.01 },
+      maxScale: { x: 100, y: 100, z: 100 },
+      allowedAxes: ["x", "y", "z"],
+      units: "ratio",
+    },
+  },
+  propsSchema: objectSchema({
+    description: { type: "string", maxLength: 2_000 },
+    collisionPolicy: { enum: ["external_only", "all", "none"] },
+    modelRef: modelReferenceSchema,
+  }, ["description", "collisionPolicy"]),
+  durableStateSchema: emptyObjectSchema,
+  defaultProps: { description: "", collisionPolicy: "external_only" },
+  defaultDurableState: {},
+  writableProps: ["description", "collisionPolicy", "modelRef"],
+  actions: structuredClone(visibilityActions),
+  events: structuredClone(visibilityEvents),
+});
+
+const gaussianSplat = modernManifest({
+  typeId: "gaussian-splat",
+  version: "1.0.0",
+  displayName: "Gaussian Splat Reality Layer",
+  allowedPlacements: ["world3d"],
+  resizePolicy: {
+    world3d: {
+      kind: "scale3d",
+      mode: "uniform",
+      defaultScale: { x: 1, y: 1, z: 1 },
+      minScale: { x: 0.01, y: 0.01, z: 0.01 },
+      maxScale: { x: 100, y: 100, z: 100 },
+      allowedAxes: ["x", "y", "z"],
+      units: "ratio",
+    },
+  },
+  propsSchema: objectSchema({
+    assetRef: realityAssetReferenceSchema,
+    calibration: realityCalibrationSchema,
+    quality: { enum: ["auto", "low", "medium", "high"] },
+    semanticProxyIds: {
+      type: "array",
+      maxItems: 128,
+      uniqueItems: true,
+      items: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+    },
+  }, ["assetRef", "calibration", "quality", "semanticProxyIds"]),
+  durableStateSchema: emptyObjectSchema,
+  defaultProps: {
+    assetRef: null,
+    calibration: {
+      version: 1,
+      status: "uncalibrated",
+      sourceCoordinateSystem: "UNKNOWN",
+      targetCoordinateSystem: "RUB",
+      metersPerSourceUnit: null,
+    },
+    quality: "auto",
+    semanticProxyIds: [],
+  },
+  defaultDurableState: {},
+  writableProps: ["assetRef", "calibration", "quality", "semanticProxyIds"],
+  actions: structuredClone(visibilityActions),
+  events: structuredClone(visibilityEvents),
+});
+
+const MODELING_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.freeze([
+  spatialPrimitive,
+  modelAssembly,
+  gaussianSplat,
+]);
+
 const LEGACY_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.freeze([
   stage3d,
   spatialEntity,
@@ -981,6 +1271,7 @@ export const BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.
   ...COLLISION_AWARE_BUILTIN_COMPONENT_MANIFESTS,
   ...PHYSICS_AWARE_BUILTIN_COMPONENT_MANIFESTS,
   ...SWITCHABLE_PHYSICS_BUILTIN_COMPONENT_MANIFESTS,
+  ...MODELING_BUILTIN_COMPONENT_MANIFESTS,
 ]);
 
 export const BUILTIN_COMPONENT_TYPE_IDS = Object.freeze(

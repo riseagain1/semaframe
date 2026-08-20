@@ -57,8 +57,10 @@ export function computeWorkspaceDelta(before: WorkspaceState, after: WorkspaceSt
     updated: sort(updated),
     removed: sort(removed),
     resourcesChanged: changedMapKeys(before.resources, after.resources),
+    realityAssetsChanged: changedMapKeys(before.realityAssets, after.realityAssets),
     connectionsChanged: changedMapKeys(before.connections, after.connections),
     viewsChanged: changedMapKeys(before.sharedViews, after.sharedViews),
+    modelsChanged: changedMapKeys(before.modelDefinitions, after.modelDefinitions),
     registryChanged: before.registryDigest !== after.registryDigest,
   };
 }

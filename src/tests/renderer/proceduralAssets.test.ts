@@ -1,5 +1,6 @@
 import type { EntityState } from "../../renderer/sceneRenderTypes";
 import {
+  applyEntityAppearance,
   classifyAsset,
   createProceduralEntity,
   findSocket,
@@ -29,6 +30,57 @@ function entity(patch: Partial<EntityState>): EntityState {
 }
 
 describe("procedural asset vocabulary", () => {
+  it("renders exact parametric dimensions from the canonical geometry descriptor and rebuilds in place", () => {
+    const parametric = entity({
+      id: "PARAMETRIC_1",
+      kind: "primitive",
+      assetId: "parametric:box",
+      appearance: { color: "#336699" },
+      state: { type: "generic", properties: {} },
+      renderGeometry: {
+        kind: "parametric",
+        definition: { kind: "box", sizeM: { x: 2, y: 3, z: 4 } },
+        digest: "geometry-a",
+        material: {
+          baseColor: "#336699",
+          metallic: 0.25,
+          roughness: 0.4,
+          opacity: 1,
+          emissiveColor: "#000000",
+          emissiveIntensity: 0,
+        },
+        castShadow: true,
+        receiveShadow: false,
+      },
+    });
+    const root = createProceduralEntity(parametric);
+    expect(new Box3().setFromObject(root).getSize(new Vector3()).toArray()).toEqual([2, 3, 4]);
+
+    const updated: EntityState = {
+      ...parametric,
+      renderGeometry: {
+        kind: "parametric",
+        definition: { kind: "cylinder", radiusM: 1, heightM: 5, axis: "x" },
+        digest: "geometry-b",
+        material: {
+          baseColor: "#336699",
+          metallic: 0.25,
+          roughness: 0.4,
+          opacity: 1,
+          emissiveColor: "#000000",
+          emissiveIntensity: 0,
+        },
+        castShadow: true,
+        receiveShadow: false,
+      },
+    };
+    applyEntityAppearance(updated, root);
+    const size = new Box3().setFromObject(root).getSize(new Vector3());
+    expect(size.x).toBeCloseTo(5, 8);
+    expect(size.y).toBeCloseTo(2, 8);
+    expect(size.z).toBeCloseTo(2, 8);
+    expect(root.children).toHaveLength(1);
+  });
   it("classifies common story-blocking assets deterministically", () => {
     expect(classifyAsset(entity({ assetId: "desk_wood_01", label: "wooden desk" }))).toBe("table");
     expect(classifyAsset(entity({ assetId: "book_plain_01", label: "red book" }))).toBe("book");

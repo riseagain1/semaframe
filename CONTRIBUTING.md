@@ -33,6 +33,9 @@ npm run typecheck
 npm run demo:typecheck
 npm run build
 npm test -- --run --maxWorkers=2
+npm run test:cad:bundle
+npm run test:csg:bundle
+npm run test:reality:runtime
 ```
 
 Changes to connection, rendering, persistence, or browser security should also run the relevant smoke flow when the environment provides Chrome:

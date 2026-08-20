@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml"><img src="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="https://github.com/riseagain1/semaframe/releases/latest"><img src="https://img.shields.io/github/v/release/riseagain1/semaframe?display_name=tag" alt="Latest release" /></a>
 </p>
 
 > **Build spaces agents can understand.**
@@ -18,12 +19,12 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
 
 <p align="center">
   <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4">
-    <img src="./docs/media/semaframe-demo-poster.jpg" alt="Watch the 78-second SemaFrame product demo" width="100%" />
+    <img src="./docs/media/semaframe-demo-poster.jpg" alt="Watch the 78-second SemaFrame v0.2 launch demo" width="100%" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4"><strong>▶ Watch the 78-second product demo</strong></a>
+  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4"><strong>▶ Watch the 78-second v0.2 launch demo</strong></a>
   &nbsp;·&nbsp;
   <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo-short.mp4">18-second vertical cut</a>
   &nbsp;·&nbsp;
@@ -39,6 +40,8 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
 - [First Agent connection](#first-agent-connection)
 - [Product tour](#product-tour)
 - [Core model](#core-model)
+- [Parametric modeling and interchange](#parametric-modeling-and-interchange)
+- [Reality capture and Gaussian splats](#reality-capture-and-gaussian-splats)
 - [Spatial understanding and physics](#spatial-understanding-and-physics)
 - [Data feeds and websites](#data-feeds-and-websites)
 - [Agent integration](#agent-integration)
@@ -67,7 +70,7 @@ SemaFrame is useful for Agent-driven dashboards, simulation controls, spatial pl
 
 Imagine an assistant that does more than chat: it can inspect a shared 2D/3D workspace, understand where objects are, read approved live data, check collisions and physical support, and operate controls through explicit permissions.
 
-For example, an Agent could inspect a workshop layout through Universal Space Data, place a machine without intersecting existing equipment, attach a live telemetry panel, connect a 2D emergency-stop button to a 3D animation, run a bounded stability preflight, and leave every action visible in the same undoable project history.
+For example, an Agent could inspect a workshop layout through the SemaFrame Spatial Graph, place a machine without intersecting existing equipment, attach a live telemetry panel, connect a 2D emergency-stop button to a 3D animation, run a bounded stability preflight, and leave every action visible in the same undoable project history.
 
 SemaFrame provides this inspectable spatial substrate. It is not an autonomous operating system or a full engineering simulator: the browser remains authoritative, actions are scoped, and physical results are deliberately bounded.
 
@@ -76,8 +79,11 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Area | Current capability |
 | --- | --- |
 | Universal canvas | Mix navigable Three.js content with DOM/SVG panels on one canvas |
-| Component system | 16 versioned built-ins plus bounded Agent-defined declarative recipes |
-| Spatial reasoning | Revision-bound Universal Space Data with transforms, bounds, colliders, support, and intersection relations |
+| Component system | 19 versioned built-ins plus bounded Agent-defined declarative recipes |
+| Parametric modeling | Exact SI primitives, editable assemblies, immutable reusable models, collision-aware instances, and numeric Inspector controls |
+| Reality capture | Local PLY, SPZ v4, and SOG v2 Gaussian splats with explicit metric calibration, content-addressed storage, missing-byte relink, and editable semantic proxies |
+| Solid export | OpenUSD USDA assemblies, bounded Manifold STL/OBJ solids, and an OpenCascade STEP subset |
+| Spatial reasoning | Revision-bound SemaFrame Spatial Graph 3.1 with transforms, analytic geometry evidence, visual-only Reality nodes, semantic proxies, bounds, colliders, support, and intersection relations |
 | Collision | Asset bounds, explicit boxes, and compound oriented-box colliders with independent enable/trigger controls |
 | Physics | Optional static/dynamic/kinematic intent, mass and material properties, constraints, stability reports, placement preflight, and deterministic settle previews |
 | Data | Local JSON/CSV snapshots and approved public HTTPS JSON/CSV/RSS/Atom feeds |
@@ -90,7 +96,7 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 
 The built-in component registry contains:
 
-- spatial: `stage-3d`, `spatial-entity`;
+- spatial, modeling, and reality: `stage-3d`, `spatial-entity`, `spatial-primitive`, `model-assembly`, `gaussian-splat`;
 - layout: `group`, `panel`;
 - content: `text`, `image`, `annotation`, `document`;
 - media and web: `video-player`, `web-panel`;
@@ -194,7 +200,7 @@ Every Workspace object is a versioned component with:
 - locks and provenance;
 - resource bindings;
 - declared actions and events;
-- optional collision and physics attributes for spatial entities.
+- optional collision and physics attributes for spatial entities and exact primitives.
 
 The engine validates operations against the pinned manifest. It does not silently clamp malformed commands or reinterpret stale component definitions.
 
@@ -227,29 +233,87 @@ Recipes can declare schemas, defaults, writable props, actions, events, placemen
 
 Recipes cannot execute HTML, JavaScript, JSX, iframe code, shaders, network requests, or arbitrary packages. Untrusted schemas reject regular expressions, references, unbounded combinators, and other synchronous validation-amplification paths.
 
+## Parametric modeling and interchange
+
+SemaFrame now has a closed modeling contract rather than inferring geometry from an asset label. A `spatial-primitive` stores one exact SI-metre descriptor:
+
+- box dimensions;
+- sphere radius;
+- cylinder or cone radius, height, and axis;
+- capsule radius, cylindrical height, and axis; or
+- plane dimensions and normal axis.
+
+The same canonical descriptor produces render geometry, local bounds, analytic collider evidence, volume, SSG output, physics evidence, persistence digest, and export geometry. Primitive scale remains identity so dimensions cannot silently disagree with a renderer transform. A `model-assembly` is an editable transform root with `external_only`, `all`, or `none` collision policy; reparenting can preserve world or local transforms explicitly.
+
+The **Models** panel publishes an assembly subtree as an immutable, digest-pinned model definition. An instance is materialized as an ordinary editable assembly and primitive tree, not a hidden proxy. SemaFrame chooses a collision-safe starting location, reserves every ID atomically, and preserves the source definition when an instance is edited. Agents use the same `publish_model`, `inspect_workspace_model`, `instantiate_model`, and `delete_model_definition` contract with revision, scope, and ID-reservation checks.
+
+### Export paths
+
+| Format | Implementation | Intended use |
+| --- | --- | --- |
+| USDA | Deterministic OpenUSD layer, metres and Y-up, stable prim IDs, Xforms, analytic primitives, and PreviewSurface materials | DCC, simulation, and spatial interchange |
+| STL / OBJ | Bounded Manifold 3.5.1 WebAssembly union with watertight/manifold diagnostics and hard vertex/triangle/output caps; STL coordinates are conventional millimetres, OBJ coordinates remain metres | Mesh-solid handoff and 3D-print prototyping |
+| STEP | Real OpenCascade B-rep through Replicad, AP242 Part 21 in metres | Downstream CAD handoff for the v1 box/sphere/cylinder and uniform-transform subset |
+
+CSG and CAD run in disposable, lazy-loaded Workers. Cancellation or a time limit terminates the Worker, which is the only reliable hard stop while synchronous WebAssembly geometry code is running. The OpenCascade runtime is served as one fingerprinted local WASM asset; it is not fetched from a CDN.
+
+This makes SemaFrame useful for accurate blockouts, rooms, furniture, fixtures, equipment envelopes, simple product concepts, spatial assemblies, collision/stability preflight, and light maker workflows. It is deliberately described as **AI-native parametric spatial/model assembly** or **light CAD**, not professional mechanical CAD. There is not yet a sketch constraint solver, persistent topological face naming, fillet/chamfer/shell/sweep/loft feature tree, GD&T, STEP import, or FEA certification workflow.
+
+## Reality capture and Gaussian splats
+
+The Reality Layer adds captured environments and objects without pretending that a probabilistic visual reconstruction is a CAD solid. A person can import a local PLY Gaussian splat, SPZ v4 file, or SOG v2 package from the **Reality** panel. An approved Agent with `asset:import` can import a file the user supplied to it through a one-time streaming upload grant. The gateway accepts neither an arbitrary local path nor a source URL, and raw bytes are never embedded in MCP JSON.
+
+Every import is independently preflighted and SHA-256 hashed in the authoritative browser before it enters the local `AssetVault`. The vault uses origin-private file storage when available and otherwise stores a sanitized Blob in IndexedDB. Workspace state contains only a content-addressed `RealityAssetDescriptor`: format, byte and splat counts, safe coordinate/bounds metadata, digest, and `engineeringAuthority: "visual_only"`. Source file names, local paths, Blob URLs, upload bearers, and raw bytes are excluded from project JSON and Agent inspection.
+
+A `gaussian-splat@1.0.0` component supplies editable placement, quality, visual effects, and one explicit calibration mode:
+
+- `uncalibrated` preserves source units and does not claim metric bounds;
+- `metadata-declared` records a declared unit and metres per source unit; or
+- `reference-distance` records the measured source distance and real-world distance used to derive scale.
+
+Source coordinates are mapped explicitly into SemaFrame's right/up/back (`RUB`) basis. Spark 2.1 renders the splat inside the existing Three.js scene so it participates in depth, selection bounds, visibility, glow, and context recovery. If local bytes are absent after opening a project on another browser, SemaFrame shows a deterministic placeholder. **Relink** accepts only a file with the descriptor's exact digest.
+
+Reality data never owns collision, mass, support, constraints, CAD export, or structural feasibility. For an engineering-aware digital twin, link the splat to one or more editable `spatial-primitive`, `spatial-entity`, or `model-assembly` components through `semanticProxyIds`. SSG 3.1 exposes the splat as a `reality` node plus `represented_by` / `proxy_for` relations; the proxies remain the sole engineering authority. A utility-pole capture, for example, can provide visual field context while an exact cylinder/assembly proxy drives clearance, collision, stability, and export.
+
+Agent import is deliberately split into capabilities:
+
+1. call `begin_workspace_asset_import` with the current Workspace ID, stable request ID, exact byte length, media type, and SHA-256;
+2. stream the original bytes once to the returned exact `PUT` URL and bearer;
+3. call `complete_workspace_asset_import` so the browser preflights, stores, and registers the candidate;
+4. use `inspect_workspace_asset` for exact safe descriptor rediscovery; then
+5. create a normal `gaussian-splat` component in a prepared Workspace batch: map returned `asset_ref.asset_id` to `props.assetRef.assetId`, copy the digest exactly, and provide explicit calibration.
+
+Current import limits are 256 MiB, 4 million splats, and 128 registered descriptors per Workspace. Project files are metadata/reference packages, not portable Reality Asset archives; copying a project to another browser may require same-digest relinking.
+
 ## Spatial understanding and physics
 
-### Universal Space Data
+### SemaFrame Spatial Graph
 
-`inspect_workspace_space` returns **Universal Space Data 2.0**: a revision-bound, model-readable projection of the open Workspace. It includes:
+`inspect_workspace_space` returns **SemaFrame Spatial Graph 3.1 (SSG)** in `data.spatial_graph`: a revision-bound, model-readable projection of the open Workspace. It includes:
 
 - stable prim paths and component identity;
 - parent-aware world transforms;
+- explicit asset, primitive, assembly, and visual-only Reality node kinds;
+- exact primitive parameters, digest, dimensions, local bounds, volume, analytic collider, and material summary;
+- assembly collision policy, model reference, ancestry, and aggregate descendant bounds;
+- Reality Asset identity, calibration, metric-bounds status, and semantic-proxy relations without local byte disclosure;
 - asset-derived and component-derived world bounds;
 - exact collider parts;
 - rigid-body intent;
 - containment, intersection, contact, and support relations;
 - optional deltas through `since_revision` when the change is unambiguous.
 
-Universal Space Data is derived JSON, not a second scene database and not a Pixar OpenUSD file. The authoritative data remains the Workspace.
+SSG is derived JSON, not a second scene database and not a Pixar OpenUSD file. The authoritative data remains the Workspace. The names USD and OpenUSD are reserved for Pixar's interchange format.
 
 ### Collision
 
-Current spatial entities support:
+Current spatial entities and parametric primitives support:
 
 - asset-derived bounds;
 - one explicit box collider; or
 - up to 16 compound oriented-box parts.
+
+Parametric `asset_bounds` comes from the exact geometry descriptor, not an asset approximation. SSG preserves the analytic sphere/cylinder/cone/capsule evidence, while the current feasibility narrow phase conservatively tests its exact oriented bounding volume. Assembly policy can ignore internal part/part contacts while retaining external collisions, include all contacts, or exclude the assembly subtree from collision feasibility.
 
 Collision can be enabled or disabled independently of physics. A collider may also be a trigger. Solid overlaps reject the entire atomic update; touching faces and trigger volumes are represented explicitly. Parent/child attachment can use a safety margin, but true solid penetration remains invalid.
 
@@ -302,18 +366,23 @@ Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, 
 
 ## Agent integration
 
-SemaFrame exposes exactly 13 Workspace tools:
+SemaFrame exposes exactly 18 Workspace tools:
 
 | Phase | Tool |
 | --- | --- |
 | Handshake | `get_workspace_instructions` |
 | Inspect | `inspect_workspace` |
 | Inspect | `inspect_workspace_component` |
+| Inspect | `inspect_workspace_asset` |
+| Inspect | `inspect_workspace_model` |
 | Inspect | `inspect_workspace_space` |
 | Inspect | `query_spatial_placement` |
 | Inspect | `inspect_workspace_physics` |
 | Inspect | `query_stable_placement` |
 | Inspect | `simulate_workspace_physics` |
+| Asset import | `begin_workspace_asset_import` |
+| Asset import | `cancel_workspace_asset_import` |
+| Asset import | `complete_workspace_asset_import` |
 | Mutate | `begin_workspace_update` |
 | Mutate | `submit_workspace_batch` |
 | History | `undo_workspace_batch` |
@@ -324,7 +393,7 @@ The normal Agent flow is:
 
 1. obtain approval through `get_workspace_instructions`;
 2. retain the returned `session_token` and map `guide_digest` to the `instruction_digest` input used by subsequent tools;
-3. inspect the Workspace, target components, spatial projection, or physics report;
+3. inspect the Workspace, exact components/assets/models, spatial projection, or physics report;
 4. begin an update against an exact revision and registry digest;
 5. submit one bounded atomic operation batch;
 6. retry safely with the same request ID, or inspect the new revision before continuing.
@@ -335,20 +404,22 @@ For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.
 
 ## Protocol and persistence
 
-### Workspace Protocol 1.2
+### Workspace Protocol 1.3
 
-The closed protocol supports 19 operations:
+The closed protocol supports 24 operations:
 
 - lifecycle: `define_component_recipe`, `create_component`, `update_component`, `upgrade_component_manifest`, `delete_component`;
 - layout: `place_component`, `resize_component`, `attach_component`, `detach_component`;
 - behavior: `set_component_visual_effects`, `invoke_component_action`;
 - data: `upsert_resource`, `delete_resource`, `bind_resource`, `unbind_resource`;
+- Reality Asset metadata: host-only `register_reality_asset`, `delete_reality_asset`;
 - wiring: `connect_event`, `disconnect_event`;
+- reusable modeling: `publish_model`, `instantiate_model`, `delete_model_definition`;
 - metadata and reset: `present_view`, `clear_workspace`.
 
 Every batch carries exact Workspace identity, base revision, registry digest, request ID, and a bounded operation list. Validation and reduction occur on a draft. Any failure leaves authoritative state unchanged. Identical retries are idempotent; changed retries, stale revisions, unknown fields, unpinned digests, invalid geometry, collisions, and missing permissions fail closed.
 
-Saved components remain pinned to their manifest version. `upgrade_component_manifest` explicitly moves a compatible older built-in to the latest exact reference as one atomic, undoable, replayable operation. Workspace 1.0 and 1.1 project migrations remain supported.
+Saved components remain pinned to their manifest version. `upgrade_component_manifest` explicitly moves a compatible older built-in to the latest exact reference as one atomic, undoable, replayable operation. Workspace 1.0 through 1.2 project migrations remain supported.
 
 Protocol source of truth:
 
@@ -363,10 +434,11 @@ Protocol source of truth:
 - the checkpoint and current Workspace state;
 - recipes, pins, geometry, state, locks, aliases, and provenance;
 - resources, bindings, event connections, and shared views;
+- safe Reality Asset descriptors and digest-pinned component references, but never their binary payloads;
 - monotonic component and event counters;
 - resolved command and event history for deterministic replay.
 
-Open validates the closed schema, registry digests, counters, command continuity, resource invariants, and replay before replacing the current project. It never reruns actions, models, assets, or connector reads.
+Open validates the closed schema, registry digests, counters, command continuity, resource invariants, and replay before replacing the current project. It never reruns actions, models, Reality Asset imports, or connector reads.
 
 Projects from the removed pre-Workspace runtime and its dual-envelope format are intentionally unsupported. Local recovery uses the same Workspace-only representation. Provider credentials, feed approvals, MCP approvals, session tokens, and transaction tokens are never saved.
 
@@ -384,6 +456,8 @@ Hard limits bound main-thread work, memory use, persistence, and replay:
 | Aliases | 4,000 |
 | Shared views | 500 |
 | Agent-defined recipes | 200 |
+| Registered Reality Assets | 128 |
+| One Reality Asset binary | 256 MiB / 4 million splats |
 | Public history summaries | 512 |
 | Recent undoable commands | 64 |
 | Idempotency ledger entries | 4,096 |
@@ -402,6 +476,7 @@ Important boundaries include:
 - approvals are bound to the instruction surface, client identity, requested scopes, and browser lease;
 - mutation requires a scoped session plus a short-lived revision-bound transaction;
 - capability values are redacted from diagnostics and excluded from projects and recovery;
+- Agent Reality imports require `asset:import`, an exact user-provided file digest, a one-time upload grant, browser-side preflight, and a browser-owned content-addressed vault;
 - connector network reads require a person-mediated single-use approval;
 - resource schemas, payloads, paths, transforms, and provenance are bounded and validated;
 - feeds reject private networks, credential-like URLs/content, unsafe redirects, excessive bodies, and long-lived sockets;
@@ -421,7 +496,10 @@ SemaFrame deliberately does not claim the following:
 - **Not a general code sandbox.** Recipe components use a closed declarative vocabulary.
 - **Not a general physics engine.** Current physics focuses on collision, support, conservative stability, constraints, and bounded settle previews.
 - **Not structural certification.** Material properties, stress, fatigue, fracture, tolerances, and safety factors are not modeled.
-- **Not OpenUSD.** Universal Space Data is SemaFrame's bounded JSON projection for Agent reasoning.
+- **Not full mechanical CAD.** Exact primitives, editable assemblies, manifold mesh solids, and a real B-rep STEP subset are available; sketch constraints, a general feature tree, robust persistent topology naming, STEP import, and engineering drawings are not.
+- **Reality capture is visual evidence, not engineering truth.** Gaussian splats do not provide collision, physics, CAD, material, or certification authority; editable semantic proxies must carry those claims.
+- **Project JSON is not a portable splat bundle.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest.
+- **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
 - **Not a bundled AI model.** Model choice, voice, and realtime transport live in the connecting client.
 - **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project format.
 
@@ -433,7 +511,8 @@ flowchart LR
     Agent["External Agent<br/>MCP, OpenAPI, or stdio"]
     Approval["Gateway<br/>offer, approval, session, transaction"]
     Feed["Feed broker<br/>single-use approval and bounded HTTPS"]
-    Store["WorkspaceStore 1.2<br/>single project authority"]
+    Store["WorkspaceStore 1.3<br/>single project authority"]
+    Vault["AssetVault<br/>content-addressed local Reality bytes"]
     Project["WorkspaceProjectFile<br/>checkpoint and resolved history"]
     Projection["Semantic render snapshot"]
     Three["Three.js spatial layer"]
@@ -443,6 +522,7 @@ flowchart LR
     Agent --> Approval --> Store
     Feed --> Store
     Store <--> Project
+    Store -. descriptor refs .-> Vault
     Store --> Projection
     Projection --> Three
     Projection --> DOM
@@ -470,10 +550,12 @@ src/
   renderer/               Three.js renderer and render-only scene DTOs
   workspace/
     agents/               Agent controller, guide, scopes, public capability adapter
+    assets/               Reality Asset preflight, hashing, validation, and browser vault
     components/           Built-in manifests, registry, recipes, web security
     data/                 Resources, feeds, bindings, connector contracts
     interaction/          Pointer, keyboard, selection, and activation routing
     persistence/          Workspace project schema and serializer
+    modeling/             Exact primitives, reusable models, OpenUSD, CSG, and bounded CAD workers
     physics/              Physics configuration, reports, and deterministic preview
     protocol/             Workspace Protocol schema, types, and validation
     renderer/             Hybrid projection bridge and 2D/3D component projection
@@ -496,6 +578,9 @@ integrations/             Installable Agent skill metadata and instructions
 npm run typecheck                       # TypeScript project check
 npm test -- --run --maxWorkers=2       # deterministic bounded full test run
 npm run build                           # production bundle
+npm run test:cad:bundle                 # assert lazy Worker/WASM packaging and no duplicate/inlined OCCT binary
+npm run test:csg:bundle                 # assert the Manifold Worker uses one external fingerprinted WASM binary
+npm run test:reality:runtime            # verify Reality runtime lifecycle and the lazy Spark/Three bundle boundary
 npm run smoke:workspace                 # real browser Workspace flow
 npm run smoke:agent                     # real browser + Streamable HTTP MCP flow
 npm run test:watch                       # interactive Vitest
@@ -504,7 +589,7 @@ npm run test:coverage                    # coverage run
 
 `smoke:workspace` verifies the exclusive pre-handshake Agent gate, Workspace unlock, mixed 2D/3D canvas, component creation and actions, direct project save/open, undo/redo, responsive layout, and console health.
 
-`smoke:agent` starts a real Streamable HTTP MCP client and browser. It covers offer creation, approval, instruction-first behavior, multi-tab lease conflict and takeover, Workspace creation, data and event flows, idempotency, undo/redo, persistence, revocation, responsive layout, and capability-secret scans.
+`smoke:agent` starts a real Streamable HTTP MCP client and browser. It covers offer creation, approval, instruction-first behavior, multi-tab lease conflict and takeover, Workspace creation, data and event flows, idempotency, undo/redo, persistence, revocation, responsive layout, and capability-secret scans. Focused integration tests additionally exercise a real MCP Reality Asset grant/stream/finalize/create/proxy/SSG/save-reopen flow.
 
 Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, MCP, and OpenAPI.
 

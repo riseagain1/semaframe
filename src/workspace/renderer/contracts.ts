@@ -23,11 +23,16 @@ import {
   type ResourceBindingDiagnostic,
 } from "../data/bindingResolver";
 import type { ResourceBinding, WorkspaceConnection, WorkspaceResource } from "../data/dataTypes";
+import { spatialComponentKind } from "../spatial/spatialComponentKinds";
+import {
+  parseRealityAssetDescriptor,
+  type RealityAssetDescriptor,
+} from "../assets";
 
 /**
  * Renderer-facing workspace contracts.
  *
- * These are intentionally a structural view of Workspace Protocol 1.2 rather
+ * These are intentionally a structural view of Workspace Protocol 1.3 rather
  * than a second state model. `toRenderSnapshot` accepts the canonical
  * `WorkspaceState` shape (Map-backed components) and produces the small,
  * immutable view needed by the hybrid renderer.
@@ -76,6 +81,8 @@ export type WorkspaceRenderSnapshot = Readonly<{
   components: readonly WorkspaceRenderComponent[];
   /** Exact version/digest-pinned declarative render definitions. */
   recipes?: readonly ComponentRecipe[];
+  /** Safe immutable metadata only; binary bytes stay in the host AssetVault. */
+  realityAssets?: readonly RealityAssetDescriptor[];
   /** Projection-only failures/warnings; never persisted as component state. */
   bindingDiagnostics?: readonly ResourceBindingDiagnostic[];
 }>;
@@ -196,6 +203,10 @@ export type WorkspaceStateLike = Readonly<{
     | ReadonlyMap<string, unknown>
     | readonly unknown[]
     | Readonly<Record<string, unknown>>;
+  realityAssets?:
+    | ReadonlyMap<string, unknown>
+    | readonly unknown[]
+    | Readonly<Record<string, unknown>>;
   connections?:
     | ReadonlyMap<string, unknown>
     | readonly unknown[]
@@ -222,6 +233,15 @@ export function toRenderSnapshot(input: WorkspaceRenderSnapshot | WorkspaceState
 
   const recipes = "recipes" in input && input.recipes
     ? componentRecords(input.recipes).flatMap(([, recipe]) => isComponentRecipe(recipe) ? [recipe] : [])
+    : [];
+  const realityAssets = "realityAssets" in input && input.realityAssets
+    ? componentRecords(input.realityAssets).flatMap(([, candidate]) => {
+        try {
+          return [parseRealityAssetDescriptor(candidate)];
+        } catch {
+          return [];
+        }
+      })
     : [];
   const records = componentRecords(input.components);
   let components: WorkspaceRenderComponent[] = [];
@@ -269,6 +289,7 @@ export function toRenderSnapshot(input: WorkspaceRenderSnapshot | WorkspaceState
     revision: input.revision,
     components,
     ...(recipes.length ? { recipes } : {}),
+    ...(realityAssets.length ? { realityAssets } : {}),
     ...(bindingDiagnostics.length ? { bindingDiagnostics } : {}),
   };
 }
@@ -300,8 +321,7 @@ export function componentTypeName(component: Pick<WorkspaceRenderComponent, "typ
 }
 
 export function isSpatialComponent(component: WorkspaceRenderComponent): boolean {
-  const typeId = component.type.typeId;
-  return typeId === "spatial-entity" || typeId === "stage-3d";
+  return spatialComponentKind(component.type.typeId) !== undefined;
 }
 
 export function clonePlacement<T extends WorkspacePlacement>(placement: T): T {
@@ -309,7 +329,7 @@ export function clonePlacement<T extends WorkspacePlacement>(placement: T): T {
 }
 
 function componentRecords(
-  value: WorkspaceStateLike["components"] | NonNullable<WorkspaceStateLike["recipes" | "resources" | "connections"]>,
+  value: WorkspaceStateLike["components"] | NonNullable<WorkspaceStateLike["recipes" | "resources" | "connections" | "realityAssets"]>,
 ): Array<readonly [string, unknown]> {
   if (value instanceof Map) return [...value.entries()];
   if (Array.isArray(value)) {
