@@ -2,6 +2,12 @@ node_modules/
 dist/
 artifacts/
 video/public/audio/*.wav
+
+# Local social-media launch assets. Keep reproducible product/demo sources,
+# README media, and public brand artwork tracked; ignore platform-only variants.
+docs/media/semaframe-x-avatar.svg
+video/src/SemaFrameXiaohongshu.tsx
+
 .env
 .env.local
 .DS_Store
