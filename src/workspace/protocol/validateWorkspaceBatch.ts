@@ -276,6 +276,21 @@ export function validateWorkspaceCommandBatch(value: unknown): WorkspaceCommandB
       "protocol_version_mismatch",
     );
   }
+  if (
+    batch.protocol_version !== "1.2"
+    && batch.operations.some((operation) => (
+      operation.op === "publish_model"
+      || operation.op === "instantiate_model"
+      || operation.op === "delete_model_definition"
+      || ((operation.op === "attach_component" || operation.op === "detach_component")
+        && operation.transform_mode !== undefined)
+    ))
+  ) {
+    throw new WorkspaceValidationError(
+      "Reusable models and explicit reparent transform modes require Workspace Protocol 1.2",
+      "protocol_version_mismatch",
+    );
+  }
   const operationIds = new Set<string>();
   for (const operation of batch.operations) {
     if (operationIds.has(operation.op_id)) {

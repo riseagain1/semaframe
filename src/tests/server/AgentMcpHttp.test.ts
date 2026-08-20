@@ -18,6 +18,7 @@ const expectedTools = [
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_component",
+  "inspect_workspace_model",
   "inspect_workspace_physics",
   "inspect_workspace_space",
   "query_spatial_placement",

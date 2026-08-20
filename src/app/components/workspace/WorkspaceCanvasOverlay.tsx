@@ -158,16 +158,10 @@ export function WorkspaceCanvasOverlay({
               role="treeitem"
               aria-selected={selected}
               aria-label={`${component.label}, ${component.type.typeId}, ${component.visibility}`}
+              data-workspace-component-id={component.id}
               key={component.id}
             >
-              <button
-                type="button"
-                data-workspace-component-id={component.id}
-                data-workspace-draggable="false"
-                onClick={() => onSelect?.(component.id)}
-              >
-                {component.label}
-              </button>
+              {component.label}
             </div>
           );
         })}

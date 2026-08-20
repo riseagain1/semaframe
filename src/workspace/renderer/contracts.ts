@@ -301,7 +301,10 @@ export function componentTypeName(component: Pick<WorkspaceRenderComponent, "typ
 
 export function isSpatialComponent(component: WorkspaceRenderComponent): boolean {
   const typeId = component.type.typeId;
-  return typeId === "spatial-entity" || typeId === "stage-3d";
+  return typeId === "spatial-entity"
+    || typeId === "spatial-primitive"
+    || typeId === "model-assembly"
+    || typeId === "stage-3d";
 }
 
 export function clonePlacement<T extends WorkspacePlacement>(placement: T): T {

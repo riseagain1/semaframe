@@ -25,6 +25,9 @@ export function commandHistoryText(command: WorkspaceCommandRecord): string {
     case "disconnect_event": return `Disconnected event ${operation.connection_id}`;
     case "present_view": return `Presented view ${operation.view.id}`;
     case "define_component_recipe": return `Defined component recipe ${operation.recipe.typeId}`;
+    case "publish_model": return `Published model ${operation.model_id}@${operation.version}`;
+    case "instantiate_model": return `Instantiated model ${operation.model.modelId}@${operation.model.version}`;
+    case "delete_model_definition": return `Deleted model ${operation.model.modelId}@${operation.model.version}`;
     case "clear_workspace": return "Cleared the Workspace";
   }
 }

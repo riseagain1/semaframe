@@ -7,27 +7,35 @@ import type {
   Vec3,
   World3DPlacement,
 } from "../components/componentTypes";
+import {
+  evaluateParametricGeometry,
+  type ParametricPrimitive,
+} from "../modeling/parametricGeometry";
 import type { WorkspaceState } from "../state/workspaceState";
 import { effectiveSpatialPhysicsConfig } from "../physics";
 import { supportContactPatches } from "./contactGeometry";
 import {
   DEFAULT_SPATIAL_COLLISION,
   MAX_WORKSPACE_SPATIAL_NODES,
-  UNIVERSAL_SPACE_DATA_VERSION,
+  SEMAFRAME_SPATIAL_GRAPH_VERSION,
   type SpatialBounds,
+  type SpatialAssemblyAncestor,
+  type SpatialAssemblyCollisionPolicy,
+  type SpatialAssemblySummary,
   type SpatialCollisionConfig,
   type SpatialCollisionConflict,
   type SpatialPlacementCandidate,
   type SpatialPlacementCheck,
   type SpatialResolvedCollision,
   type SpatialResolvedCollisionPart,
+  type SpatialParametricMaterialSummary,
   type SpatialTransform,
-  type UniversalSpaceDataNode,
-  type UniversalSpaceDataSnapshot,
+  type SemaFrameSpatialGraphNode,
+  type SemaFrameSpatialGraphSnapshot,
 } from "./spatialTypes";
 
 type Quaternion = { x: number; y: number; z: number; w: number };
-type MutableNode = Omit<UniversalSpaceDataNode, "relations"> & { relations: string[] };
+type MutableNode = Omit<SemaFrameSpatialGraphNode, "relations"> & { relations: string[] };
 
 const EPSILON = 1e-6;
 const MAX_COLLISION_MARGIN = 10;
@@ -234,6 +242,20 @@ function localBoundsCenter(asset: AssetRecord): Vec3 {
     : { x: 0, y: 0, z: 0 };
 }
 
+type LocalBoundsSource = Readonly<{
+  center: Vec3;
+  size: Vec3;
+  source: "asset_bounds" | "parametric_bounds";
+}>;
+
+function localBoundsForAsset(asset: AssetRecord): LocalBoundsSource {
+  return {
+    center: localBoundsCenter(asset),
+    size: { x: asset.bounds.width, y: asset.bounds.height, z: asset.bounds.depth },
+    source: "asset_bounds",
+  };
+}
+
 function resolvedBoxPart(
   id: string,
   source: SpatialResolvedCollisionPart["source"],
@@ -273,17 +295,21 @@ function mergeBounds(bounds: readonly SpatialBounds[]): SpatialBounds {
 }
 
 function resolvedCollision(
-  asset: AssetRecord,
+  localBounds: LocalBoundsSource,
   transform: SpatialTransform,
   config: SpatialCollisionConfig | undefined,
 ): SpatialResolvedCollision | undefined {
   if (!config || !config.enabled || config.role === "none") return undefined;
   const parts: SpatialResolvedCollisionPart[] = config.shape === "asset_bounds"
-    ? [resolvedBoxPart("asset_bounds", "asset_bounds", localBoundsCenter(asset), {
-      x: asset.bounds.width,
-      y: asset.bounds.height,
-      z: asset.bounds.depth,
-    }, { x: 0, y: 0, z: 0 }, transform, config.margin)]
+    ? [resolvedBoxPart(
+      localBounds.source,
+      localBounds.source,
+      localBounds.center,
+      localBounds.size,
+      { x: 0, y: 0, z: 0 },
+      transform,
+      config.margin,
+    )]
     : config.shape === "box"
       ? [resolvedBoxPart("box", "explicit_box", config.center, config.size, { x: 0, y: 0, z: 0 }, transform, config.margin)]
       : config.parts.map((part) => resolvedBoxPart(
@@ -305,7 +331,11 @@ function resolvedCollision(
     enabled: config.enabled,
     role: config.role,
     shape: parts.length === 1 ? "box" : "compound",
-    source: config.shape === "asset_bounds" ? "asset_bounds" : config.shape === "box" ? "explicit_box" : "compound",
+    source: config.shape === "asset_bounds"
+      ? localBounds.source
+      : config.shape === "box"
+        ? "explicit_box"
+        : "compound",
     margin: config.margin,
     parts,
     center: aabb.center,
@@ -320,6 +350,97 @@ function primSegment(value: string): string {
   return safe || "Unnamed";
 }
 
+function isSpatialComponent(component: ComponentInstance | undefined): component is ComponentInstance {
+  return component !== undefined
+    && (component.type.typeId === "spatial-entity"
+      || component.type.typeId === "spatial-primitive"
+      || component.type.typeId === "model-assembly")
+    && component.placement.space === "world3d";
+}
+
+function spatialNodeKind(component: ComponentInstance): SemaFrameSpatialGraphNode["nodeKind"] {
+  if (component.type.typeId === "spatial-primitive") return "primitive";
+  if (component.type.typeId === "model-assembly") return "assembly";
+  return "asset";
+}
+
+function assemblyCollisionPolicy(value: unknown): SpatialAssemblyCollisionPolicy {
+  return value === "all" || value === "none" || value === "external_only"
+    ? value
+    : "external_only";
+}
+
+function safeModelRef(value: unknown): SpatialAssemblySummary["modelRef"] {
+  if (!isObject(value)) return undefined;
+  const { modelId, version, digest } = value;
+  if (typeof modelId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u.test(modelId)
+    || typeof version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$/u.test(version)
+    || typeof digest !== "string" || !/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,255}$/u.test(digest)) {
+    return undefined;
+  }
+  return { modelId, version, digest };
+}
+
+function assemblySummary(component: ComponentInstance): SpatialAssemblySummary {
+  const modelRef = safeModelRef(component.props.modelRef);
+  return {
+    collisionPolicy: assemblyCollisionPolicy(component.props.collisionPolicy),
+    ...(modelRef ? { modelRef } : {}),
+  };
+}
+
+function componentAssemblyAncestry(
+  component: ComponentInstance,
+  components: ReadonlyMap<string, ComponentInstance>,
+): SpatialAssemblyAncestor[] {
+  const ancestry: SpatialAssemblyAncestor[] = [];
+  const seen = new Set([component.id]);
+  let parentId = component.parentId;
+  while (parentId && ancestry.length < MAX_WORKSPACE_SPATIAL_NODES) {
+    if (seen.has(parentId)) break;
+    seen.add(parentId);
+    const parent = components.get(parentId);
+    if (!parent) break;
+    if (parent.type.typeId === "model-assembly") {
+      ancestry.push({ id: parent.id, ...assemblySummary(parent) });
+    }
+    parentId = parent.parentId;
+  }
+  return ancestry.reverse();
+}
+
+function finiteRange(value: unknown, minimum: number, maximum: number): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum;
+}
+
+function parametricMaterialSummary(value: unknown): SpatialParametricMaterialSummary | undefined {
+  if (!isObject(value)) return undefined;
+  const color = (candidate: unknown): candidate is string => typeof candidate === "string"
+    && /^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/u.test(candidate);
+  if (!color(value.baseColor) || !finiteRange(value.metallic, 0, 1)
+    || !finiteRange(value.roughness, 0, 1) || !finiteRange(value.opacity, 0, 1)
+    || !color(value.emissiveColor) || !finiteRange(value.emissiveIntensity, 0, 8)) {
+    return undefined;
+  }
+  return {
+    baseColor: value.baseColor,
+    metallic: value.metallic,
+    roughness: value.roughness,
+    opacity: value.opacity,
+    emissiveColor: value.emissiveColor,
+    emissiveIntensity: value.emissiveIntensity,
+  };
+}
+
+function pointBounds(point: Vec3): SpatialBounds {
+  return {
+    min: { ...point },
+    max: { ...point },
+    center: { ...point },
+    size: { x: 0, y: 0, z: 0 },
+  };
+}
+
 function componentPrimPath(component: ComponentInstance, components: ReadonlyMap<string, ComponentInstance>): string {
   const segments: string[] = [primSegment(component.id)];
   const seen = new Set([component.id]);
@@ -329,7 +450,7 @@ function componentPrimPath(component: ComponentInstance, components: ReadonlyMap
     seen.add(parentId);
     const parent = components.get(parentId);
     if (!parent) break;
-    if (parent.type.typeId === "spatial-entity") segments.unshift(primSegment(parent.id));
+    if (isSpatialComponent(parent)) segments.unshift(primSegment(parent.id));
     parentId = parent.parentId;
   }
   return `/World/${segments.join("/")}`;
@@ -337,7 +458,7 @@ function componentPrimPath(component: ComponentInstance, components: ReadonlyMap
 
 function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
   const spatialComponents = [...state.components.values()]
-    .filter((component) => component.type.typeId === "spatial-entity" && component.placement.space === "world3d")
+    .filter(isSpatialComponent)
     .sort((left, right) => left.id.localeCompare(right.id));
   const spatialIds = new Set(spatialComponents.map((component) => component.id));
   const transforms = new Map<string, SpatialTransform>();
@@ -347,9 +468,10 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
     if (cached) return cached;
     if (visiting.has(component.id)) throw new Error(`Spatial hierarchy cycle includes ${component.id}`);
     visiting.add(component.id);
-    const parent = component.parentId && spatialIds.has(component.parentId)
+    const parentCandidate = component.parentId && spatialIds.has(component.parentId)
       ? state.components.get(component.parentId)
       : undefined;
+    const parent = isSpatialComponent(parentCandidate) ? parentCandidate : undefined;
     const result = transformForPlacement(
       component.placement as World3DPlacement,
       parent ? resolveTransform(parent) : undefined,
@@ -359,16 +481,98 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
     return result;
   };
 
-  return spatialComponents.flatMap((component): MutableNode[] => {
+  const baseNodes = spatialComponents.flatMap((component): MutableNode[] => {
+    const transform = resolveTransform(component);
+    const nodeKind = spatialNodeKind(component);
+    const parentId = component.parentId && spatialIds.has(component.parentId)
+      ? component.parentId
+      : undefined;
+    const ancestry = componentAssemblyAncestry(component, state.components);
+    if (nodeKind === "assembly") {
+      return [{
+        id: component.id,
+        primPath: componentPrimPath(component, state.components),
+        label: component.label,
+        ...(parentId ? { parentId } : {}),
+        nodeKind,
+        entityKind: "assembly",
+        assembly: assemblySummary(component),
+        assemblyAncestry: ancestry,
+        visibility: component.visibility,
+        localPlacement: structuredClone(component.placement),
+        worldTransform: transform,
+        worldBounds: pointBounds(transform.position),
+        relations: [],
+      }];
+    }
+
+    const physics = effectiveSpatialPhysicsConfig(component.props);
+    if (nodeKind === "primitive") {
+      const evaluated = evaluateParametricGeometry(component.props.geometry);
+      const localBounds: LocalBoundsSource = {
+        center: evaluated.bounds.center,
+        size: evaluated.bounds.size,
+        source: "parametric_bounds",
+      };
+      const collision = component.visibility === "visible"
+        ? resolvedCollision(localBounds, transform, spatialCollisionConfigFromProps(component.props))
+        : undefined;
+      const visualBounds = resolvedCollision(localBounds, transform, {
+        ...DEFAULT_SPATIAL_COLLISION,
+        role: "trigger",
+        margin: 0,
+      })!;
+      const material = parametricMaterialSummary(component.props.material);
+      return [{
+        id: component.id,
+        primPath: componentPrimPath(component, state.components),
+        label: component.label,
+        ...(parentId ? { parentId } : {}),
+        nodeKind,
+        entityKind: "primitive",
+        geometry: {
+          kind: evaluated.primitive.kind,
+          digest: evaluated.digest,
+          parameters: evaluated.primitive,
+          dimensionsM: evaluated.bounds.size,
+          localBounds: evaluated.bounds,
+          volumeM3: evaluated.volumeM3,
+          collider: evaluated.collider,
+          ...(material ? { material } : {}),
+        },
+        assemblyAncestry: ancestry,
+        visibility: component.visibility,
+        localPlacement: structuredClone(component.placement),
+        worldTransform: transform,
+        worldBounds: visualBounds.aabb,
+        ...(collision ? { collision } : {}),
+        physics: {
+          enabled: physics.enabled,
+          bodyType: physics.bodyType,
+          massKg: physics.massKg,
+          massSource: "explicit",
+          geometryVolumeM3: evaluated.volumeM3 * Math.abs(
+            transform.scale.x * transform.scale.y * transform.scale.z,
+          ),
+          centerOfMass: physics.centerOfMass,
+          friction: physics.friction,
+          restitution: physics.restitution,
+          gravityScale: physics.gravityScale,
+          stabilityMode: physics.stabilityMode,
+          constraintCount: physics.constraints.length,
+        },
+        relations: [],
+      }];
+    }
+
     const assetId = typeof component.props.assetId === "string" ? component.props.assetId : "";
     const asset = DEFAULT_ASSET_REGISTRY.get(assetId);
     if (!asset) return [];
-    const transform = resolveTransform(component);
+    const localBounds = localBoundsForAsset(asset);
     const collision = component.visibility === "visible"
-      ? resolvedCollision(asset, transform, spatialCollisionConfigFromProps(component.props))
+      ? resolvedCollision(localBounds, transform, spatialCollisionConfigFromProps(component.props))
       : undefined;
-    const physics = effectiveSpatialPhysicsConfig(component.props);
-    const visualBounds = resolvedCollision(asset, transform, {
+    const visualBounds = resolvedCollision(localBounds, transform, {
       ...DEFAULT_SPATIAL_COLLISION,
       role: "trigger",
       margin: 0,
@@ -377,9 +581,11 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
       id: component.id,
       primPath: componentPrimPath(component, state.components),
       label: component.label,
-      ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
+      ...(parentId ? { parentId } : {}),
+      nodeKind,
       assetId: asset.assetId,
       entityKind: typeof component.props.entityKind === "string" ? component.props.entityKind : asset.kind,
+      assemblyAncestry: ancestry,
       visibility: component.visibility,
       localPlacement: structuredClone(component.placement),
       worldTransform: transform,
@@ -389,6 +595,7 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
         enabled: physics.enabled,
         bodyType: physics.bodyType,
         massKg: physics.massKg,
+        massSource: "explicit",
         centerOfMass: physics.centerOfMass,
         friction: physics.friction,
         restitution: physics.restitution,
@@ -399,14 +606,38 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
       relations: [],
     }];
   });
+
+  const byParent = new Map<string, MutableNode[]>();
+  for (const node of baseNodes) {
+    if (!node.parentId) continue;
+    const children = byParent.get(node.parentId) ?? [];
+    children.push(node);
+    byParent.set(node.parentId, children);
+  }
+  const aggregateCache = new Map<string, SpatialBounds>();
+  const aggregateAssemblyBounds = (node: MutableNode, visiting = new Set<string>()): SpatialBounds => {
+    const cached = aggregateCache.get(node.id);
+    if (cached) return cached;
+    if (visiting.has(node.id)) return pointBounds(node.worldTransform.position);
+    const nextVisiting = new Set(visiting).add(node.id);
+    const childBounds = (byParent.get(node.id) ?? []).map((child) => child.nodeKind === "assembly"
+      ? aggregateAssemblyBounds(child, nextVisiting)
+      : child.worldBounds);
+    const bounds = childBounds.length ? mergeBounds(childBounds) : pointBounds(node.worldTransform.position);
+    aggregateCache.set(node.id, bounds);
+    return bounds;
+  };
+  return baseNodes.map((node): MutableNode => node.nodeKind === "assembly"
+    ? { ...node, worldBounds: aggregateAssemblyBounds(node) }
+    : node);
 }
 
 function areRelatedByHierarchy(
-  left: UniversalSpaceDataNode,
-  right: UniversalSpaceDataNode,
-  byId: ReadonlyMap<string, UniversalSpaceDataNode>,
+  left: SemaFrameSpatialGraphNode,
+  right: SemaFrameSpatialGraphNode,
+  byId: ReadonlyMap<string, SemaFrameSpatialGraphNode>,
 ): boolean {
-  const isAncestor = (candidate: UniversalSpaceDataNode, descendant: UniversalSpaceDataNode): boolean => {
+  const isAncestor = (candidate: SemaFrameSpatialGraphNode, descendant: SemaFrameSpatialGraphNode): boolean => {
     const seen = new Set<string>();
     let current = descendant.parentId;
     while (current && !seen.has(current)) {
@@ -417,6 +648,22 @@ function areRelatedByHierarchy(
     return false;
   };
   return isAncestor(left, right) || isAncestor(right, left);
+}
+
+function collisionFeasibilityEnabled(node: SemaFrameSpatialGraphNode): boolean {
+  return !node.assemblyAncestry.some((assembly) => assembly.collisionPolicy === "none");
+}
+
+function ignoredInternalAssemblyCollision(
+  left: SemaFrameSpatialGraphNode,
+  right: SemaFrameSpatialGraphNode,
+): boolean {
+  const leftNearest = left.assemblyAncestry.at(-1);
+  const rightNearest = right.assemblyAncestry.at(-1);
+  return Boolean(leftNearest
+    && rightNearest
+    && leftNearest.id === rightNearest.id
+    && leftNearest.collisionPolicy === "external_only");
 }
 
 /** Full separating-axis test for two oriented boxes. Touching is permitted. */
@@ -469,14 +716,14 @@ function aabbOverlap(left: SpatialBounds, right: SpatialBounds): Vec3 {
 }
 
 function collisionPairs(
-  nodes: readonly UniversalSpaceDataNode[],
+  nodes: readonly SemaFrameSpatialGraphNode[],
   options: Readonly<{ maxConflicts?: number; targetIds?: ReadonlySet<string> }> = {},
 ): SpatialCollisionConflict[] {
   const conflicts: SpatialCollisionConflict[] = [];
   const maxConflicts = Math.max(1, Math.min(10_001, Math.trunc(options.maxConflicts ?? 10_000)));
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const solids = nodes
-    .filter((node) => node.collision?.role === "solid")
+    .filter((node) => node.collision?.role === "solid" && collisionFeasibilityEnabled(node))
     .sort((left, right) => left.collision!.aabb.min.x - right.collision!.aabb.min.x
       || left.id.localeCompare(right.id));
   // Sweep-and-prune on world X avoids an all-pairs SAT pass for normal scenes;
@@ -485,6 +732,7 @@ function collisionPairs(
     const left = solids[i]!;
     const right = solids[j]!;
     if (right.collision!.aabb.min.x >= left.collision!.aabb.max.x - EPSILON) break;
+    if (ignoredInternalAssemblyCollision(left, right)) continue;
     const aabb = aabbOverlap(left.collision!.aabb, right.collision!.aabb);
     if (aabb.x <= EPSILON || aabb.y <= EPSILON || aabb.z <= EPSILON) continue;
     const attached = areRelatedByHierarchy(left, right, byId);
@@ -569,7 +817,7 @@ function decorateRelations(nodes: MutableNode[], conflicts: readonly SpatialColl
   for (const node of nodes) node.relations.sort((left, right) => left.localeCompare(right));
 }
 
-export type UniversalSpaceDataOptions = Readonly<{
+export type SemaFrameSpatialGraphOptions = Readonly<{
   mode?: "full" | "delta";
   sinceRevision?: number;
   changedNodeIds?: ReadonlySet<string>;
@@ -577,7 +825,7 @@ export type UniversalSpaceDataOptions = Readonly<{
   maxNodes?: number;
 }>;
 
-function stageDescriptor(state: Readonly<WorkspaceState>): UniversalSpaceDataSnapshot["stage"] {
+function stageDescriptor(state: Readonly<WorkspaceState>): SemaFrameSpatialGraphSnapshot["stage"] {
   const stage = [...state.components.values()].find((component) => component.type.typeId === "stage-3d");
   if (!stage) return undefined;
   const value = stage.props.dimensions;
@@ -601,14 +849,25 @@ function stageDescriptor(state: Readonly<WorkspaceState>): UniversalSpaceDataSna
   };
 }
 
-export function buildUniversalSpaceData(
+export function buildSemaFrameSpatialGraph(
   state: Readonly<WorkspaceState>,
-  options: UniversalSpaceDataOptions = {},
-): UniversalSpaceDataSnapshot {
+  options: SemaFrameSpatialGraphOptions = {},
+): SemaFrameSpatialGraphSnapshot {
   const allNodes = createSpatialNodes(state).sort((left, right) => left.id.localeCompare(right.id));
-  const filtered = options.mode === "delta" && options.changedNodeIds
-    ? allNodes.filter((node) => options.changedNodeIds!.has(node.id))
-    : allNodes;
+  let filtered = allNodes;
+  if (options.mode === "delta" && options.changedNodeIds) {
+    const explicitChanged = options.changedNodeIds;
+    const expandedChanged = new Set(explicitChanged);
+    for (const node of allNodes) {
+      if (explicitChanged.has(node.id)) {
+        for (const ancestor of node.assemblyAncestry) expandedChanged.add(ancestor.id);
+      }
+      if (node.assemblyAncestry.some((ancestor) => explicitChanged.has(ancestor.id))) {
+        expandedChanged.add(node.id);
+      }
+    }
+    filtered = allNodes.filter((node) => expandedChanged.has(node.id));
+  }
   const maxNodes = Math.max(1, Math.min(MAX_WORKSPACE_SPATIAL_NODES, Math.trunc(options.maxNodes ?? 500)));
   const nodes = filtered.slice(0, maxNodes);
   // Apply the cap before collision/contact decoration. Delta snapshots include
@@ -627,8 +886,8 @@ export function buildUniversalSpaceData(
   decorateRelations(analysisNodes, conflicts);
   const stage = stageDescriptor(state);
   return {
-    format: "universal-space-data",
-    version: UNIVERSAL_SPACE_DATA_VERSION,
+    format: "semaframe-spatial-graph",
+    version: SEMAFRAME_SPATIAL_GRAPH_VERSION,
     workspaceId: state.workspaceId,
     workspaceRevision: state.revision,
     coordinateSystem: { units: "meters", upAxis: "+Y", forwardAxis: "+Z" },
@@ -659,41 +918,89 @@ export function cloneStateWithSpatialCandidate(
   const components = new Map([...state.components].map(([id, component]) => [id, structuredClone(component)]));
   const existing = candidate.componentId ? components.get(candidate.componentId) : undefined;
   const candidateId = existing?.id ?? CANDIDATE_ID;
-  const assetId = candidate.assetId
-    ?? (typeof existing?.props.assetId === "string" ? existing.props.assetId : undefined);
-  const entityKind = candidate.entityKind
-    ?? (typeof existing?.props.entityKind === "string" ? existing.props.entityKind : undefined);
-  if (!assetId || !entityKind) throw new TypeError("A new candidate requires assetId and entityKind");
-  const asset = DEFAULT_ASSET_REGISTRY.get(assetId);
-  if (!asset || asset.kind !== entityKind) throw new TypeError("Candidate asset and entity kind do not match the asset registry");
+  const hasGeometry = candidate.geometry !== undefined;
+  const hasAssetIdentity = candidate.assetId !== undefined || candidate.entityKind !== undefined;
+  if (hasGeometry && hasAssetIdentity) {
+    throw new TypeError("A parametric candidate cannot also declare assetId or entityKind");
+  }
   const collision = candidate.collision
     ?? (existing ? spatialCollisionConfigFromProps(existing.props) : DEFAULT_SPATIAL_COLLISION);
   if (!collision) throw new TypeError("Candidate collision configuration is invalid");
-  const component: ComponentInstance = existing ? {
-    ...existing,
-    placement: structuredClone(candidate.placement),
-    props: { ...existing.props, assetId, entityKind, collision: structuredClone(collision) as unknown as JSONObject },
-  } : {
-    id: candidateId,
-    type: { typeId: "spatial-entity", version: "candidate", digest: "candidate" },
-    label: "Placement candidate",
-    props: { assetId, entityKind, collision: structuredClone(collision) as unknown as JSONObject },
-    durableState: {},
-    placement: structuredClone(candidate.placement),
-    bindings: [],
-    tags: [],
-    visibility: "visible",
-    locks: { placement: false, resize: false, visualEffects: false, props: false, deletion: false, actions: false },
-    provenance: { createdRevision: state.revision, createdBy: "agent" },
-  };
+
+  let component: ComponentInstance;
+  if (existing?.type.typeId === "spatial-primitive" || (!existing && hasGeometry)) {
+    if (hasAssetIdentity) throw new TypeError("A parametric candidate cannot declare assetId or entityKind");
+    const geometryInput = candidate.geometry ?? existing?.props.geometry;
+    if (!geometryInput) throw new TypeError("A new parametric candidate requires geometry");
+    const geometry: ParametricPrimitive = evaluateParametricGeometry(geometryInput).primitive;
+    component = existing ? {
+      ...existing,
+      placement: structuredClone(candidate.placement),
+      props: {
+        ...existing.props,
+        geometry: structuredClone(geometry) as unknown as JSONObject,
+        collision: structuredClone(collision) as unknown as JSONObject,
+      },
+    } : {
+      id: candidateId,
+      type: { typeId: "spatial-primitive", version: "candidate", digest: "candidate" },
+      label: "Parametric placement candidate",
+      props: {
+        geometry: structuredClone(geometry) as unknown as JSONObject,
+        collision: structuredClone(collision) as unknown as JSONObject,
+      },
+      durableState: {},
+      placement: structuredClone(candidate.placement),
+      bindings: [],
+      tags: [],
+      visibility: "visible",
+      locks: { placement: false, resize: false, visualEffects: false, props: false, deletion: false, actions: false },
+      provenance: { createdRevision: state.revision, createdBy: "agent" },
+    };
+  } else {
+    if (hasGeometry) {
+      throw new TypeError("Closed geometry can only create or update a spatial-primitive candidate");
+    }
+    if (existing && existing.type.typeId !== "spatial-entity") {
+      throw new TypeError(`Component ${existing.id} is not a spatial placement candidate`);
+    }
+    const assetId = candidate.assetId
+      ?? (typeof existing?.props.assetId === "string" ? existing.props.assetId : undefined);
+    const entityKind = candidate.entityKind
+      ?? (typeof existing?.props.entityKind === "string" ? existing.props.entityKind : undefined);
+    if (!assetId || !entityKind) {
+      throw new TypeError("A new asset candidate requires assetId and entityKind, or closed geometry");
+    }
+    const asset = DEFAULT_ASSET_REGISTRY.get(assetId);
+    if (!asset || asset.kind !== entityKind) {
+      throw new TypeError("Candidate asset and entity kind do not match the asset registry");
+    }
+    component = existing ? {
+      ...existing,
+      placement: structuredClone(candidate.placement),
+      props: { ...existing.props, assetId, entityKind, collision: structuredClone(collision) as unknown as JSONObject },
+    } : {
+      id: candidateId,
+      type: { typeId: "spatial-entity", version: "candidate", digest: "candidate" },
+      label: "Placement candidate",
+      props: { assetId, entityKind, collision: structuredClone(collision) as unknown as JSONObject },
+      durableState: {},
+      placement: structuredClone(candidate.placement),
+      bindings: [],
+      tags: [],
+      visibility: "visible",
+      locks: { placement: false, resize: false, visualEffects: false, props: false, deletion: false, actions: false },
+      provenance: { createdRevision: state.revision, createdBy: "agent" },
+    };
+  }
   components.set(candidateId, component);
   return { state: { ...state, components }, candidateId };
 }
 
 function suggestedPlacements(
   placement: World3DPlacement,
-  candidate: UniversalSpaceDataNode,
-  conflicts: readonly UniversalSpaceDataNode[],
+  candidate: SemaFrameSpatialGraphNode,
+  conflicts: readonly SemaFrameSpatialGraphNode[],
 ): ComponentPlacement[] {
   if (!conflicts.length) return [];
   const suggestions: Array<{ distance: number; placement: World3DPlacement }> = [];

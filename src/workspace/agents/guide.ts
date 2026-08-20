@@ -220,6 +220,40 @@ export const WORKSPACE_DATA_INTERACTION_QUICKSTART: JSONValue = Object.freeze(js
   },
 }));
 
+export const WORKSPACE_MODELING_QUICKSTART: JSONValue = Object.freeze(jsonContract({
+  required_scopes: [
+    "workspace:read", "workspace:write", "component:create", "component:update",
+  ],
+  units_and_authority: {
+    geometry: "All primitive dimensions are finite SI metres in props.geometry; do not encode dimensions in labels or renderer scale.",
+    transform: "world3d placement is local to parent. Use attach_component/detach_component transform_mode preserve_world when changing hierarchy without visual movement.",
+    preflight: "Use inspect_workspace_space plus query_spatial_placement before committing collision-enabled geometry.",
+  },
+  authoring: [
+    "Create exactly one stage-3d first.",
+    "Create a model-assembly root before its spatial-primitive children.",
+    "Copy spatial-primitive geometry/material/collision/physics defaults from its exact advertised manifest and replace complete nested objects only.",
+    "Use box, sphere, cylinder, cone, capsule, or plane canonical geometry and keep primitive placement scale identity; edit dimensions through update_component props.geometry.",
+  ],
+  reusable_models: {
+    publish: {
+      op: "publish_model", op_id: "publish_fixture", model_id: "com.example.fixture",
+      version: "1.0.0", display_name: "Fixture", root_id: "<model-assembly component id>",
+    },
+    discovery: "inspect_workspace lists published model refs. Call inspect_workspace_model with exact model_id and version to obtain digest, root_node_id, and every id_map_keys value.",
+    instantiate: {
+      op: "instantiate_model", op_id: "instantiate_fixture",
+      model: { modelId: "com.example.fixture", version: "1.0.0", digest: "<inspection digest>" },
+      id_map: { "<source node id>": "<one distinct reserved_component_id for every id_map key>" },
+      root_placement: {
+        space: "world3d", position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+      },
+    },
+    rule: "Published definitions are immutable and digest-pinned. Instances materialize as ordinary editable model-assembly and spatial-primitive components; editing an instance never mutates the definition.",
+  },
+}));
+
 export const WORKSPACE_AGENT_GUIDE_TEXT = `
 You control a deterministic universal 2D/3D component workspace. You are the
 planner; the Workspace engine validates, resolves, commits, stores, and projects.
@@ -259,8 +293,12 @@ Required workflow
    summary contains no stage-3d, create exactly one stage-3d in its own batch
    before creating world3d, surface, or billboard content. Never create a
    duplicate stage.
-   For spatial reasoning, call inspect_workspace_space. Its Universal Space Data
-   projection is derived from the same authoritative Workspace revision and gives
+   Published reusable models are summarized by exact model ID, semantic version,
+   and digest. Call inspect_workspace_model with an exact ID and version before
+   instantiate_model; its id_map_keys array is complete and must map one-to-one
+   to newly reserved component IDs.
+   For spatial reasoning, call inspect_workspace_space. Its data.spatial_graph
+   SemaFrame Spatial Graph projection is derived from the same authoritative Workspace revision and gives
    each 3D entity a prim path, local placement, composed world transform, asset-
    derived world bounds and collision parts, hierarchy, rigid-body intent, and spatial relations.
    Pass since_revision to receive a bounded delta when possible; the engine may
@@ -314,6 +352,25 @@ Component and placement rules
   query_spatial_placement with the proposed exact world3d placement and asset
   identity. Use a returned suggestion or deliberately revise the layout; never
   disable collision merely to force an object through another solid object.
+- Exact modeling uses spatial-primitive and model-assembly. Primitive geometry
+  is one closed SI-metre descriptor: box sizeM; sphere radiusM; cylinder/cone
+  radiusM, heightM, axis; capsule radiusM, cylinderHeightM, axis; or plane sizeM
+  and normalAxis. The same descriptor drives the render mesh, analytic bounds,
+  collider, volume, physics evidence, SemaFrame Spatial Graph, and export. Keep
+  primitive scale at identity and change exact dimensions only through a
+  complete update_component props.geometry replacement. A model-assembly is a
+  transform/group root. Its collisionPolicy external_only ignores penetration
+  among parts of the same assembly while retaining collisions with everything
+  outside it; all validates every pair; none excludes its descendants from
+  collision feasibility. Never use none to conceal an external clash.
+- publish_model captures only a model-assembly subtree containing registered
+  model-assembly and spatial-primitive nodes. Definitions are immutable,
+  semantic-versioned, digest-pinned, bounded to 256 nodes, and persisted with
+  project history. Call inspect_workspace_model to get its exact node IDs, then
+  reserve the same number of fresh IDs and submit instantiate_model with an
+  exact one-to-one id_map. Instances are ordinary editable component trees, not
+  hidden proxies. delete_model_definition is destructive, requires
+  component:delete, and is rejected while an instance root still references it.
 - Physics uses the explicit enabled master switch, bodyType static/dynamic/kinematic, massKg, a local
   centerOfMass offset, friction, restitution, gravityScale, stabilityMode, and
   at most 16 fixed/hinge/slider/ball constraints. inspect_workspace_physics
@@ -535,6 +592,7 @@ export const WORKSPACE_AGENT_GUIDE = Object.freeze({
   instructions: WORKSPACE_AGENT_GUIDE_TEXT,
   creation_quickstart: WORKSPACE_CREATE_COMPONENT_QUICKSTART,
   data_interaction_quickstart: WORKSPACE_DATA_INTERACTION_QUICKSTART,
+  modeling_quickstart: WORKSPACE_MODELING_QUICKSTART,
   create_component_schema: WORKSPACE_CREATE_COMPONENT_SCHEMA,
   workspace_command_schema: workspaceCommandSchema as unknown as JSONValue,
 }) satisfies JSONValue;

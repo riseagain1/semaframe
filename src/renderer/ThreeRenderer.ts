@@ -91,6 +91,7 @@ export class ThreeRenderer implements RendererAdapter {
   private readonly fadingEnvironmentRoots = new Set<THREE.Group>();
   private lightingRoot: THREE.Group | null = null;
   private readonly entities = new Map<EntityId, ProceduralEntity>();
+  private readonly replacedEntityIds = new Set<EntityId>();
   private currentState: Readonly<SceneState> | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private keyboardTarget: HTMLElement | null = null;
@@ -262,6 +263,7 @@ export class ThreeRenderer implements RendererAdapter {
     isCurrent: () => boolean = () => true,
   ): Promise<void> {
     this.requireInitialized();
+    this.replacedEntityIds.clear();
     const nextState = state ?? this.options.getSceneState?.();
     if (!nextState) {
       throw new Error("ThreeRenderer.applyDelta requires a SceneState or a getSceneState provider.");
@@ -290,6 +292,12 @@ export class ThreeRenderer implements RendererAdapter {
       const entity = nextState.entities.get(id);
       if (entity) await this.ensureEntity(entity);
     }));
+    // Updated entities may change their authoritative render source (for
+    // example an asset ID, or delete/recreate under the same component ID).
+    await Promise.all(delta.updated.map(async (id) => {
+      const entity = nextState.entities.get(id);
+      if (entity) await this.ensureEntity(entity);
+    }));
     // Defensive reconciliation also covers repaired/idempotent deltas from external stores.
     await Promise.all([...nextState.entities].map(async ([id, entity]) => {
       if (!this.entities.has(id)) await this.ensureEntity(entity);
@@ -297,6 +305,16 @@ export class ThreeRenderer implements RendererAdapter {
     if (!isCurrent()) return;
 
     this.reconcileHierarchy(nextState);
+    // Replacing a parent render root temporarily detaches managed descendants
+    // so their GPU resources are not disposed with the parent. Restore their
+    // authoritative local transforms after hierarchy reconciliation.
+    if (this.replacedEntityIds.size) {
+      for (const entity of nextState.entities.values()) {
+        if (!hasReplacedAncestor(entity, nextState, this.replacedEntityIds)) continue;
+        const root = this.entities.get(entity.id);
+        if (root) this.setEntityTransform(root, this.targetTransform(entity), false);
+      }
+    }
     const changed = new Set([...delta.added, ...delta.updated]);
     for (const id of changed) {
       this.cancelTweensForEntity(id);
@@ -514,7 +532,21 @@ export class ThreeRenderer implements RendererAdapter {
 
   private async ensureEntity(entity: EntityState): Promise<ProceduralEntity> {
     const existing = this.entities.get(entity.id);
-    if (existing) return existing;
+    const identity = entityRenderIdentity(entity);
+    if (existing?.userData.renderIdentity === identity) return existing;
+    if (existing) {
+      // A managed child may be parented under this root. Detach every managed
+      // descendant before disposal so replacement never destroys another
+      // component's geometry or animation state.
+      for (const [otherId, otherRoot] of this.entities) {
+        if (otherId === entity.id || !isObjectDescendantOf(otherRoot, existing)) continue;
+        this.entityLayer.add(otherRoot);
+      }
+      if (this.selectedEntityId === entity.id) this.selectionHelper?.removeFromParent();
+      disposeObject(existing);
+      this.entities.delete(entity.id);
+      this.replacedEntityIds.add(entity.id);
+    }
     const record = this.assets.get(entity.assetId);
     let root: ProceduralEntity;
     if (record?.source === "bundled" && record.runtime) {
@@ -540,6 +572,7 @@ export class ThreeRenderer implements RendererAdapter {
       disposeObject(root);
       return root;
     }
+    root.userData.renderIdentity = identity;
     this.entityLayer.add(root);
     this.entities.set(entity.id, root);
     return root;
@@ -603,7 +636,7 @@ export class ThreeRenderer implements RendererAdapter {
   private targetTransform(entity: EntityState): Transform {
     // Workspace world3d placement is local to parent when parentId is set.
     // Applying the persisted position here keeps rendering identical to the
-    // Universal Space Data world-transform composition and collision index.
+    // SemaFrame Spatial Graph world-transform composition and collision index.
     return entity.transform;
   }
 
@@ -1185,6 +1218,36 @@ export class ThreeRenderer implements RendererAdapter {
   };
 
   private preventContextMenu = (event: Event): void => event.preventDefault();
+}
+
+function entityRenderIdentity(entity: EntityState): string {
+  if (entity.renderGeometry?.kind === "assembly") return "assembly";
+  if (entity.renderGeometry?.kind === "parametric") return "parametric";
+  return `asset:${entity.kind}:${entity.assetId}`;
+}
+
+function isObjectDescendantOf(object: THREE.Object3D, ancestor: THREE.Object3D): boolean {
+  let current = object.parent;
+  while (current) {
+    if (current === ancestor) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+function hasReplacedAncestor(
+  entity: EntityState,
+  state: Readonly<SceneState>,
+  replaced: ReadonlySet<EntityId>,
+): boolean {
+  let parentId = entity.parentId;
+  const visited = new Set<EntityId>();
+  while (parentId && !visited.has(parentId)) {
+    if (replaced.has(parentId)) return true;
+    visited.add(parentId);
+    parentId = state.entities.get(parentId)?.parentId;
+  }
+  return false;
 }
 
 function vector(value: Vec3): THREE.Vector3 {

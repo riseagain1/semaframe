@@ -18,6 +18,7 @@ import type {
   WorkspaceEnginePort,
   WorkspaceEventPage,
   WorkspaceHistoryReceipt,
+  WorkspaceModelDefinitionView,
   WorkspacePermissionScope,
   WorkspacePreparedUpdate,
   WorkspaceSpatialPlacementView,
@@ -141,6 +142,28 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
     };
   }
 
+  inspectModel(modelId: string, version: string): WorkspaceModelDefinitionView {
+    if (modelId === "missing") {
+      throw new WorkspaceEngineError("model_definition_not_found", "Model does not exist", {
+        retryable: true,
+        requiredAction: "inspect_workspace",
+      });
+    }
+    return {
+      workspaceId: "workspace_main",
+      revision: this.revision,
+      registryDigest: this.registryDigest,
+      modelDefinition: {
+        model_id: modelId,
+        version,
+        digest: "model_digest",
+        root_node_id: "ROOT",
+        id_map_keys: ["ROOT"],
+        nodes: [],
+      },
+    };
+  }
+
   getRegistryDigest(): string {
     return this.registryDigest;
   }
@@ -150,7 +173,7 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
       workspaceId: "workspace_main",
       revision: this.revision,
       registryDigest: this.registryDigest,
-      universalSpaceData: { format: "universal-space-data", version: "2.0", nodes: [] },
+      spatialGraph: { format: "semaframe-spatial-graph", version: "2.0", nodes: [] },
     };
   }
 
@@ -322,7 +345,7 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("2.4");
+    expect(instructions.guide.guide_version).toBe("2.5");
     expect(instructions.guide.protocol_version).toBe("1.2");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),

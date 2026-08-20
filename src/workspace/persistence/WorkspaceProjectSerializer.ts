@@ -36,6 +36,11 @@ import {
 import workspaceProtocolSchema from "../protocol/workspaceProtocol.schema.json";
 import { prepareComponentRecipe } from "../protocol/validateWorkspaceBatch";
 import {
+  assertModelDefinition,
+  modelDefinitionKey,
+  type ModelDefinition,
+} from "../modeling/modelDefinitions";
+import {
   migrateWorkspaceStateToCurrent,
   WorkspaceStore,
 } from "../state/WorkspaceStore";
@@ -71,6 +76,8 @@ export type SerializableWorkspaceState = {
   aliases: Array<[string, string]>;
   sharedViews: Array<[string, SharedView]>;
   recipes: Array<[string, ComponentRecipe]>;
+  /** Added in the modeling extension. Missing means an older project with no models. */
+  modelDefinitions?: Array<[string, ModelDefinition]>;
   history: WorkspaceAppliedBatchSummary[];
 };
 
@@ -149,6 +156,7 @@ export function workspaceToSerializable(state: WorkspaceState): SerializableWork
     aliases: stableEntries(state.aliases),
     sharedViews: stableEntries(state.sharedViews),
     recipes: stableEntries(state.recipes),
+    modelDefinitions: stableEntries(state.modelDefinitions),
     history: structuredClone(state.history),
   };
 }
@@ -181,6 +189,24 @@ export function workspaceFromSerializable(state: SerializableWorkspaceState): Wo
     if (key !== `${recipe.typeId}@${recipe.version}`) throw new WorkspaceProjectError(`Recipe key ${key} does not match payload`, "invalid_project");
     recipes.set(key, structuredClone(recipe));
   }
+  const modelDefinitions = new Map<string, ModelDefinition>();
+  for (const [key, definition] of state.modelDefinitions ?? []) {
+    if (modelDefinitions.has(key)) {
+      throw new WorkspaceProjectError(`Duplicate model definition ${key}`, "invalid_project");
+    }
+    if (key !== modelDefinitionKey(definition)) {
+      throw new WorkspaceProjectError(`Model definition key ${key} does not match payload`, "invalid_project");
+    }
+    try {
+      assertModelDefinition(definition);
+    } catch (error) {
+      throw new WorkspaceProjectError(
+        `Invalid model definition ${key}: ${error instanceof Error ? error.message : String(error)}`,
+        "invalid_project",
+      );
+    }
+    modelDefinitions.set(key, structuredClone(definition));
+  }
   return {
     workspaceId: state.workspaceId,
     revision: state.revision,
@@ -193,6 +219,7 @@ export function workspaceFromSerializable(state: SerializableWorkspaceState): Wo
     aliases,
     sharedViews: entriesToMap("view", state.sharedViews, true),
     recipes,
+    modelDefinitions,
     history: structuredClone(state.history),
   };
 }

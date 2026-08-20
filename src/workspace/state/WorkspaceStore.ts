@@ -54,6 +54,13 @@ import {
   type PhysicsIssue,
 } from "../physics";
 import {
+  assertModelDefinition,
+  createModelDefinition,
+  instantiateModelDefinition,
+  modelDefinitionKey,
+} from "../modeling/modelDefinitions";
+import { parseParametricPrimitive } from "../modeling/parametricGeometry";
+import {
   LEGACY_WORKSPACE_PROTOCOL_VERSION,
   LEGACY_WORKSPACE_SCHEMA_VERSION,
   MAX_WORKSPACE_OPERATIONS,
@@ -78,6 +85,10 @@ import {
 import { createInitialWorkspace } from "./createInitialWorkspace";
 import type { WorkspaceState } from "./workspaceState";
 import {
+  localPlacementForWorldTransform,
+  resolveComponentWorldTransform,
+} from "./worldTransform";
+import {
   buildEffectiveRegistry,
   cloneWorkspaceState,
   ComponentIdAllocator,
@@ -91,6 +102,7 @@ import {
   MAX_WORKSPACE_HISTORY_SUMMARIES,
   MAX_WORKSPACE_IDEMPOTENCY_ENTRIES,
   MAX_WORKSPACE_RECIPES,
+  MAX_WORKSPACE_MODEL_DEFINITIONS,
   MAX_WORKSPACE_RESOURCES,
   MAX_WORKSPACE_SHARED_VIEWS,
   MAX_WORKSPACE_UNDO_ENTRIES,
@@ -311,6 +323,7 @@ function operationPermission(operation: WorkspaceOperation): WorkspacePermission
   switch (operation.op) {
     case "define_component_recipe": return "component:recipe_define";
     case "create_component": return "component:create";
+    case "instantiate_model": return "component:create";
     case "update_component":
     case "upgrade_component_manifest":
     case "place_component":
@@ -318,7 +331,9 @@ function operationPermission(operation: WorkspaceOperation): WorkspacePermission
     case "set_component_visual_effects":
     case "attach_component":
     case "detach_component": return "component:update";
+    case "publish_model": return "component:update";
     case "delete_component": return "component:delete";
+    case "delete_model_definition": return "component:delete";
     case "invoke_component_action": return "component:invoke";
     case "upsert_resource": return "connector:write";
     case "delete_resource": return "connector:delete";
@@ -930,6 +945,7 @@ export function migrateWorkspaceStateToCurrent(
     );
   }
   const state = cloneWorkspaceState(input);
+  state.modelDefinitions ??= new Map();
   const registry = buildEffectiveRegistry(baseRegistry, state.recipes);
   for (const component of state.components.values()) {
     component.locks = { ...DEFAULT_COMPONENT_LOCKS, ...component.locks };
@@ -1021,7 +1037,7 @@ export class WorkspaceStore {
       const delta: WorkspaceDelta = {
         fromRevision: command.baseWorkspaceRevision,
         toRevision: command.resultingWorkspaceRevision,
-        added: [], updated: [], removed: [], resourcesChanged: [], connectionsChanged: [], viewsChanged: [],
+        added: [], updated: [], removed: [], resourcesChanged: [], connectionsChanged: [], viewsChanged: [], modelsChanged: [],
         registryChanged: command.inputRegistryDigest !== command.resultingRegistryDigest,
       };
       this.committedRequests.set(command.requestId, {
@@ -2007,14 +2023,47 @@ export class WorkspaceStore {
       }
       case "attach_component": {
         const child = this.assertComponent(state, operation.child_id);
-        this.assertComponent(state, operation.parent_id);
+        const parent = this.assertComponent(state, operation.parent_id);
         if (child.locks.placement) throw new WorkspaceStoreError(`Component ${child.id} placement is locked`, "component_locked");
+        let ancestor: ComponentInstance | undefined = parent;
+        const visited = new Set<string>();
+        while (ancestor) {
+          if (ancestor.id === child.id) {
+            throw new WorkspaceStoreError(`Attaching ${child.id} beneath ${parent.id} creates a hierarchy cycle`, "graph_cycle");
+          }
+          if (visited.has(ancestor.id)) {
+            throw new WorkspaceStoreError(`Component hierarchy cycle includes ${ancestor.id}`, "graph_cycle");
+          }
+          visited.add(ancestor.id);
+          ancestor = ancestor.parentId ? state.components.get(ancestor.parentId) : undefined;
+        }
+        if ((operation.transform_mode ?? "preserve_local") === "preserve_world") {
+          if (child.placement.space !== "world3d" || parent.placement.space !== "world3d") {
+            throw new WorkspaceStoreError(
+              "preserve_world attachment requires world3d child and parent placements",
+              "reparent_space_mismatch",
+            );
+          }
+          const childWorld = resolveComponentWorldTransform(state.components, child.id);
+          const parentWorld = resolveComponentWorldTransform(state.components, parent.id);
+          child.placement = localPlacementForWorldTransform(childWorld, parentWorld);
+        }
         child.parentId = operation.parent_id;
         return;
       }
       case "detach_component": {
         const child = this.assertComponent(state, operation.child_id);
         if (child.locks.placement) throw new WorkspaceStoreError(`Component ${child.id} placement is locked`, "component_locked");
+        if ((operation.transform_mode ?? "preserve_local") === "preserve_world") {
+          if (child.placement.space !== "world3d") {
+            throw new WorkspaceStoreError(
+              "preserve_world detachment requires a world3d child placement",
+              "reparent_space_mismatch",
+            );
+          }
+          const childWorld = resolveComponentWorldTransform(state.components, child.id);
+          child.placement = localPlacementForWorldTransform(childWorld);
+        }
         delete child.parentId;
         return;
       }
@@ -2245,6 +2294,82 @@ export class WorkspaceStore {
         state.sharedViews.set(operation.view.id, structuredClone(operation.view));
         return;
       }
+      case "publish_model": {
+        const definition = createModelDefinition(state.components, {
+          modelId: operation.model_id,
+          version: operation.version,
+          displayName: operation.display_name,
+          rootComponentId: operation.root_id,
+          sourceRevision: resultingRevision,
+        });
+        const key = modelDefinitionKey(definition);
+        if (state.modelDefinitions.has(key)) {
+          throw new WorkspaceStoreError(`Model definition ${key} already exists`, "duplicate_model_definition");
+        }
+        state.modelDefinitions.set(key, definition);
+        return;
+      }
+      case "instantiate_model": {
+        const key = modelDefinitionKey(operation.model);
+        const definition = state.modelDefinitions.get(key);
+        if (!definition) throw new WorkspaceStoreError(`Unknown model definition ${key}`, "unknown_model_definition");
+        if (definition.digest !== operation.model.digest) {
+          throw new WorkspaceStoreError(`Model definition digest mismatch for ${key}`, "model_digest_mismatch");
+        }
+        if (!stageComponent(state)) {
+          throw new WorkspaceStoreError("Model instances require a stage-3d basis", "stage_basis_required");
+        }
+        let components: ComponentInstance[];
+        try {
+          components = instantiateModelDefinition(definition, {
+            idMap: operation.id_map,
+            rootPlacement: operation.root_placement,
+            createdRevision: resultingRevision,
+            createdBy: authorization.actor,
+          });
+        } catch (error) {
+          throw new WorkspaceStoreError(
+            error instanceof Error ? error.message : String(error),
+            error && typeof error === "object" && "code" in error
+              ? String((error as { code: unknown }).code)
+              : "invalid_model_instance",
+          );
+        }
+        const registry = this.effectiveRegistry(state);
+        for (const component of components) {
+          if (state.components.has(component.id)) {
+            throw new WorkspaceStoreError(`Component ${component.id} already exists`, "duplicate_component_id");
+          }
+          const manifest = registry.resolve(component.type);
+          this.assertPlacementAllowed(manifest, component.placement);
+          registry.assertProps(component.type, component.props);
+          registry.assertDurableState(component.type, component.durableState);
+          assertComponentResizeGeometry(component, manifest);
+          state.components.set(component.id, component);
+          allocator.observe(component.id);
+        }
+        return;
+      }
+      case "delete_model_definition": {
+        const key = modelDefinitionKey(operation.model);
+        const definition = state.modelDefinitions.get(key);
+        if (!definition) throw new WorkspaceStoreError(`Unknown model definition ${key}`, "unknown_model_definition");
+        if (definition.digest !== operation.model.digest) {
+          throw new WorkspaceStoreError(`Model definition digest mismatch for ${key}`, "model_digest_mismatch");
+        }
+        const referenced = [...state.components.values()].some((component) => {
+          const value = component.props.modelRef;
+          return value && typeof value === "object" && !Array.isArray(value)
+            && (value as Record<string, unknown>).modelId === definition.modelId
+            && (value as Record<string, unknown>).version === definition.version
+            && (value as Record<string, unknown>).digest === definition.digest;
+        });
+        if (referenced) {
+          throw new WorkspaceStoreError(`Model definition ${key} still has instances`, "model_definition_referenced");
+        }
+        state.modelDefinitions.delete(key);
+        return;
+      }
       case "clear_workspace": {
         for (const component of state.components.values()) {
           if (component.locks.deletion) throw new WorkspaceStoreError(`Component ${component.id} deletion is locked`, "component_locked");
@@ -2254,6 +2379,7 @@ export class WorkspaceStore {
         state.aliases.clear();
         state.sharedViews.clear();
         state.recipes.clear();
+        state.modelDefinitions.clear();
         if (operation.include_resources) state.resources.clear();
         state.registryDigest = this.effectiveRegistry(state).digest;
         return;
@@ -2331,6 +2457,7 @@ export class WorkspaceStore {
       ["aliases", state.aliases.size, MAX_WORKSPACE_ALIASES],
       ["shared views", state.sharedViews.size, MAX_WORKSPACE_SHARED_VIEWS],
       ["recipes", state.recipes.size, MAX_WORKSPACE_RECIPES],
+      ["model definitions", state.modelDefinitions.size, MAX_WORKSPACE_MODEL_DEFINITIONS],
       ["history summaries", state.history.length, MAX_WORKSPACE_HISTORY_SUMMARIES],
     ] as const;
     for (const [label, count, limit] of capacities) {
@@ -2354,6 +2481,19 @@ export class WorkspaceStore {
       validateComponentRecipe(recipe);
       if (key !== recipeKey(recipe)) {
         throw new WorkspaceStoreError(`Recipe key ${key} does not match ${recipeKey(recipe)}`, "invalid_recipe_key");
+      }
+    }
+    for (const [key, definition] of state.modelDefinitions) {
+      try {
+        assertModelDefinition(definition);
+      } catch (error) {
+        throw new WorkspaceStoreError(
+          error instanceof Error ? error.message : String(error),
+          "invalid_model_definition",
+        );
+      }
+      if (key !== modelDefinitionKey(definition)) {
+        throw new WorkspaceStoreError(`Model definition key ${key} does not match its payload`, "invalid_model_definition");
       }
     }
     const registry = this.effectiveRegistry(state);
@@ -2391,6 +2531,16 @@ export class WorkspaceStore {
           throw new WorkspaceStoreError(
             `Spatial component ${component.id} has an invalid or ambiguous physics configuration`,
             "invalid_spatial_physics",
+          );
+        }
+      }
+      if (component.type.typeId === "spatial-primitive") {
+        try {
+          parseParametricPrimitive(component.props.geometry);
+        } catch (error) {
+          throw new WorkspaceStoreError(
+            error instanceof Error ? error.message : String(error),
+            "invalid_parametric_geometry",
           );
         }
       }

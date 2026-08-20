@@ -13,6 +13,7 @@ import type {
   WorkspaceProtocolVersion,
   WorkspaceSchemaVersion,
 } from "../protocol/workspaceTypes";
+import type { ModelDefinition } from "../modeling/modelDefinitions";
 
 export type WorkspaceState = {
   workspaceId: string;
@@ -26,5 +27,6 @@ export type WorkspaceState = {
   aliases: Map<string, ComponentId>;
   sharedViews: Map<string, SharedView>;
   recipes: Map<string, ComponentRecipe>;
+  modelDefinitions: Map<string, ModelDefinition>;
   history: WorkspaceAppliedBatchSummary[];
 };

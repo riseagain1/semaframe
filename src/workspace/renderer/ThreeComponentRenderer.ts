@@ -19,6 +19,11 @@ import type {
   SceneState,
 } from "../../renderer/sceneRenderTypes";
 import type { WorkspaceOperation } from "../protocol/workspaceTypes";
+import {
+  parametricGeometryDigest,
+  parseParametricPrimitive,
+} from "../modeling/parametricGeometry";
+import type { ParametricRenderMaterial } from "../../renderer/sceneRenderTypes";
 import { ThreeRenderer } from "../../renderer/ThreeRenderer";
 import {
   computeSceneDelta,
@@ -198,7 +203,7 @@ export function workspaceOperationsToSceneOperations(
   snapshot: WorkspaceRenderSnapshot,
 ): SceneOperation[] {
   const spatialIds = new Set(snapshot.components
-    .filter((component) => component.type.typeId === "spatial-entity")
+    .filter((component) => isSpatialRenderType(component.type.typeId))
     .map((component) => component.id));
   const stageIds = new Set(snapshot.components
     .filter((component) => component.type.typeId === "stage-3d")
@@ -249,7 +254,7 @@ export function workspaceToSceneState(snapshot: WorkspaceRenderSnapshot): SceneS
   else scene.environment = createEnvironmentState(EMPTY_WORKSPACE_ENVIRONMENT_PRESET);
 
   const spatialIds = new Set((stage ? snapshot.components : [])
-    .filter((component) => component.type.typeId === "spatial-entity" && component.visibility !== "collapsed")
+    .filter((component) => isSpatialRenderType(component.type.typeId) && component.visibility !== "collapsed")
     .map((component) => component.id));
   for (const component of snapshot.components) {
     if (!spatialIds.has(component.id) || component.placement.space !== "world3d") continue;
@@ -300,9 +305,71 @@ function applyStage(scene: SceneState, stage: WorkspaceRenderComponent): void {
 
 function toEntity(component: WorkspaceRenderComponent, spatialIds: ReadonlySet<string>): EntityState {
   const visualEffects = component.visualEffects ?? DEFAULT_COMPONENT_VISUAL_EFFECTS;
-  const kind = entityKind(component.props.entityKind);
   const placement = component.placement;
   if (placement.space !== "world3d") throw new Error("Spatial entities require world3d placement.");
+  if (component.type.typeId === "model-assembly") {
+    return {
+      id: component.id,
+      kind: "primitive",
+      assetId: "__semaframe_model_assembly__",
+      label: component.label,
+      transform: {
+        position: { ...placement.position },
+        rotation: { ...placement.rotation },
+        scale: { ...placement.scale },
+      },
+      appearance: {
+        opacity: component.visibility === "visible" ? visualEffects.opacity : 0,
+        emissiveColor: visualEffects.emissive.color,
+        emissiveIntensity: visualEffects.emissive.intensity,
+        glowColor: visualEffects.glow.color,
+        glowIntensity: visualEffects.glow.intensity,
+        glowSpread: visualEffects.glow.spread,
+      },
+      state: { type: "generic", properties: {} },
+      renderGeometry: { kind: "assembly" },
+      ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
+      tags: [...component.tags],
+      locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
+    };
+  }
+  if (component.type.typeId === "spatial-primitive") {
+    const definition = parseParametricPrimitive(component.props.geometry);
+    const material = parametricMaterial(component.props.material);
+    return {
+      id: component.id,
+      kind: "primitive",
+      assetId: `parametric:${definition.kind}`,
+      label: component.label,
+      transform: {
+        position: { ...placement.position },
+        rotation: { ...placement.rotation },
+        scale: { ...placement.scale },
+      },
+      appearance: {
+        color: material.baseColor,
+        opacity: component.visibility === "visible" ? material.opacity * visualEffects.opacity : 0,
+        emissiveColor: material.emissiveColor,
+        emissiveIntensity: material.emissiveIntensity + visualEffects.emissive.intensity,
+        glowColor: visualEffects.glow.color,
+        glowIntensity: visualEffects.glow.intensity,
+        glowSpread: visualEffects.glow.spread,
+      },
+      state: { type: "generic", properties: {} },
+      renderGeometry: {
+        kind: "parametric",
+        definition,
+        digest: parametricGeometryDigest(definition),
+        material,
+        castShadow: component.props.castShadow !== false,
+        receiveShadow: component.props.receiveShadow !== false,
+      },
+      ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
+      tags: [...component.tags],
+      locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
+    };
+  }
+  const kind = entityKind(component.props.entityKind);
   return {
     id: component.id,
     kind,
@@ -335,6 +402,33 @@ function toEntity(component: WorkspaceRenderComponent, spatialIds: ReadonlySet<s
     tags: [...component.tags],
     locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
   };
+}
+
+function isSpatialRenderType(typeId: string): boolean {
+  return typeId === "spatial-entity" || typeId === "spatial-primitive" || typeId === "model-assembly";
+}
+
+function parametricMaterial(value: unknown): ParametricRenderMaterial {
+  const record = isRecord(value) ? value : {};
+  return {
+    baseColor: renderColor(record.baseColor, "#68D5FF"),
+    metallic: boundedNumber(record.metallic, 0, 1, 0),
+    roughness: boundedNumber(record.roughness, 0, 1, 0.55),
+    opacity: boundedNumber(record.opacity, 0, 1, 1),
+    emissiveColor: renderColor(record.emissiveColor, "#000000"),
+    emissiveIntensity: boundedNumber(record.emissiveIntensity, 0, 8, 0),
+  };
+}
+
+function renderColor(value: unknown, fallback: `#${string}`): `#${string}` {
+  const color = colorValue(value);
+  return color?.startsWith("#") ? color as `#${string}` : fallback;
+}
+
+function boundedNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, value))
+    : fallback;
 }
 
 function entityState(

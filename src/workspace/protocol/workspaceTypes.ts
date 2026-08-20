@@ -8,7 +8,9 @@ import type {
   ComponentTypeRef,
   ComponentVisibility,
   JSONObject,
+  World3DPlacement,
 } from "../components/componentTypes";
+import type { ModelDefinitionRef } from "../modeling/modelDefinitions";
 import type {
   EventConnection,
   ResourceBinding,
@@ -151,16 +153,22 @@ export interface SetComponentVisualEffectsOperation extends WorkspaceOperationBa
   transition?: TransitionSpec;
 }
 
+export type ComponentReparentTransformMode = "preserve_local" | "preserve_world";
+
 export interface AttachComponentOperation extends WorkspaceOperationBase {
   op: "attach_component";
   child_id: ComponentId;
   parent_id: ComponentId;
+  /** Defaults to preserve_local for protocol compatibility. */
+  transform_mode?: ComponentReparentTransformMode;
   transition?: TransitionSpec;
 }
 
 export interface DetachComponentOperation extends WorkspaceOperationBase {
   op: "detach_component";
   child_id: ComponentId;
+  /** Defaults to preserve_local for protocol compatibility. */
+  transform_mode?: ComponentReparentTransformMode;
   transition?: TransitionSpec;
 }
 
@@ -224,6 +232,28 @@ export interface ClearWorkspaceOperation extends WorkspaceOperationBase {
   include_resources?: boolean;
 }
 
+export interface PublishModelOperation extends WorkspaceOperationBase {
+  op: "publish_model";
+  model_id: string;
+  version: string;
+  display_name: string;
+  root_id: ComponentId;
+}
+
+export interface InstantiateModelOperation extends WorkspaceOperationBase {
+  op: "instantiate_model";
+  model: ModelDefinitionRef;
+  /** Exact source-node ID to reserved Workspace component ID mapping. */
+  id_map: Readonly<Record<string, string>>;
+  root_placement: World3DPlacement;
+}
+
+export interface DeleteModelDefinitionOperation extends WorkspaceOperationBase {
+  op: "delete_model_definition";
+  model: ModelDefinitionRef;
+  confirm: true;
+}
+
 export type WorkspaceOperation =
   | DefineComponentRecipeOperation
   | CreateComponentOperation
@@ -243,6 +273,9 @@ export type WorkspaceOperation =
   | ConnectEventOperation
   | DisconnectEventOperation
   | PresentViewOperation
+  | PublishModelOperation
+  | InstantiateModelOperation
+  | DeleteModelDefinitionOperation
   | ClearWorkspaceOperation;
 
 export type WorkspaceOperationName = WorkspaceOperation["op"];
@@ -317,5 +350,6 @@ export type WorkspaceDelta = {
   resourcesChanged: string[];
   connectionsChanged: string[];
   viewsChanged: string[];
+  modelsChanged: string[];
   registryChanged: boolean;
 };

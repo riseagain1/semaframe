@@ -125,7 +125,7 @@ describe("WorkspaceStoreEngineAdapter", () => {
       protocol_version: "1.2",
       registry_digest: store.getRegistryDigest(),
       allowed_operations: WORKSPACE_OPERATION_NAMES,
-      component_type_count: 16,
+      component_type_count: 18,
       connector_types: expect.arrayContaining([
         expect.objectContaining({
           connectorType: "inline.snapshot",

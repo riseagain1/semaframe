@@ -121,6 +121,16 @@ function clickExactButton(text) {
   })()`;
 }
 
+function clickHierarchyItem(label) {
+  return `(() => {
+    const button = [...document.querySelectorAll('.workspace-model-hierarchy button')]
+      .find((candidate) => candidate.getAttribute('aria-label') === ${JSON.stringify(label)});
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+    button.click();
+    return true;
+  })()`;
+}
+
 function workspaceAgentPayload(result, toolName) {
   const structured = result?.structuredContent;
   if (structured && typeof structured === "object" && typeof structured.ok === "boolean") return structured;
@@ -491,7 +501,7 @@ try {
   if (!await cdp.evaluate(clickExactButton("Mixed demo"))) throw new Error("Mixed demo control was unavailable.");
   await poll(
     cdp,
-    "Boolean(document.querySelector('[data-workspace-component-type=\"timer\"] .workspace-timer') && [...document.querySelectorAll('.workspace-component-tree button')].some((item) => item.textContent?.trim() === 'Work desk') && [...document.querySelectorAll('.workspace-component-tree button')].some((item) => item.textContent?.trim() === 'Presenter'))",
+    "Boolean(document.querySelector('[data-workspace-component-type=\"timer\"] .workspace-timer') && [...document.querySelectorAll('.workspace-component-tree [role=treeitem]')].some((item) => item.textContent?.trim() === 'Work desk') && [...document.querySelectorAll('.workspace-component-tree [role=treeitem]')].some((item) => item.textContent?.trim() === 'Presenter'))",
     "mixed 3D desk, 3D presenter, and 2D timer",
   );
   const mixedUi = await cdp.evaluate(`({
@@ -499,7 +509,7 @@ try {
     timerPlacement: document.querySelector('[data-workspace-component-type="timer"]')?.getAttribute('data-workspace-placement'),
     timerPhase: document.querySelector('.workspace-timer__phase')?.textContent?.trim(),
     timerReadout: document.querySelector('.workspace-timer__readout')?.textContent?.trim(),
-    treeLabels: [...document.querySelectorAll('.workspace-component-tree button')].map((item) => item.textContent?.trim()),
+    treeLabels: [...document.querySelectorAll('.workspace-component-tree [role=treeitem]')].map((item) => item.textContent?.trim()),
     revision: document.querySelector('.scene-stat')?.textContent,
   })`);
   if (mixedUi.componentCount !== 4 || mixedUi.timerPlacement !== "viewport" || mixedUi.timerPhase !== "idle" || mixedUi.timerReadout !== "05:00" || !mixedUi.revision?.includes("rev 2")) {
@@ -843,13 +853,19 @@ try {
   const afterFullscreenText = await captureWorkspaceProject(cdp, "fullscreen-after");
   assertFullscreenPreservedWorkspace(afterNavigationText, afterFullscreenText, "Entering and exiting scene full screen");
 
-  if (!await cdp.evaluate(clickExactButton("3D Stage"))) throw new Error("The 3D Stage could not be selected for exact resizing.");
+  if (!await cdp.evaluate(clickExactButton("Models"))) throw new Error("The Models panel was unavailable for 3D selection.");
+  await poll(cdp, "Boolean(document.querySelector('.workspace-model-hierarchy'))", "visible 3D hierarchy");
+  if (!await cdp.evaluate(clickHierarchyItem("3D Stage"))) throw new Error("The 3D Stage could not be selected from the visible hierarchy.");
+  if (!await cdp.evaluate(clickExactButton("Inspector"))) throw new Error("The 3D Stage Inspector could not be opened.");
   await poll(cdp, "document.querySelector('.workspace-inspector')?.getAttribute('aria-label') === 'Inspector for 3D Stage'", "3D Stage Inspector");
   if (!await cdp.evaluate(setInspectorNumber("Width", 16))) throw new Error("The stage Width field was unavailable.");
   if (!await cdp.evaluate(clickExactButton("Apply size"))) throw new Error("The stage dimensions could not be applied.");
   await poll(cdp, "document.querySelector('.scene-stat')?.textContent?.includes('rev 6')", "stage-dimension resize revision");
 
-  if (!await cdp.evaluate(clickExactButton("Work desk"))) throw new Error("The Work desk could not be selected for exact scaling.");
+  if (!await cdp.evaluate(clickExactButton("Models"))) throw new Error("The Models panel was unavailable for desk selection.");
+  await poll(cdp, "Boolean(document.querySelector('.workspace-model-hierarchy'))", "visible 3D hierarchy for desk selection");
+  if (!await cdp.evaluate(clickHierarchyItem("Work desk"))) throw new Error("The Work desk could not be selected from the visible hierarchy.");
+  if (!await cdp.evaluate(clickExactButton("Inspector"))) throw new Error("The Work desk Inspector could not be opened.");
   await poll(cdp, "document.querySelector('.workspace-inspector')?.getAttribute('aria-label') === 'Inspector for Work desk'", "3D desk Inspector");
   if (!await cdp.evaluate(setInspectorNumber("X", 1.5))
     || !await cdp.evaluate(setInspectorNumber("Y", 0.75))
@@ -929,7 +945,7 @@ try {
   if (reopenedProjectAgentClient) workspaceAgentClients.push(reopenedProjectAgentClient);
   await poll(
     cdp,
-    "Boolean(document.querySelector('.workspace-timer.is-running') && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.width === '640px' && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.height === '408px' && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.opacity === '0.72' && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.boxShadow.includes('85, 221, 255') && [...document.querySelectorAll('.workspace-component-tree button')].some((item) => item.textContent?.trim() === 'Work desk') && [...document.querySelectorAll('.workspace-component-tree button')].some((item) => item.textContent?.trim() === 'Presenter'))",
+    "Boolean(document.querySelector('.workspace-timer.is-running') && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.width === '640px' && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.height === '408px' && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.opacity === '0.72' && document.querySelector('[data-workspace-component-type=\"video-player\"]')?.style.boxShadow.includes('85, 221, 255') && [...document.querySelectorAll('.workspace-component-tree [role=treeitem]')].some((item) => item.textContent?.trim() === 'Work desk') && [...document.querySelectorAll('.workspace-component-tree [role=treeitem]')].some((item) => item.textContent?.trim() === 'Presenter'))",
     "reopened resized mixed Workspace project",
   );
   const reopenedUi = await cdp.evaluate(`({

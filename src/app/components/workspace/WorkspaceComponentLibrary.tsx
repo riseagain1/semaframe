@@ -1,17 +1,27 @@
 import { useMemo, useState } from "react";
+import type { JSONObject } from "../../../workspace/components";
+
+export type ComponentCreationOptions = Readonly<{
+  label?: string;
+  props?: JSONObject;
+}>;
 
 export type ComponentLibraryItem = Readonly<{
+  /** Stable palette identity; multiple presets may create the same typeId. */
+  libraryId?: string;
   typeId: string;
   displayName: string;
   description?: string;
   placements?: readonly string[];
   trustTier?: "builtin" | "declarative" | "sandboxed";
   configureOnCreate?: boolean;
+  badge?: string;
+  creation?: ComponentCreationOptions;
 }>;
 
 export type WorkspaceComponentLibraryProps = Readonly<{
   items: readonly ComponentLibraryItem[];
-  onCreate?: (typeId: string) => void;
+  onCreate?: (typeId: string, options?: ComponentCreationOptions) => void;
 }>;
 
 export function WorkspaceComponentLibrary({ items, onCreate }: WorkspaceComponentLibraryProps) {
@@ -31,11 +41,15 @@ export function WorkspaceComponentLibrary({ items, onCreate }: WorkspaceComponen
       </label>
       <ul>
         {filtered.map((item) => (
-          <li key={item.typeId}>
-            <button type="button" onClick={() => onCreate?.(item.typeId)}>
+          <li key={item.libraryId ?? item.typeId}>
+            <button type="button" onClick={() => {
+              if (item.creation) onCreate?.(item.typeId, item.creation);
+              else onCreate?.(item.typeId);
+            }}>
               <strong>{item.displayName}</strong>
               <span>{item.description ?? item.typeId}</span>
               {item.trustTier === "declarative" && <small>Custom recipe</small>}
+              {item.badge && <small>{item.badge}</small>}
             </button>
           </li>
         ))}

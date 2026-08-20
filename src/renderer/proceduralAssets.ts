@@ -5,6 +5,7 @@ import type {
   EntityState,
   Pose,
 } from "./sceneRenderTypes";
+import type { ParametricPrimitive } from "../workspace/modeling/parametricGeometry";
 
 export type AnimationCompletion = Readonly<{
   entityId: string;
@@ -484,6 +485,103 @@ function createPrimitive(palette: Palette, tokens: string): ProceduralEntity {
   return root;
 }
 
+function orientPrimitiveGeometry(
+  geometry: THREE.BufferGeometry,
+  axis: "x" | "y" | "z",
+  sourceAxis: "y" | "z",
+): void {
+  if (sourceAxis === "y") {
+    if (axis === "x") geometry.rotateZ(-Math.PI / 2);
+    else if (axis === "z") geometry.rotateX(Math.PI / 2);
+    return;
+  }
+  if (axis === "x") geometry.rotateY(Math.PI / 2);
+  else if (axis === "y") geometry.rotateX(-Math.PI / 2);
+}
+
+function exactPrimitiveGeometry(definition: ParametricPrimitive): THREE.BufferGeometry {
+  switch (definition.kind) {
+    case "box":
+      return new THREE.BoxGeometry(definition.sizeM.x, definition.sizeM.y, definition.sizeM.z);
+    case "sphere":
+      return new THREE.SphereGeometry(definition.radiusM, 48, 24);
+    case "cylinder": {
+      const geometry = new THREE.CylinderGeometry(
+        definition.radiusM,
+        definition.radiusM,
+        definition.heightM,
+        48,
+        1,
+        false,
+      );
+      orientPrimitiveGeometry(geometry, definition.axis, "y");
+      return geometry;
+    }
+    case "cone": {
+      const geometry = new THREE.ConeGeometry(definition.radiusM, definition.heightM, 48, 1, false);
+      orientPrimitiveGeometry(geometry, definition.axis, "y");
+      return geometry;
+    }
+    case "capsule": {
+      const geometry = new THREE.CapsuleGeometry(
+        definition.radiusM,
+        definition.cylinderHeightM,
+        12,
+        24,
+      );
+      orientPrimitiveGeometry(geometry, definition.axis, "y");
+      return geometry;
+    }
+    case "plane": {
+      const geometry = new THREE.PlaneGeometry(definition.sizeM.x, definition.sizeM.y, 1, 1);
+      orientPrimitiveGeometry(geometry, definition.normalAxis, "z");
+      return geometry;
+    }
+  }
+}
+
+function syncExactParametricEntity(entity: EntityState, root: ProceduralEntity): void {
+  const source = entity.renderGeometry;
+  if (!source || source.kind !== "parametric") return;
+  const currentDigest = root.userData.parametricGeometryDigest;
+  let shape = root.getObjectByName("parametric:shape");
+  if (!(shape instanceof THREE.Mesh) || currentDigest !== source.digest) {
+    if (shape) disposeObject(shape);
+    const material = flatMaterial(new THREE.Color(source.material.baseColor).getHex(), {
+      metalness: source.material.metallic,
+      roughness: source.material.roughness,
+      opacity: source.material.opacity,
+      transparent: source.material.opacity < 1,
+      depthWrite: source.material.opacity >= 1,
+      emissive: new THREE.Color(source.material.emissiveColor),
+      emissiveIntensity: source.material.emissiveIntensity,
+      flatShading: false,
+    });
+    shape = mesh(exactPrimitiveGeometry(source.definition), material, "parametric:shape");
+    shape.castShadow = source.castShadow;
+    shape.receiveShadow = source.receiveShadow;
+    root.add(shape);
+    registerMaterials(root, [material]);
+    root.userData.parametricGeometryDigest = source.digest;
+  }
+  if (shape instanceof THREE.Mesh) {
+    shape.castShadow = source.castShadow;
+    shape.receiveShadow = source.receiveShadow;
+    const materials = Array.isArray(shape.material) ? shape.material : [shape.material];
+    for (const material of materials) {
+      if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+      material.metalness = source.material.metallic;
+      material.roughness = source.material.roughness;
+      material.opacity = source.material.opacity;
+      material.transparent = source.material.opacity < 1;
+      material.depthWrite = source.material.opacity >= 1;
+      material.emissive.set(source.material.emissiveColor);
+      material.emissiveIntensity = source.material.emissiveIntensity;
+      material.needsUpdate = true;
+    }
+  }
+}
+
 export function classifyAsset(entity: Pick<EntityState, "kind" | "assetId" | "label" | "tags">): string {
   const tokens = `${entity.assetId} ${entity.label} ${entity.tags.join(" ")}`.toLowerCase();
   if (entity.kind === "character") return "humanoid";
@@ -511,6 +609,23 @@ export function classifyAsset(entity: Pick<EntityState, "kind" | "assetId" | "la
 }
 
 export function createProceduralEntity(entity: EntityState): ProceduralEntity {
+  if (entity.renderGeometry?.kind === "assembly") {
+    const root = new THREE.Group() as ProceduralEntity;
+    root.name = `entity:${entity.id}`;
+    root.userData.entityId = entity.id;
+    root.userData.renderIdentity = "assembly";
+    return root;
+  }
+  if (entity.renderGeometry?.kind === "parametric") {
+    const root = new THREE.Group() as ProceduralEntity;
+    root.name = `entity:${entity.id}`;
+    root.userData.entityId = entity.id;
+    root.userData.animationPhase = stablePhase(entity.id);
+    root.userData.renderIdentity = "parametric";
+    syncExactParametricEntity(entity, root);
+    root.traverse((object) => { object.userData.entityId = entity.id; });
+    return root;
+  }
   const palette = KIND_PALETTES[entity.kind];
   const tokens = `${entity.assetId} ${entity.label} ${entity.tags.join(" ")}`.toLowerCase();
   let root: ProceduralEntity;
@@ -593,6 +708,7 @@ export function findSocket(parent: THREE.Object3D, requested?: string): THREE.Ob
 }
 
 export function applyEntityAppearance(entity: EntityState, root: ProceduralEntity): void {
+  syncExactParametricEntity(entity, root);
   for (const material of [
     ...(root.userData.primaryMaterials ?? []),
     ...(root.userData.accentMaterials ?? []),

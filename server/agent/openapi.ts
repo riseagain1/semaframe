@@ -33,6 +33,7 @@ const agentControlErrorSchema = {
         "get_workspace_instructions",
         "inspect_workspace",
         "inspect_workspace_component",
+        "inspect_workspace_model",
         "inspect_workspace_space",
         "query_spatial_placement",
         "inspect_workspace_physics",
@@ -260,10 +261,38 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
           responses: inspectWorkspaceComponentResponses,
         },
       },
+      "/workspace/models/inspect": {
+        post: {
+          operationId: "inspect_workspace_model",
+          summary: "Inspect one exact digest-pinned reusable model and its instance ID-map keys.",
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["session_token", "instruction_digest", "model_id", "version"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              model_id: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                pattern: "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              },
+              version: {
+                type: "string",
+                minLength: 5,
+                maxLength: 64,
+                pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?$",
+              },
+            },
+          }),
+          responses: successResponses,
+        },
+      },
       "/workspace/space/inspect": {
         post: {
           operationId: "inspect_workspace_space",
-          summary: "Inspect derived Universal Space Data with world transforms, bounds, collisions, and relations.",
+          summary: "Inspect the derived SemaFrame Spatial Graph with world transforms, bounds, collisions, and relations.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,

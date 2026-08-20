@@ -1,11 +1,15 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
-import { DEFAULT_COMPONENT_VISUAL_EFFECTS } from "../../../workspace/components";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import {
+  BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS,
+  DEFAULT_COMPONENT_VISUAL_EFFECTS,
+} from "../../../workspace/components";
 import { DEFAULT_ASSET_REGISTRY } from "../../../assets/AssetRegistry";
 import type {
   ComponentResize,
   ComponentResizePolicy,
   ComponentVisualEffects,
   JSONObject,
+  World3DPlacement,
 } from "../../../workspace/components";
 import type { ComponentActionRequest, WorkspaceRenderComponent } from "../../../workspace/renderer/contracts";
 import { resolveVideoSource, type VideoSourceKind } from "./VideoPlayerView";
@@ -16,6 +20,12 @@ import {
   parseSpatialPhysicsConfig,
   type PhysicsBodyReport,
 } from "../../../workspace/physics";
+import {
+  deriveParametricBounds,
+  parseParametricPrimitive,
+  type ParametricAxis,
+  type ParametricPrimitive,
+} from "../../../workspace/modeling";
 
 export type WorkspaceComponentUpdateRequest = Readonly<{
   componentId: string;
@@ -33,6 +43,21 @@ export type WorkspaceComponentVisualEffectsRequest = Readonly<{
   visualEffects: ComponentVisualEffects;
 }>;
 
+export type WorkspaceComponentTransformRequest = Readonly<{
+  componentId: string;
+  worldPlacement: World3DPlacement;
+}>;
+
+export type WorkspaceComponentHierarchyRequest = Readonly<{
+  componentId: string;
+  parentId?: string;
+}>;
+
+export type WorkspaceAssemblyOption = Readonly<{
+  id: string;
+  label: string;
+}>;
+
 export type WorkspaceComponentManifestUpgrade = Readonly<{
   fromVersion: string;
   toVersion: string;
@@ -48,6 +73,14 @@ export type WorkspaceInspectorProps = Readonly<{
   manifestUpgrade?: WorkspaceComponentManifestUpgrade;
   onUpgradeManifest?: (componentId: string) => void;
   physicsReport?: PhysicsBodyReport;
+  onCreateAssembly?: (componentId: string) => void;
+  worldPlacement?: World3DPlacement;
+  assemblyOptions?: readonly WorkspaceAssemblyOption[];
+  onTransform?: (request: WorkspaceComponentTransformRequest) => void;
+  onReparent?: (request: WorkspaceComponentHierarchyRequest) => boolean | void;
+  onSelectComponent?: (componentId: string) => void;
+  descendantCount?: number;
+  onDeleteComponent?: (componentId: string) => boolean | void;
 }>;
 
 export function WorkspaceInspector({
@@ -60,6 +93,14 @@ export function WorkspaceInspector({
   manifestUpgrade,
   onUpgradeManifest,
   physicsReport,
+  onCreateAssembly,
+  worldPlacement,
+  assemblyOptions = [],
+  onTransform,
+  onReparent,
+  onSelectComponent,
+  descendantCount = 0,
+  onDeleteComponent,
 }: WorkspaceInspectorProps) {
   if (!component) {
     return (
@@ -106,11 +147,59 @@ export function WorkspaceInspector({
       {resizePolicy && resizePolicy.kind !== "none" && (
         <ResizeInspectorEditor component={component} policy={resizePolicy} onResize={onResize} />
       )}
-      {component.type.typeId === "spatial-entity" && Boolean(component.props.collision) && (
+      {component.placement.space === "world3d" && component.type.typeId !== "stage-3d" && (
+        <WorldTransformInspectorEditor
+          component={component}
+          worldPlacement={worldPlacement ?? component.placement}
+          onTransform={onTransform}
+        />
+      )}
+      {component.type.typeId === "spatial-primitive" && (
+        <ParametricPrimitiveInspectorEditor component={component} onUpdate={onUpdate} />
+      )}
+      {component.type.typeId === "model-assembly" && (
+        <ModelAssemblyInspectorEditor component={component} onUpdate={onUpdate} />
+      )}
+      {(component.type.typeId === "spatial-entity" || component.type.typeId === "spatial-primitive")
+        && Boolean(component.props.collision) && (
         <CollisionInspectorEditor component={component} onUpdate={onUpdate} />
       )}
-      {component.type.typeId === "spatial-entity" && Boolean(component.props.physics) && (
+      {(component.type.typeId === "spatial-entity" || component.type.typeId === "spatial-primitive")
+        && Boolean(component.props.physics) && (
         <PhysicsInspectorEditor component={component} onUpdate={onUpdate} report={physicsReport} />
+      )}
+      {(component.type.typeId === "spatial-primitive"
+        || component.type.typeId === "spatial-entity") && (
+        <section className="workspace-inspector__model-actions" aria-label="Model assembly actions">
+          <h3>Model</h3>
+          <p className="workspace-inspector__hint">
+            Wrap this object in a transform-only assembly without changing its world position.
+          </p>
+          <button
+            type="button"
+            disabled={!onCreateAssembly || component.locks.placement}
+            onClick={() => onCreateAssembly?.(component.id)}
+          >
+            Create model assembly
+          </button>
+        </section>
+      )}
+      {component.placement.space === "world3d" && component.type.typeId !== "stage-3d" && (
+        <ComponentHierarchyInspectorEditor
+          component={component}
+          assemblyOptions={assemblyOptions}
+          onReparent={onReparent}
+          onSelectComponent={onSelectComponent}
+        />
+      )}
+      {(component.type.typeId === "spatial-primitive"
+        || component.type.typeId === "spatial-entity"
+        || component.type.typeId === "model-assembly") && (
+        <ComponentLifecycleEditor
+          component={component}
+          descendantCount={descendantCount}
+          onDelete={onDeleteComponent}
+        />
       )}
       <VisualEffectsInspectorEditor component={component} onApply={onVisualEffects} />
       {component.type.typeId === "video-player" && (
@@ -146,6 +235,438 @@ export function WorkspaceInspector({
       </details>
     </aside>
   );
+}
+
+const RADIANS_TO_DEGREES = 180 / Math.PI;
+const DEGREES_TO_RADIANS = Math.PI / 180;
+
+function editableNumber(value: number): string {
+  return Number(value.toFixed(6)).toString();
+}
+
+function WorldTransformInspectorEditor({
+  component,
+  worldPlacement,
+  onTransform,
+}: Readonly<{
+  component: WorkspaceRenderComponent;
+  worldPlacement: World3DPlacement;
+  onTransform?: (request: WorkspaceComponentTransformRequest) => void;
+}>) {
+  const formId = useId();
+  const signature = JSON.stringify(worldPlacement);
+  const [position, setPosition] = useState(() => [
+    editableNumber(worldPlacement.position.x),
+    editableNumber(worldPlacement.position.y),
+    editableNumber(worldPlacement.position.z),
+  ]);
+  const [rotationDeg, setRotationDeg] = useState(() => [
+    editableNumber(worldPlacement.rotation.x * RADIANS_TO_DEGREES),
+    editableNumber(worldPlacement.rotation.y * RADIANS_TO_DEGREES),
+    editableNumber(worldPlacement.rotation.z * RADIANS_TO_DEGREES),
+  ]);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    setPosition([
+      editableNumber(worldPlacement.position.x),
+      editableNumber(worldPlacement.position.y),
+      editableNumber(worldPlacement.position.z),
+    ]);
+    setRotationDeg([
+      editableNumber(worldPlacement.rotation.x * RADIANS_TO_DEGREES),
+      editableNumber(worldPlacement.rotation.y * RADIANS_TO_DEGREES),
+      editableNumber(worldPlacement.rotation.z * RADIANS_TO_DEGREES),
+    ]);
+    setError(undefined);
+  }, [component.id, signature]);
+
+  const locked = component.locks.placement || !onTransform;
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const parsedPosition = position.map(Number);
+    const parsedRotation = rotationDeg.map(Number);
+    if ([...parsedPosition, ...parsedRotation].some((value) => !Number.isFinite(value))) {
+      setError("Position and rotation must contain finite numbers.");
+      return;
+    }
+    setError(undefined);
+    onTransform?.({
+      componentId: component.id,
+      worldPlacement: {
+        space: "world3d",
+        position: { x: parsedPosition[0]!, y: parsedPosition[1]!, z: parsedPosition[2]! },
+        rotation: {
+          x: parsedRotation[0]! * DEGREES_TO_RADIANS,
+          y: parsedRotation[1]! * DEGREES_TO_RADIANS,
+          z: parsedRotation[2]! * DEGREES_TO_RADIANS,
+        },
+        scale: structuredClone(worldPlacement.scale),
+      },
+    });
+  };
+
+  return <section className="workspace-inspector__modeling workspace-inspector__transform" aria-labelledby={`${formId}-heading`}>
+    <h3 id={`${formId}-heading`}>World transform</h3>
+    <p className="workspace-inspector__hint">Exact world-space coordinates. Rotation is shown in degrees; hierarchy changes preserve this pose.</p>
+    <form onSubmit={submit} noValidate>
+      <fieldset>
+        <legend>Position (m)</legend>
+        {(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis} htmlFor={`${formId}-position-${axis.toLowerCase()}`}>
+          <span>{axis}</span>
+          <input
+            id={`${formId}-position-${axis.toLowerCase()}`}
+            aria-label={`World position ${axis} (m)`}
+            type="number"
+            inputMode="decimal"
+            step="0.001"
+            value={position[index]}
+            disabled={locked}
+            onChange={(event) => setPosition((current) => current.map((value, item) => item === index ? event.target.value : value))}
+          />
+        </label>)}
+      </fieldset>
+      <fieldset>
+        <legend>Rotation (deg)</legend>
+        {(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis} htmlFor={`${formId}-rotation-${axis.toLowerCase()}`}>
+          <span>{axis}</span>
+          <input
+            id={`${formId}-rotation-${axis.toLowerCase()}`}
+            aria-label={`World rotation ${axis} (deg)`}
+            type="number"
+            inputMode="decimal"
+            step="0.1"
+            value={rotationDeg[index]}
+            disabled={locked}
+            onChange={(event) => setRotationDeg((current) => current.map((value, item) => item === index ? event.target.value : value))}
+          />
+        </label>)}
+      </fieldset>
+      {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
+      <button type="submit" disabled={locked}>Apply world transform</button>
+    </form>
+    {component.locks.placement && <p className="workspace-inspector__hint">Placement is locked for this component.</p>}
+  </section>;
+}
+
+function ComponentHierarchyInspectorEditor({
+  component,
+  assemblyOptions,
+  onReparent,
+  onSelectComponent,
+}: Readonly<{
+  component: WorkspaceRenderComponent;
+  assemblyOptions: readonly WorkspaceAssemblyOption[];
+  onReparent?: (request: WorkspaceComponentHierarchyRequest) => boolean | void;
+  onSelectComponent?: (componentId: string) => void;
+}>) {
+  const formId = useId();
+  const [parentId, setParentId] = useState(component.parentId ?? "");
+  const currentParent = assemblyOptions.find((option) => option.id === component.parentId);
+  useEffect(() => setParentId(component.parentId ?? ""), [component.id, component.parentId]);
+  const locked = component.locks.placement || !onReparent;
+  const apply = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if ((component.parentId ?? "") === parentId) return;
+    onReparent?.({ componentId: component.id, ...(parentId ? { parentId } : {}) });
+  };
+  return <section className="workspace-inspector__modeling workspace-inspector__hierarchy" aria-labelledby={`${formId}-heading`}>
+    <h3 id={`${formId}-heading`}>Assembly hierarchy</h3>
+    <p className="workspace-inspector__hint">Attach to an assembly or detach to the world root without moving this component.</p>
+    <form onSubmit={apply}>
+      <label htmlFor={`${formId}-parent`}><span>Parent</span>
+        <select id={`${formId}-parent`} value={parentId} disabled={locked} onChange={(event) => setParentId(event.target.value)}>
+          <option value="">World root (detached)</option>
+          {assemblyOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
+      </label>
+      <button type="submit" disabled={locked || (component.parentId ?? "") === parentId}>Apply parent · preserve world</button>
+    </form>
+    {component.parentId && <button
+      type="button"
+      className="workspace-inspector__secondary-action"
+      disabled={!onSelectComponent}
+      onClick={() => onSelectComponent?.(component.parentId!)}
+    >Select parent assembly{currentParent ? ` · ${currentParent.label}` : ""}</button>}
+  </section>;
+}
+
+function ComponentLifecycleEditor({
+  component,
+  descendantCount,
+  onDelete,
+}: Readonly<{
+  component: WorkspaceRenderComponent;
+  descendantCount: number;
+  onDelete?: (componentId: string) => boolean | void;
+}>) {
+  const [confirming, setConfirming] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const modelRef = recordValue(component.props.modelRef);
+  useEffect(() => {
+    if (!confirming) return;
+    const frame = requestAnimationFrame(() => cancelRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [confirming]);
+  const close = () => {
+    setConfirming(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+  const label = modelRef ? "Delete model instance" : "Delete component";
+  return <section className="workspace-inspector__modeling workspace-inspector__lifecycle" aria-label="Component lifecycle">
+    <h3>Remove</h3>
+    <p className="workspace-inspector__hint">
+      {descendantCount > 0
+        ? `This removes ${component.label} and ${descendantCount} descendant${descendantCount === 1 ? "" : "s"}.`
+        : `This removes ${component.label} from the workspace.`}
+      {modelRef ? " Removing an instance also releases its published definition reference." : ""}
+    </p>
+    <button
+      ref={triggerRef}
+      type="button"
+      className="is-danger"
+      disabled={component.locks.deletion || !onDelete}
+      aria-expanded={confirming}
+      onClick={() => setConfirming((value) => !value)}
+    >{label}…</button>
+    {confirming && <div
+      className="workspace-model-delete"
+      role="alertdialog"
+      aria-label={`Confirm ${label.toLowerCase()}`}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+        }
+      }}
+    >
+      <strong>{label}?</strong>
+      <p>
+        {descendantCount > 0
+          ? `This will also remove ${descendantCount} descendant${descendantCount === 1 ? "" : "s"} and their bindings. `
+          : "Bindings to this component are removed with it. "}
+        This cannot be undone from the Models panel.
+      </p>
+      <div>
+        <button ref={cancelRef} type="button" onClick={close}>Cancel</button>
+        <button type="button" className="is-danger" onClick={() => {
+          const result = onDelete?.(component.id);
+          if (result !== false) close();
+        }}>Confirm delete</button>
+      </div>
+    </div>}
+  </section>;
+}
+
+type PrimitiveKind = ParametricPrimitive["kind"];
+
+type PrimitiveEditorFields = Readonly<{
+  first: string;
+  second: string;
+  third: string;
+  axis: ParametricAxis;
+}>;
+
+function safePrimitive(value: unknown): ParametricPrimitive {
+  try {
+    return parseParametricPrimitive(value);
+  } catch {
+    return structuredClone(BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS.box);
+  }
+}
+
+function fieldsForPrimitive(primitive: ParametricPrimitive): PrimitiveEditorFields {
+  switch (primitive.kind) {
+    case "box": return {
+      first: String(primitive.sizeM.x), second: String(primitive.sizeM.y), third: String(primitive.sizeM.z), axis: "y",
+    };
+    case "sphere": return { first: String(primitive.radiusM), second: "", third: "", axis: "y" };
+    case "cylinder":
+    case "cone": return {
+      first: String(primitive.radiusM), second: String(primitive.heightM), third: "", axis: primitive.axis,
+    };
+    case "capsule": return {
+      first: String(primitive.radiusM), second: String(primitive.cylinderHeightM), third: "", axis: primitive.axis,
+    };
+    case "plane": return {
+      first: String(primitive.sizeM.x), second: String(primitive.sizeM.y), third: "", axis: primitive.normalAxis,
+    };
+  }
+}
+
+function primitiveFromFields(kind: PrimitiveKind, fields: PrimitiveEditorFields): ParametricPrimitive {
+  const first = Number(fields.first);
+  const second = Number(fields.second);
+  const third = Number(fields.third);
+  switch (kind) {
+    case "box": return parseParametricPrimitive({ kind, sizeM: { x: first, y: second, z: third } });
+    case "sphere": return parseParametricPrimitive({ kind, radiusM: first });
+    case "cylinder": return parseParametricPrimitive({ kind, radiusM: first, heightM: second, axis: fields.axis });
+    case "cone": return parseParametricPrimitive({ kind, radiusM: first, heightM: second, axis: fields.axis });
+    case "capsule": return parseParametricPrimitive({ kind, radiusM: first, cylinderHeightM: second, axis: fields.axis });
+    case "plane": return parseParametricPrimitive({ kind, sizeM: { x: first, y: second }, normalAxis: fields.axis });
+  }
+}
+
+function primitiveDimensionLabels(kind: PrimitiveKind): readonly string[] {
+  switch (kind) {
+    case "box": return ["Width X (m)", "Height Y (m)", "Depth Z (m)"];
+    case "sphere": return ["Radius (m)"];
+    case "cylinder":
+    case "cone": return ["Radius (m)", "Height (m)"];
+    case "capsule": return ["Radius (m)", "Cylinder length (m)"];
+    case "plane": return ["Size U (m)", "Size V (m)"];
+  }
+}
+
+function ParametricPrimitiveInspectorEditor({
+  component,
+  onUpdate,
+}: Readonly<{
+  component: WorkspaceRenderComponent;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+}>) {
+  const formId = useId();
+  const primitive = safePrimitive(component.props.geometry);
+  const material = recordValue(component.props.material) ?? {};
+  const signature = JSON.stringify({ primitive, material });
+  const [kind, setKind] = useState<PrimitiveKind>(primitive.kind);
+  const [fields, setFields] = useState<PrimitiveEditorFields>(fieldsForPrimitive(primitive));
+  const [baseColor, setBaseColor] = useState(stringValue(material.baseColor) || "#68D5FF");
+  const [metallic, setMetallic] = useState(String(finiteNumber(material.metallic) ?? 0));
+  const [roughness, setRoughness] = useState(String(finiteNumber(material.roughness) ?? 0.55));
+  const [opacity, setOpacity] = useState(String(finiteNumber(material.opacity) ?? 1));
+  const [emissiveColor, setEmissiveColor] = useState(stringValue(material.emissiveColor) || "#000000");
+  const [emissiveIntensity, setEmissiveIntensity] = useState(String(finiteNumber(material.emissiveIntensity) ?? 0));
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    setKind(primitive.kind);
+    setFields(fieldsForPrimitive(primitive));
+    setBaseColor(stringValue(material.baseColor) || "#68D5FF");
+    setMetallic(String(finiteNumber(material.metallic) ?? 0));
+    setRoughness(String(finiteNumber(material.roughness) ?? 0.55));
+    setOpacity(String(finiteNumber(material.opacity) ?? 1));
+    setEmissiveColor(stringValue(material.emissiveColor) || "#000000");
+    setEmissiveIntensity(String(finiteNumber(material.emissiveIntensity) ?? 0));
+    setError(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [component.id, signature]);
+  const locked = component.locks.props || !onUpdate;
+  const labels = primitiveDimensionLabels(kind);
+  const values = [fields.first, fields.second, fields.third];
+  const setDimension = (index: number, value: string) => {
+    setFields((current) => ({
+      ...current,
+      ...(index === 0 ? { first: value } : index === 1 ? { second: value } : { third: value }),
+    }));
+    setError(undefined);
+  };
+  const changeKind = (next: PrimitiveKind) => {
+    const nextPrimitive = BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS[next];
+    setKind(next);
+    setFields(fieldsForPrimitive(nextPrimitive));
+    setError(undefined);
+  };
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    let nextGeometry: ParametricPrimitive;
+    try {
+      nextGeometry = primitiveFromFields(kind, fields);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Geometry dimensions are invalid.");
+      return;
+    }
+    const nextMetallic = Number(metallic);
+    const nextRoughness = Number(roughness);
+    const nextOpacity = Number(opacity);
+    const nextEmissiveIntensity = Number(emissiveIntensity);
+    if (!inRange(nextMetallic, 0, 1) || !inRange(nextRoughness, 0, 1)
+      || !inRange(nextOpacity, 0, 1) || !inRange(nextEmissiveIntensity, 0, 8)) {
+      setError("Metallic, roughness, and opacity must be 0–1; emission must be 0–8.");
+      return;
+    }
+    setError(undefined);
+    onUpdate?.({
+      componentId: component.id,
+      props: {
+        geometry: structuredClone(nextGeometry) as unknown as JSONObject,
+        material: {
+          baseColor: baseColor.toUpperCase(),
+          metallic: nextMetallic,
+          roughness: nextRoughness,
+          opacity: nextOpacity,
+          emissiveColor: emissiveColor.toUpperCase(),
+          emissiveIntensity: nextEmissiveIntensity,
+        },
+      },
+    });
+  };
+  return <section className="workspace-inspector__modeling" aria-labelledby={`${formId}-heading`}>
+    <h3 id={`${formId}-heading`}>Parametric geometry</h3>
+    <p className="workspace-inspector__hint">Canonical dimensions in metres drive rendering, bounds, collision, SSG, and export.</p>
+    <form onSubmit={submit} noValidate>
+      <label htmlFor={`${formId}-kind`}><span>Primitive</span><select id={`${formId}-kind`} value={kind} disabled={locked} onChange={(event) => changeKind(event.target.value as PrimitiveKind)}>{Object.keys(BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS).map((value) => <option key={value} value={value}>{value[0]?.toUpperCase()}{value.slice(1)}</option>)}</select></label>
+      <fieldset><legend>Exact dimensions</legend>{labels.map((label, index) => <label key={label} htmlFor={`${formId}-dimension-${index}`}><span>{label}</span><input id={`${formId}-dimension-${index}`} aria-label={label} type="number" inputMode="decimal" min="0.000001" max="1000" step="0.001" value={values[index]} disabled={locked} onChange={(event) => setDimension(index, event.target.value)} /></label>)}</fieldset>
+      {kind !== "box" && kind !== "sphere" && <label htmlFor={`${formId}-axis`}><span>{kind === "plane" ? "Normal axis" : "Length axis"}</span><select id={`${formId}-axis`} value={fields.axis} disabled={locked} onChange={(event) => setFields((current) => ({ ...current, axis: event.target.value as ParametricAxis }))}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>}
+      {kind === "capsule" && <p className="workspace-inspector__hint">Total length is cylinder length plus two radii.</p>}
+      <fieldset><legend>PBR material</legend>
+        <label htmlFor={`${formId}-base-color`}><span>Base color</span><input id={`${formId}-base-color`} aria-label="Base color" type="color" value={baseColor} disabled={locked} onChange={(event) => setBaseColor(event.target.value)} /></label>
+        <label htmlFor={`${formId}-metallic`}><span>Metallic</span><input id={`${formId}-metallic`} aria-label="Metallic" type="number" min="0" max="1" step="0.05" value={metallic} disabled={locked} onChange={(event) => setMetallic(event.target.value)} /></label>
+        <label htmlFor={`${formId}-roughness`}><span>Roughness</span><input id={`${formId}-roughness`} aria-label="Roughness" type="number" min="0" max="1" step="0.05" value={roughness} disabled={locked} onChange={(event) => setRoughness(event.target.value)} /></label>
+        <label htmlFor={`${formId}-material-opacity`}><span>Opacity</span><input id={`${formId}-material-opacity`} aria-label="Material opacity" type="number" min="0" max="1" step="0.05" value={opacity} disabled={locked} onChange={(event) => setOpacity(event.target.value)} /></label>
+        <label htmlFor={`${formId}-emissive-color`}><span>Emission color</span><input id={`${formId}-emissive-color`} aria-label="Material emission color" type="color" value={emissiveColor} disabled={locked} onChange={(event) => setEmissiveColor(event.target.value)} /></label>
+        <label htmlFor={`${formId}-emissive-intensity`}><span>Emission</span><input id={`${formId}-emissive-intensity`} aria-label="Material emission" type="number" min="0" max="8" step="0.1" value={emissiveIntensity} disabled={locked} onChange={(event) => setEmissiveIntensity(event.target.value)} /></label>
+      </fieldset>
+      {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
+      <button type="submit" disabled={locked}>Apply geometry and material</button>
+    </form>
+  </section>;
+}
+
+function ModelAssemblyInspectorEditor({
+  component,
+  onUpdate,
+}: Readonly<{
+  component: WorkspaceRenderComponent;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+}>) {
+  const formId = useId();
+  const [displayName, setDisplayName] = useState(component.label);
+  const [description, setDescription] = useState(stringValue(component.props.description));
+  const [collisionPolicy, setCollisionPolicy] = useState<"external_only" | "all" | "none">(
+    component.props.collisionPolicy === "all" || component.props.collisionPolicy === "none"
+      ? component.props.collisionPolicy : "external_only",
+  );
+  useEffect(() => {
+    setDisplayName(component.label);
+    setDescription(stringValue(component.props.description));
+    setCollisionPolicy(component.props.collisionPolicy === "all" || component.props.collisionPolicy === "none"
+      ? component.props.collisionPolicy : "external_only");
+  }, [component.id, component.label, component.props.collisionPolicy, component.props.description]);
+  const locked = component.locks.props || !onUpdate;
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const label = displayName.trim();
+    if (!label) return;
+    onUpdate?.({
+      componentId: component.id,
+      label,
+      props: { description: description.trim(), collisionPolicy },
+    });
+  };
+  const modelRef = recordValue(component.props.modelRef);
+  return <section className="workspace-inspector__modeling" aria-labelledby={`${formId}-heading`}>
+    <h3 id={`${formId}-heading`}>Model assembly</h3>
+    <p className="workspace-inspector__hint">A transform-only root for editable parts. External-only collision permits intentional overlap between its descendants.</p>
+    <form onSubmit={submit}>
+      <label htmlFor={`${formId}-name`}><span>Display name</span><input id={`${formId}-name`} type="text" maxLength={500} value={displayName} disabled={locked} onChange={(event) => setDisplayName(event.target.value)} /></label>
+      <label htmlFor={`${formId}-description`}><span>Description</span><textarea id={`${formId}-description`} maxLength={2_000} value={description} disabled={locked} onChange={(event) => setDescription(event.target.value)} /></label>
+      <label htmlFor={`${formId}-collision-policy`}><span>Collision policy</span><select id={`${formId}-collision-policy`} value={collisionPolicy} disabled={locked} onChange={(event) => setCollisionPolicy(event.target.value as typeof collisionPolicy)}><option value="external_only">External only</option><option value="all">All descendants</option><option value="none">No assembly collision</option></select></label>
+      <button type="submit" disabled={locked || !displayName.trim()}>Apply model settings</button>
+    </form>
+    {modelRef && <dl className="workspace-inspector__model-ref" aria-label="Published model reference"><div><dt>Model</dt><dd>{stringValue(modelRef.modelId)}</dd></div><div><dt>Version</dt><dd>{stringValue(modelRef.version)}</dd></div><div><dt>Digest</dt><dd>{stringValue(modelRef.digest)}</dd></div></dl>}
+  </section>;
 }
 
 function CollisionInspectorEditor({
@@ -197,15 +718,24 @@ function CollisionInspectorEditor({
 
   const assetId = typeof component.props.assetId === "string" ? component.props.assetId : "";
   const asset = DEFAULT_ASSET_REGISTRY.get(assetId);
+  const parametricBounds = component.type.typeId === "spatial-primitive"
+    ? (() => {
+      try { return deriveParametricBounds(parseParametricPrimitive(component.props.geometry)); }
+      catch { return undefined; }
+    })()
+    : undefined;
   const scale = component.placement.space === "world3d"
     ? component.placement.scale
     : { x: 1, y: 1, z: 1 };
   const parsedMargin = Number(margin);
-  const effectiveSize = shape === "asset_bounds" && asset && Number.isFinite(parsedMargin)
+  const canonicalBounds = parametricBounds
+    ? { width: parametricBounds.size.x, height: parametricBounds.size.y, depth: parametricBounds.size.z }
+    : asset?.bounds;
+  const effectiveSize = shape === "asset_bounds" && canonicalBounds && Number.isFinite(parsedMargin)
     ? {
-      x: asset.bounds.width * Math.abs(scale.x) + parsedMargin * 2,
-      y: asset.bounds.height * Math.abs(scale.y) + parsedMargin * 2,
-      z: asset.bounds.depth * Math.abs(scale.z) + parsedMargin * 2,
+      x: canonicalBounds.width * Math.abs(scale.x) + parsedMargin * 2,
+      y: canonicalBounds.height * Math.abs(scale.y) + parsedMargin * 2,
+      z: canonicalBounds.depth * Math.abs(scale.z) + parsedMargin * 2,
     }
     : undefined;
   const locked = component.locks.props || !onUpdate;
@@ -271,7 +801,7 @@ function CollisionInspectorEditor({
         </label>
         <label htmlFor={`${formId}-shape`}><span>Shape</span>
           <select id={`${formId}-shape`} value={shape} disabled={locked} onChange={(event) => setShape(event.target.value as typeof shape)}>
-            <option value="asset_bounds">Asset bounds</option>
+            <option value="asset_bounds">{component.type.typeId === "spatial-primitive" ? "Geometry bounds" : "Asset bounds"}</option>
             <option value="box">Explicit box</option>
             <option value="compound">Compound boxes</option>
           </select>
@@ -307,7 +837,8 @@ function PhysicsInspectorEditor({
   const formId = useId();
   const parsed = parseSpatialPhysicsConfig(component.props.physics) ?? DEFAULT_SPATIAL_PHYSICS;
   const signature = JSON.stringify(parsed);
-  const supportsMasterSwitch = Number(component.type.version.split(".")[0]) > 1
+  const supportsMasterSwitch = component.type.typeId === "spatial-primitive"
+    || Number(component.type.version.split(".")[0]) > 1
     || (Number(component.type.version.split(".")[0]) === 1 && Number(component.type.version.split(".")[1]) >= 5);
   const [enabled, setEnabled] = useState(parsed.enabled);
   const [bodyType, setBodyType] = useState(parsed.bodyType);

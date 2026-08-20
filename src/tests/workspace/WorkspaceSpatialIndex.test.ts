@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_COMPONENT_REGISTRY } from "../../workspace/components";
 import {
-  buildUniversalSpaceData,
+  buildSemaFrameSpatialGraph,
   findBlockingSpatialCollisions,
   querySpatialPlacement,
 } from "../../workspace/spatial";
 import { WorkspaceStore } from "../../workspace/state";
 import { WorkspaceProjectSerializer } from "../../workspace/persistence";
+import { parametricGeometryDigest, type ParametricPrimitive } from "../../workspace/modeling";
+import type { JSONObject } from "../../workspace/components/componentTypes";
 import { workspaceBatch } from "./helpers";
 
 const transform = (
@@ -54,7 +56,45 @@ function createSpatial(
   };
 }
 
-describe("Universal Space Data spatial index", () => {
+function createAssembly(
+  id: string,
+  collisionPolicy: "external_only" | "all" | "none",
+  options: { parentId?: string; placement?: ReturnType<typeof transform>; modelRef?: Record<string, string> } = {},
+) {
+  return {
+    op: "create_component" as const,
+    op_id: `create_${id}`,
+    id,
+    component_type: DEFAULT_COMPONENT_REGISTRY.ref("model-assembly"),
+    ...(options.parentId ? { parent_id: options.parentId } : {}),
+    placement: options.placement ?? transform(0),
+    props: {
+      collisionPolicy,
+      ...(options.modelRef ? { modelRef: options.modelRef } : {}),
+    },
+  };
+}
+
+function createPrimitive(
+  id: string,
+  geometry: ParametricPrimitive,
+  options: {
+    parentId?: string;
+    placement?: ReturnType<typeof transform>;
+  } = {},
+) {
+  return {
+    op: "create_component" as const,
+    op_id: `create_${id}`,
+    id,
+    component_type: DEFAULT_COMPONENT_REGISTRY.ref("spatial-primitive"),
+    ...(options.parentId ? { parent_id: options.parentId } : {}),
+    placement: options.placement ?? transform(0),
+    props: { geometry: structuredClone(geometry) as unknown as JSONObject },
+  };
+}
+
+describe("SemaFrame Spatial Graph spatial index", () => {
   it("projects deterministic world transforms, prim paths, bounds, and support relations", () => {
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "space", [
@@ -63,10 +103,10 @@ describe("Universal Space Data spatial index", () => {
       createSpatial("CHILD", 1, 0, { parentId: "PARENT" }),
     ]));
 
-    const snapshot = buildUniversalSpaceData(store.getState());
+    const snapshot = buildSemaFrameSpatialGraph(store.getState());
     expect(snapshot).toMatchObject({
-      format: "universal-space-data",
-      version: "2.0",
+      format: "semaframe-spatial-graph",
+      version: "3.0",
       workspaceRevision: 1,
       coordinateSystem: { units: "meters", upAxis: "+Y", forwardAxis: "+Z" },
       stage: {
@@ -117,7 +157,7 @@ describe("Universal Space Data spatial index", () => {
       componentId: "A",
       placement: transform(4),
     })).toMatchObject({ valid: true, candidateId: "A", conflicts: [] });
-    expect(buildUniversalSpaceData(store.getState(), {
+    expect(buildSemaFrameSpatialGraph(store.getState(), {
       mode: "delta",
       sinceRevision: 1,
       changedNodeIds: new Set(),
@@ -187,7 +227,7 @@ describe("Universal Space Data spatial index", () => {
       createSpatial("B", 0),
       createSpatial("C", 4),
     ]));
-    const snapshot = buildUniversalSpaceData(store.getState(), { maxNodes: 1 });
+    const snapshot = buildSemaFrameSpatialGraph(store.getState(), { maxNodes: 1 });
     expect(snapshot.nodes.map((node) => node.id)).toEqual(["A"]);
     expect(snapshot.nodes[0]?.relations).toEqual([]);
     expect(snapshot.collisionConflicts).toEqual([]);
@@ -206,5 +246,149 @@ describe("Universal Space Data spatial index", () => {
     }
     expect(() => new WorkspaceStore({ initialState: { ...state, components } }))
       .toThrowError(expect.objectContaining({ code: "spatial_capacity_exceeded" }));
+  });
+
+  it("projects exact parametric evidence through rotated and scaled assembly transforms", () => {
+    const store = new WorkspaceStore();
+    const geometry = { kind: "box", sizeM: { x: 2, y: 4, z: 6 } } as const;
+    const assemblyPlacement = transform(2, 0, 1, Math.PI / 2);
+    const primitivePlacement = transform(1, 5, 0);
+    store.apply(workspaceBatch(store, "parametric_space", [
+      createStage(),
+      createAssembly("MODEL", "external_only", {
+        placement: assemblyPlacement,
+        modelRef: { modelId: "fixture-a", version: "1.0.0", digest: "fnv1a32:12345678" },
+      }),
+      createPrimitive("PART", geometry, { parentId: "MODEL", placement: primitivePlacement }),
+    ]));
+
+    // Evaluate defensive imported/migrated TRS beyond the authoring policy,
+    // which keeps primitives at identity scale and assemblies uniformly scaled.
+    const components = new Map(store.getState().components);
+    const assembly = components.get("MODEL")!;
+    const primitive = components.get("PART")!;
+    if (assembly.placement.space !== "world3d" || primitive.placement.space !== "world3d") {
+      throw new TypeError("Modeling test components must use world3d placement");
+    }
+    components.set("MODEL", {
+      ...assembly,
+      placement: { ...assembly.placement, scale: { x: 2, y: 1, z: 0.5 } },
+    });
+    components.set("PART", {
+      ...primitive,
+      placement: { ...primitive.placement, scale: { x: 1, y: 2, z: 1 } },
+    });
+    const snapshot = buildSemaFrameSpatialGraph({ ...store.getState(), components });
+    const model = snapshot.nodes.find((node) => node.id === "MODEL")!;
+    const part = snapshot.nodes.find((node) => node.id === "PART")!;
+    expect(part).toMatchObject({
+      nodeKind: "primitive",
+      entityKind: "primitive",
+      primPath: "/World/MODEL/PART",
+      geometry: {
+        kind: "box",
+        digest: parametricGeometryDigest(geometry),
+        parameters: geometry,
+        dimensionsM: { x: 2, y: 4, z: 6 },
+        volumeM3: 48,
+        collider: { shape: "box", sizeM: { x: 2, y: 4, z: 6 } },
+        material: {
+          baseColor: "#68D5FF",
+          metallic: 0,
+          roughness: 0.55,
+          opacity: 1,
+        },
+      },
+      collision: { source: "parametric_bounds" },
+      assemblyAncestry: [{
+        id: "MODEL",
+        collisionPolicy: "external_only",
+        modelRef: { modelId: "fixture-a", version: "1.0.0", digest: "fnv1a32:12345678" },
+      }],
+    });
+    expect(part.assetId).toBeUndefined();
+    expect(part.worldTransform.position.x).toBeCloseTo(2, 8);
+    expect(part.worldTransform.position.y).toBeCloseTo(5, 8);
+    expect(part.worldTransform.position.z).toBeCloseTo(-1, 8);
+    expect(part.worldBounds.size.x).toBeCloseTo(3, 8);
+    expect(part.worldBounds.size.y).toBeCloseTo(8, 8);
+    expect(part.worldBounds.size.z).toBeCloseTo(4, 8);
+    expect(model).toMatchObject({
+      nodeKind: "assembly",
+      entityKind: "assembly",
+      assembly: {
+        collisionPolicy: "external_only",
+        modelRef: { modelId: "fixture-a", version: "1.0.0", digest: "fnv1a32:12345678" },
+      },
+      worldBounds: part.worldBounds,
+    });
+    expect(model.collision).toBeUndefined();
+    expect(buildSemaFrameSpatialGraph({ ...store.getState(), components }, {
+      mode: "delta",
+      changedNodeIds: new Set(["MODEL"]),
+    }).nodes.map((node) => node.id)).toEqual(["MODEL", "PART"]);
+    expect(buildSemaFrameSpatialGraph({ ...store.getState(), components }, {
+      mode: "delta",
+      changedNodeIds: new Set(["PART"]),
+    }).nodes.map((node) => node.id)).toEqual(["MODEL", "PART"]);
+  });
+
+  it("applies external_only, all, and none assembly collision policies deterministically", () => {
+    const box = { kind: "box", sizeM: { x: 1, y: 1, z: 1 } } as const;
+    const externalOnly = new WorkspaceStore();
+    externalOnly.apply(workspaceBatch(externalOnly, "external_only_internal", [
+      createStage(),
+      createAssembly("MODEL", "external_only"),
+      createPrimitive("LEFT", box, { parentId: "MODEL" }),
+      createPrimitive("RIGHT", box, { parentId: "MODEL" }),
+    ]));
+    expect(findBlockingSpatialCollisions(externalOnly.getState())).toEqual([]);
+    expect(() => externalOnly.apply(workspaceBatch(externalOnly, "external_collision", [
+      createPrimitive("OUTSIDE", box),
+    ]))).toThrowError(expect.objectContaining({ code: "spatial_collision" }));
+
+    const all = new WorkspaceStore();
+    expect(() => all.apply(workspaceBatch(all, "all_internal", [
+      createStage(),
+      createAssembly("MODEL", "all"),
+      createPrimitive("LEFT", box, { parentId: "MODEL" }),
+      createPrimitive("RIGHT", box, { parentId: "MODEL" }),
+    ]))).toThrowError(expect.objectContaining({ code: "spatial_collision" }));
+
+    const none = new WorkspaceStore();
+    none.apply(workspaceBatch(none, "none_policy", [
+      createStage(),
+      createAssembly("MODEL", "none"),
+      createPrimitive("INTERNAL", box, { parentId: "MODEL" }),
+      createPrimitive("OUTSIDE", box),
+    ]));
+    const noneSnapshot = buildSemaFrameSpatialGraph(none.getState());
+    expect(noneSnapshot.collisionConflicts).toEqual([]);
+    expect(noneSnapshot.nodes.find((node) => node.id === "INTERNAL")?.collision).toBeDefined();
+  });
+
+  it("preflights closed parametric geometry without an asset identity", () => {
+    const store = new WorkspaceStore();
+    store.apply(workspaceBatch(store, "candidate_target", [
+      createStage(),
+      createPrimitive("TARGET", { kind: "box", sizeM: { x: 1, y: 1, z: 1 } }),
+    ]));
+    const geometry = { kind: "sphere", radiusM: 0.75 } as const;
+    const check = querySpatialPlacement(store.getState(), {
+      geometry,
+      placement: transform(0.5),
+    });
+    expect(check).toMatchObject({
+      valid: false,
+      candidateId: "__SPATIAL_CANDIDATE__",
+      conflicts: [expect.objectContaining({ conflictsWith: "TARGET" })],
+    });
+    expect(store.getState().components.has("__SPATIAL_CANDIDATE__")).toBe(false);
+    expect(() => querySpatialPlacement(store.getState(), {
+      geometry,
+      assetId: "primitive_box",
+      entityKind: "primitive",
+      placement: transform(3),
+    })).toThrow(/cannot also declare assetId or entityKind/u);
   });
 });

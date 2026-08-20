@@ -18,9 +18,22 @@ import { statusLabel } from "./components/StatusPill";
 import type { HybridWorkspaceCanvasHandle } from "./components/workspace/HybridWorkspaceCanvas";
 import type {
   WorkspaceComponentResizeRequest,
+  WorkspaceComponentHierarchyRequest,
+  WorkspaceComponentTransformRequest,
   WorkspaceComponentUpdateRequest,
   WorkspaceComponentVisualEffectsRequest,
 } from "./components/workspace/WorkspaceInspector";
+import type { ComponentCreationOptions } from "./components/workspace/WorkspaceComponentLibrary";
+import { buildWorkspaceComponentCatalog } from "./components/workspace/modelingCatalog";
+import type {
+  WorkspaceModelExportAction,
+  WorkspaceModelHierarchyItem,
+  WorkspaceModelPublishRequest,
+} from "./components/workspace/WorkspaceModelLibrary";
+import {
+  planWorkspaceModelInstance,
+  WorkspaceModelExportGate,
+} from "./components/workspace/workspaceModelActions";
 import type { WorkspaceInlineSourceSaveRequest } from "./components/workspace/WorkspaceSourcePanel";
 import type { AppNotice, WorkspaceHistoryEntry, WorkspaceHistoryStatus } from "./uiTypes";
 import {
@@ -44,10 +57,15 @@ import {
   type WorkspaceOperation,
 } from "../workspace/protocol";
 import {
+  MAX_WORKSPACE_COMPONENTS,
   MAX_WORKSPACE_PROJECT_BYTES,
   WorkspaceStore,
   type WorkspaceState,
 } from "../workspace/state";
+import {
+  localPlacementForWorldTransform,
+  resolveComponentWorldTransform,
+} from "../workspace/state/worldTransform";
 import {
   HOST_FEED_CONNECTOR_TYPE,
   HOST_FEED_CONNECTOR_VERSION,
@@ -90,6 +108,19 @@ import {
   type HostFeedAutomationDescriptor,
 } from "./hostFeedAutomationConsent";
 import { buildPhysicsValidationReport } from "../workspace/physics";
+import { buildSemaFrameSpatialGraph } from "../workspace/spatial";
+import {
+  deriveParametricBounds,
+  exportModelDefinitionCsgArtifactInWorker,
+  exportModelDefinitionToStep,
+  exportParametricModelToUsda,
+  modelDefinitionCsgCompatibility,
+  modelDefinitionStepCompatibility,
+  modelDefinitionRef,
+  modelDefinitionToOpenUsdDocument,
+  parseParametricPrimitive,
+  type ModelDefinition,
+} from "../workspace/modeling";
 import { historyEntriesForStore } from "./workspaceHistory";
 import { safeStorageGet, safeStorageRemove, safeStorageSet } from "./browserStorage";
 
@@ -200,6 +231,34 @@ function downloadJson(name: string, contents: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function downloadUsda(name: string, contents: string): void {
+  downloadArtifact(name, "usda", [contents], "text/plain;charset=utf-8");
+}
+
+function downloadArtifact(
+  name: string,
+  extension: string,
+  contents: readonly BlobPart[],
+  type: string,
+): void {
+  const blob = new Blob([...contents], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${name.trim().replace(/[^a-z0-9_.-]+/gi, "-").replace(/^-|-$/g, "") || "semaframe-model"}.${extension}`;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function binaryBlobPart(contents: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(contents.byteLength);
+  copy.set(contents);
+  return copy.buffer;
+}
+
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : "An unexpected error occurred.";
 }
@@ -270,6 +329,7 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const workspaceUnsubscribeRef = useRef<(() => void) | null>(null);
   const workspaceSerializerRef = useRef(new WorkspaceProjectSerializer(DEFAULT_COMPONENT_REGISTRY));
+  const workspaceModelExportGateRef = useRef(new WorkspaceModelExportGate());
   const createdAtRef = useRef(new Date().toISOString());
   const agentBrowserInstanceIdRef = useRef(stableAgentBrowserInstanceId());
   const [workspace, setWorkspace] = useState<Readonly<WorkspaceState>>(workspaceStoreRef.current.getState());
@@ -695,7 +755,7 @@ export default function App() {
     return result;
   }, []);
 
-  const createWorkspaceComponent = useCallback((typeId: string) => {
+  const createWorkspaceComponent = useCallback((typeId: string, options?: ComponentCreationOptions) => {
     try {
       const store = workspaceStoreRef.current;
       if (!store) throw new Error("The component workspace is not ready.");
@@ -706,6 +766,10 @@ export default function App() {
       );
       if (typeId === "stage-3d" && hasStage) throw new Error("This workspace already owns its 3D stage.");
       const placement = defaultWorkspacePlacement(manifest, store.getState().components.size);
+      if (typeId === "spatial-primitive" && placement.space === "world3d" && options?.props?.geometry) {
+        const bounds = deriveParametricBounds(parseParametricPrimitive(options.props.geometry));
+        placement.position.y = -bounds.min.y;
+      }
       if (typeId !== "stage-3d" && (placement.space === "world3d"
         || placement.space === "surface" || placement.space === "billboard") && !hasStage) {
         throw new Error("Add a 3D Stage before creating components in the 3D world.");
@@ -717,12 +781,418 @@ export default function App() {
         op_id: uid("op_create"),
         id,
         component_type: { typeId: manifest.typeId, version: manifest.version, digest: manifest.digest },
-        label: manifest.displayName,
+        label: options?.label ?? manifest.displayName,
+        ...(options?.props ? { props: structuredClone(options.props) } : {}),
         placement,
-      }], `Added ${manifest.displayName}`);
+      }], `Added ${options?.label ?? manifest.displayName}`);
       setSelectedComponentId(id);
     } catch (error) {
       notice(friendlyError(error), "error");
+    }
+  }, [applyWorkspaceOperations, notice]);
+
+  const createWorkspaceModelAssembly = useCallback((componentId: string) => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const component = store.getState().components.get(componentId);
+      if (!component) throw new Error(`Unknown component ${componentId}.`);
+      if (component.placement.space !== "world3d" || component.type.typeId === "stage-3d") {
+        throw new Error("Only a 3D object can be wrapped in a model assembly.");
+      }
+      if (component.locks.placement) throw new Error(`${component.label} placement is locked.`);
+      const assembly = store.getComponentManifest("model-assembly");
+      if (!assembly) throw new Error("The built-in model assembly is unavailable.");
+      const [assemblyId] = store.reserveComponentIds(1);
+      if (!assemblyId) throw new Error("The workspace could not reserve an assembly ID.");
+      applyWorkspaceOperations([{
+        op: "create_component",
+        op_id: uid("op_create_assembly"),
+        id: assemblyId,
+        component_type: { typeId: assembly.typeId, version: assembly.version, digest: assembly.digest },
+        label: `${component.label} model`,
+        props: { description: `Editable assembly containing ${component.label}.`, collisionPolicy: "external_only" },
+        placement: {
+          space: "world3d",
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        ...(component.parentId ? { parent_id: component.parentId } : {}),
+        tags: ["model", "assembly"],
+      }, {
+        op: "attach_component",
+        op_id: uid("op_attach_assembly_part"),
+        child_id: component.id,
+        parent_id: assemblyId,
+        transform_mode: "preserve_world",
+      }], `Created model assembly for ${component.label}`);
+      setSelectedComponentId(assemblyId);
+    } catch (error) {
+      notice(friendlyError(error), "error");
+    }
+  }, [applyWorkspaceOperations, notice]);
+
+  const transformWorkspaceComponent = useCallback((request: WorkspaceComponentTransformRequest): void => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const state = store.getState();
+      const component = state.components.get(request.componentId);
+      if (!component) throw new Error(`Unknown component ${request.componentId}.`);
+      if (component.placement.space !== "world3d") throw new Error(`${component.label} does not use a 3D world transform.`);
+      if (component.locks.placement) throw new Error(`${component.label} placement is locked.`);
+
+      // Treat the requested transform as a root pose, then derive the exact
+      // local placement required beneath the component's current parent.
+      const desiredComponent = structuredClone(component);
+      delete desiredComponent.parentId;
+      desiredComponent.placement = structuredClone(request.worldPlacement);
+      const desiredWorld = resolveComponentWorldTransform(
+        new Map([[desiredComponent.id, desiredComponent]]),
+        desiredComponent.id,
+      );
+      const parentWorld = component.parentId
+        ? resolveComponentWorldTransform(state.components, component.parentId)
+        : undefined;
+      const localPlacement = localPlacementForWorldTransform(desiredWorld, parentWorld);
+      applyWorkspaceOperations([{
+        op: "place_component",
+        op_id: uid("op_transform_model_component"),
+        id: component.id,
+        placement: localPlacement,
+      }], `Positioned ${component.label} exactly`);
+    } catch (error) {
+      notice(friendlyError(error), "error");
+    }
+  }, [applyWorkspaceOperations, notice]);
+
+  const reparentWorkspaceComponent = useCallback((request: WorkspaceComponentHierarchyRequest): boolean => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const state = store.getState();
+      const component = state.components.get(request.componentId);
+      if (!component) throw new Error(`Unknown component ${request.componentId}.`);
+      if (component.placement.space !== "world3d") throw new Error(`${component.label} is not a 3D component.`);
+      if (component.locks.placement) throw new Error(`${component.label} placement is locked.`);
+      if (request.parentId === component.parentId) return true;
+      if (request.parentId) {
+        const parent = state.components.get(request.parentId);
+        if (!parent || parent.type.typeId !== "model-assembly" || parent.placement.space !== "world3d") {
+          throw new Error("Choose an existing 3D model assembly as the parent.");
+        }
+        applyWorkspaceOperations([{
+          op: "attach_component",
+          op_id: uid("op_attach_model_component"),
+          child_id: component.id,
+          parent_id: parent.id,
+          transform_mode: "preserve_world",
+        }], `Attached ${component.label} to ${parent.label} without moving it`);
+      } else if (component.parentId) {
+        applyWorkspaceOperations([{
+          op: "detach_component",
+          op_id: uid("op_detach_model_component"),
+          child_id: component.id,
+          transform_mode: "preserve_world",
+        }], `Detached ${component.label} without moving it`);
+      }
+      return true;
+    } catch (error) {
+      notice(friendlyError(error), "error");
+      return false;
+    }
+  }, [applyWorkspaceOperations, notice]);
+
+  const deleteWorkspaceComponent = useCallback((componentId: string): boolean => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const component = store.getState().components.get(componentId);
+      if (!component) throw new Error(`Unknown component ${componentId}.`);
+      if (component.type.typeId === "stage-3d") throw new Error("Delete the stage through the project lifecycle, not the model editor.");
+      if (component.locks.deletion) throw new Error(`${component.label} deletion is locked.`);
+      applyWorkspaceOperations([{
+        op: "delete_component",
+        op_id: uid("op_delete_model_component"),
+        id: component.id,
+        policy: "cascade",
+        confirm: true,
+      }], `Deleted ${component.label}${component.props.modelRef ? " instance" : ""}`);
+      setSelectedComponentId(null);
+      return true;
+    } catch (error) {
+      notice(friendlyError(error), "error");
+      return false;
+    }
+  }, [applyWorkspaceOperations, notice]);
+
+  const publishWorkspaceModel = useCallback((request: WorkspaceModelPublishRequest): boolean => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const root = store.getState().components.get(request.rootId);
+      if (!root || root.type.typeId !== "model-assembly") {
+        throw new Error("Select an existing model assembly before publishing.");
+      }
+      applyWorkspaceOperations([{
+        op: "publish_model",
+        op_id: uid("op_publish_model"),
+        model_id: request.modelId,
+        version: request.version,
+        display_name: request.displayName,
+        root_id: request.rootId,
+      }], `Published ${request.displayName} ${request.version}`);
+      return true;
+    } catch (error) {
+      notice(friendlyError(error), "error");
+      return false;
+    }
+  }, [applyWorkspaceOperations, notice]);
+
+  const instantiateWorkspaceModel = useCallback((requested: ModelDefinition): boolean => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const state = store.getState();
+      const key = `${requested.modelId}@${requested.version}`;
+      const definition = state.modelDefinitions.get(key);
+      if (!definition || definition.digest !== requested.digest) {
+        throw new Error(`${key} is no longer the published model shown in this panel.`);
+      }
+      if (![...state.components.values()].some((component) => component.type.typeId === "stage-3d")) {
+        throw new Error("Add a 3D Stage before instantiating a model.");
+      }
+      if (state.components.size + definition.nodes.length > MAX_WORKSPACE_COMPONENTS) {
+        throw new Error(`This model would exceed the ${MAX_WORKSPACE_COMPONENTS}-component workspace limit.`);
+      }
+      const reservedIds = store.reserveComponentIds(definition.nodes.length);
+      const plan = planWorkspaceModelInstance(state, definition, reservedIds);
+      applyWorkspaceOperations([{
+        op: "instantiate_model",
+        op_id: uid("op_instantiate_model"),
+        model: modelDefinitionRef(definition),
+        id_map: plan.idMap,
+        root_placement: plan.rootPlacement,
+      }], `Added ${definition.displayName} instance`);
+      setSelectedComponentId(plan.rootComponentId);
+      return true;
+    } catch (error) {
+      notice(friendlyError(error), "error");
+      return false;
+    }
+  }, [applyWorkspaceOperations, notice]);
+
+  const createParametricWorkbench = useCallback((): void => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const state = store.getState();
+      const existing = state.modelDefinitions.get("com.semaframe.parametric-workbench@1.0.0");
+      if (existing) {
+        instantiateWorkspaceModel(existing);
+        return;
+      }
+      const stageManifest = store.getComponentManifest("stage-3d");
+      const assemblyManifest = store.getComponentManifest("model-assembly");
+      const primitiveManifest = store.getComponentManifest("spatial-primitive");
+      if (!stageManifest || !assemblyManifest || !primitiveManifest) {
+        throw new Error("The built-in modeling manifests are unavailable.");
+      }
+      const hasStage = [...state.components.values()].some((component) => component.type.typeId === "stage-3d");
+      const requiredIds = hasStage ? 5 : 6;
+      if (state.components.size + requiredIds > MAX_WORKSPACE_COMPONENTS) {
+        throw new Error(`The workbench would exceed the ${MAX_WORKSPACE_COMPONENTS}-component workspace limit.`);
+      }
+      const ids = store.reserveComponentIds(requiredIds);
+      let cursor = 0;
+      const stageId = hasStage ? undefined : ids[cursor++];
+      const assemblyId = ids[cursor++];
+      const baseId = ids[cursor++];
+      const leftPostId = ids[cursor++];
+      const rightPostId = ids[cursor++];
+      const beamId = ids[cursor++];
+      if (!assemblyId || !baseId || !leftPostId || !rightPostId || !beamId || (!hasStage && !stageId)) {
+        throw new Error("The workspace could not reserve the complete model ID set.");
+      }
+      const existingNodes = buildSemaFrameSpatialGraph(state, { maxNodes: 2_000 }).nodes;
+      const rootX = existingNodes.length
+        ? Math.max(...existingNodes.map((node) => node.worldBounds.max.x)) + 2
+        : 0;
+      const world = (x: number, y: number, z: number) => ({
+        space: "world3d" as const,
+        position: { x, y, z },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      });
+      const operations: WorkspaceOperation[] = [];
+      if (stageId) operations.push({
+        op: "create_component",
+        op_id: uid("op_model_stage"),
+        id: stageId,
+        component_type: { typeId: stageManifest.typeId, version: stageManifest.version, digest: stageManifest.digest },
+        label: "Modeling stage",
+        placement: world(0, 0, 0),
+      });
+      operations.push({
+        op: "create_component",
+        op_id: uid("op_model_assembly"),
+        id: assemblyId,
+        component_type: { typeId: assemblyManifest.typeId, version: assemblyManifest.version, digest: assemblyManifest.digest },
+        label: "Parametric workbench",
+        props: {
+          description: "Exact four-part workbench demonstrating assembly, collision, reuse, and solid export.",
+          collisionPolicy: "external_only",
+        },
+        placement: world(rootX, 0, 0),
+        tags: ["model", "example", "workbench"],
+      });
+      const primitive = (
+        id: string,
+        label: string,
+        geometry: JSONObject,
+        x: number,
+        y: number,
+      ): WorkspaceOperation => ({
+        op: "create_component",
+        op_id: uid("op_model_part"),
+        id,
+        component_type: { typeId: primitiveManifest.typeId, version: primitiveManifest.version, digest: primitiveManifest.digest },
+        label,
+        props: { geometry },
+        parent_id: assemblyId,
+        placement: world(x, y, 0),
+        tags: ["model-part", "exact-si"],
+      });
+      operations.push(
+        primitive(baseId, "Workbench base", { kind: "box", sizeM: { x: 3, y: 0.2, z: 1.4 } }, 0, 0.1),
+        primitive(leftPostId, "Left post", { kind: "cylinder", radiusM: 0.12, heightM: 1.4, axis: "y" }, -1.25, 0.9),
+        primitive(rightPostId, "Right post", { kind: "cylinder", radiusM: 0.12, heightM: 1.4, axis: "y" }, 1.25, 0.9),
+        primitive(beamId, "Workbench beam", { kind: "box", sizeM: { x: 3, y: 0.2, z: 1.4 } }, 0, 1.7),
+        {
+          op: "publish_model",
+          op_id: uid("op_publish_example_model"),
+          model_id: "com.semaframe.parametric-workbench",
+          version: "1.0.0",
+          display_name: "Parametric workbench",
+          root_id: assemblyId,
+        },
+      );
+      applyWorkspaceOperations(operations, "Created and published the parametric workbench");
+      setSelectedComponentId(assemblyId);
+    } catch (error) {
+      notice(friendlyError(error), "error");
+    }
+  }, [applyWorkspaceOperations, instantiateWorkspaceModel, notice]);
+
+  const exportWorkspaceModel = useCallback((requested: ModelDefinition): boolean => {
+    try {
+      const state = workspaceStoreRef.current?.getState();
+      const key = `${requested.modelId}@${requested.version}`;
+      const definition = state?.modelDefinitions.get(key);
+      if (!definition || definition.digest !== requested.digest) {
+        throw new Error(`${key} is no longer the published model shown in this panel.`);
+      }
+      const exported = exportParametricModelToUsda(modelDefinitionToOpenUsdDocument(definition));
+      downloadUsda(`${definition.modelId}-${definition.version}`, exported.usda);
+      notice(`Exported ${definition.displayName} ${definition.version} as deterministic OpenUSD USDA.`, "success");
+      return true;
+    } catch (error) {
+      notice(`Couldn’t export this model: ${friendlyError(error)}`, "error");
+      return false;
+    }
+  }, [notice]);
+
+  const exportWorkspaceModelMesh = useCallback(async (
+    requested: ModelDefinition,
+    format: "obj" | "stl",
+  ): Promise<boolean> => {
+    const result = await workspaceModelExportGateRef.current.run(
+      `${format.toUpperCase()} export`,
+      async () => {
+        try {
+          const key = `${requested.modelId}@${requested.version}`;
+          const definition = workspaceStoreRef.current?.getState().modelDefinitions.get(key);
+          if (!definition || definition.digest !== requested.digest) {
+            throw new Error(`${key} is no longer the published model shown in this panel.`);
+          }
+          const exported = await exportModelDefinitionCsgArtifactInWorker(definition, format);
+          const stem = `${definition.modelId}-${definition.version}`;
+          if (exported.format === "obj") {
+            downloadArtifact(stem, "obj", [exported.obj], "text/plain;charset=utf-8");
+          } else {
+            downloadArtifact(stem, "stl", [binaryBlobPart(exported.stl)], "model/stl");
+          }
+          notice(
+            `Exported ${definition.displayName} as ${format.toUpperCase()} · ${exported.evaluation.mesh.triangleCount.toLocaleString()} triangles · ${exported.evaluation.volumeM3.toPrecision(6)} m³.`,
+            "success",
+          );
+          return true;
+        } catch (error) {
+          notice(`Couldn’t export this solid: ${friendlyError(error)}`, "error");
+          return false;
+        }
+      },
+    );
+    if (!result.started) {
+      notice(`${result.activeLabel} is already running. Wait for it to finish before starting another solid export.`, "warning");
+      return false;
+    }
+    return result.value;
+  }, [notice]);
+
+  const exportWorkspaceModelStep = useCallback(async (requested: ModelDefinition): Promise<boolean> => {
+    const result = await workspaceModelExportGateRef.current.run("STEP export", async () => {
+      try {
+        const key = `${requested.modelId}@${requested.version}`;
+        const definition = workspaceStoreRef.current?.getState().modelDefinitions.get(key);
+        if (!definition || definition.digest !== requested.digest) {
+          throw new Error(`${key} is no longer the published model shown in this panel.`);
+        }
+        const compatibility = modelDefinitionStepCompatibility(definition);
+        if (!compatibility.supported) throw new Error(compatibility.reason ?? "This model is outside the STEP v1 subset.");
+        const exported = await exportModelDefinitionToStep(definition);
+        downloadArtifact(
+          `${definition.modelId}-${definition.version}`,
+          "step",
+          [exported.step.text],
+          exported.step.mimeType,
+        );
+        notice(
+          `Exported ${definition.displayName} as AP242 STEP · ${exported.properties.volumeM3.toPrecision(6)} m³.`,
+          "success",
+        );
+        return true;
+      } catch (error) {
+        notice(`Couldn’t export STEP: ${friendlyError(error)}`, "error");
+        return false;
+      }
+    });
+    if (!result.started) {
+      notice(`${result.activeLabel} is already running. Wait for it to finish before starting STEP export.`, "warning");
+      return false;
+    }
+    return result.value;
+  }, [notice]);
+
+  const deleteWorkspaceModel = useCallback((requested: ModelDefinition): boolean => {
+    try {
+      const state = workspaceStoreRef.current?.getState();
+      const key = `${requested.modelId}@${requested.version}`;
+      const definition = state?.modelDefinitions.get(key);
+      if (!definition || definition.digest !== requested.digest) {
+        throw new Error(`${key} is no longer the published model shown in this panel.`);
+      }
+      applyWorkspaceOperations([{
+        op: "delete_model_definition",
+        op_id: uid("op_delete_model"),
+        model: modelDefinitionRef(definition),
+        confirm: true,
+      }], `Deleted model definition ${key}`);
+      return true;
+    } catch (error) {
+      notice(friendlyError(error), "error");
+      return false;
     }
   }, [applyWorkspaceOperations, notice]);
 
@@ -1789,7 +2259,8 @@ export default function App() {
   const selectedWorkspaceComponent = selectedComponentId
     ? workspaceSnapshot.components.find((component) => component.id === selectedComponentId)
     : undefined;
-  const hasSelectedSpatialComponent = selectedWorkspaceComponent?.type.typeId === "spatial-entity";
+  const hasSelectedSpatialComponent = selectedWorkspaceComponent?.placement.space === "world3d"
+    && Boolean(selectedWorkspaceComponent.props.physics);
   const workspacePhysicsReport = useMemo(
     () => hasSelectedSpatialComponent ? buildPhysicsValidationReport(workspace) : undefined,
     [hasSelectedSpatialComponent, workspace],
@@ -1800,6 +2271,93 @@ export default function App() {
   const selectedWorkspaceResizePolicy = selectedWorkspaceComponent
     ? workspaceResizePolicy(selectedWorkspaceComponent)
     : undefined;
+  const selectedWorkspaceWorldPlacement = useMemo(() => {
+    if (!selectedComponentId) return undefined;
+    const component = workspace.components.get(selectedComponentId);
+    if (!component || component.placement.space !== "world3d") return undefined;
+    try {
+      return localPlacementForWorldTransform(resolveComponentWorldTransform(workspace.components, component.id));
+    } catch {
+      return undefined;
+    }
+  }, [selectedComponentId, workspace]);
+  const workspaceAssemblyOptions = useMemo(() => {
+    const wouldCreateCycle = (candidateId: string): boolean => {
+      if (!selectedComponentId) return false;
+      let current = workspace.components.get(candidateId);
+      const visited = new Set<string>();
+      while (current) {
+        if (current.id === selectedComponentId) return true;
+        if (!current.parentId || visited.has(current.id)) return false;
+        visited.add(current.id);
+        current = workspace.components.get(current.parentId);
+      }
+      return false;
+    };
+    return [...workspace.components.values()]
+      .filter((component) => component.type.typeId === "model-assembly"
+        && component.placement.space === "world3d"
+        && component.id !== selectedComponentId
+        && !wouldCreateCycle(component.id))
+      .map((component) => ({ id: component.id, label: component.label }))
+      .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
+  }, [selectedComponentId, workspace]);
+  const selectedWorkspaceDescendantCount = useMemo(() => {
+    if (!selectedComponentId) return 0;
+    return [...workspace.components.values()].filter((candidate) => {
+      let parentId = candidate.parentId;
+      const visited = new Set<string>();
+      while (parentId && !visited.has(parentId)) {
+        if (parentId === selectedComponentId) return true;
+        visited.add(parentId);
+        parentId = workspace.components.get(parentId)?.parentId;
+      }
+      return false;
+    }).length;
+  }, [selectedComponentId, workspace]);
+  const workspaceModelHierarchyItems = useMemo<readonly WorkspaceModelHierarchyItem[]>(() => {
+    const included = new Map([...workspace.components].filter(([, component]) =>
+      component.type.typeId === "stage-3d"
+      || component.type.typeId === "model-assembly"
+      || component.type.typeId === "spatial-primitive"
+      || component.type.typeId === "spatial-entity"));
+    const children = new Map<string, string[]>();
+    for (const component of included.values()) {
+      if (!component.parentId || !included.has(component.parentId)) continue;
+      const list = children.get(component.parentId) ?? [];
+      list.push(component.id);
+      children.set(component.parentId, list);
+    }
+    const compareIds = (leftId: string, rightId: string) => {
+      const left = included.get(leftId)!;
+      const right = included.get(rightId)!;
+      return left.label.localeCompare(right.label) || left.id.localeCompare(right.id);
+    };
+    for (const list of children.values()) list.sort(compareIds);
+    const items: WorkspaceModelHierarchyItem[] = [];
+    const visited = new Set<string>();
+    const visit = (id: string, depth: number) => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      const component = included.get(id);
+      if (!component) return;
+      items.push({
+        id: component.id,
+        label: component.label,
+        typeId: component.type.typeId,
+        ...(component.parentId ? { parentId: component.parentId } : {}),
+        depth,
+      });
+      for (const childId of children.get(id) ?? []) visit(childId, depth + 1);
+    };
+    const roots = [...included.values()]
+      .filter((component) => !component.parentId || !included.has(component.parentId))
+      .map((component) => component.id)
+      .sort(compareIds);
+    for (const id of roots) visit(id, 0);
+    for (const id of [...included.keys()].sort(compareIds)) visit(id, 0);
+    return items;
+  }, [workspace]);
   const selectedWorkspaceManifestUpgrade = selectedWorkspaceComponent
     ? (() => {
       const current = workspaceStoreRef.current?.getComponentManifest(selectedWorkspaceComponent.type.typeId);
@@ -1809,23 +2367,42 @@ export default function App() {
       return { fromVersion: selectedWorkspaceComponent.type.version, toVersion: current.version };
     })()
     : undefined;
-  const workspaceCatalog = useMemo(() => workspaceStoreRef.current?.getComponentCatalog()
-    .filter((manifest) => manifest.typeId !== "stage-3d"
-      || !workspaceSnapshot.components.some((component) => component.type.typeId === "stage-3d"))
-    .map((manifest) => ({
-      typeId: manifest.typeId,
-      displayName: manifest.displayName,
-      description: manifest.typeId === "video-player"
-        ? "Play YouTube, Vimeo, or direct HTTPS media"
-        : manifest.typeId === "web-panel"
-          ? "Embed an HTTPS website after explicit approval"
-          : manifest.typeId === "data-panel"
-            ? "Display JSON, CSV, RSS, or Atom feed data"
-            : `${manifest.allowedPlacements.join(" · ")} · ${manifest.trustTier}`,
-      placements: manifest.allowedPlacements,
-      trustTier: manifest.trustTier,
-      configureOnCreate: manifest.typeId === "video-player" || manifest.typeId === "web-panel",
-    })) ?? [], [workspaceSnapshot]);
+  const workspaceCatalog = useMemo(() => buildWorkspaceComponentCatalog(
+    workspaceStoreRef.current?.getComponentCatalog() ?? [],
+    {
+      hasStage: workspaceSnapshot.components.some((component) => component.type.typeId === "stage-3d"),
+    },
+  ), [workspaceSnapshot]);
+  const workspaceModelDefinitions = useMemo(() => [...workspace.modelDefinitions.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName)
+      || left.version.localeCompare(right.version)
+      || left.modelId.localeCompare(right.modelId)), [workspace.modelDefinitions]);
+  const workspaceModelExportActions = useMemo<readonly WorkspaceModelExportAction[]>(() => [{
+    id: "openusd-usda",
+    label: "USDA",
+    onExport: exportWorkspaceModel,
+  }, {
+    id: "solid-stl",
+    label: "STL",
+    onExport: (definition) => exportWorkspaceModelMesh(definition, "stl"),
+    isAvailable: (definition) => modelDefinitionCsgCompatibility(definition).supported,
+    unavailableReason: (definition) => modelDefinitionCsgCompatibility(definition).reason
+      ?? "This model is outside the STL export subset.",
+  }, {
+    id: "solid-obj",
+    label: "OBJ",
+    onExport: (definition) => exportWorkspaceModelMesh(definition, "obj"),
+    isAvailable: (definition) => modelDefinitionCsgCompatibility(definition).supported,
+    unavailableReason: (definition) => modelDefinitionCsgCompatibility(definition).reason
+      ?? "This model is outside the OBJ export subset.",
+  }, {
+    id: "cad-step",
+    label: "STEP",
+    onExport: exportWorkspaceModelStep,
+    isAvailable: (definition) => modelDefinitionStepCompatibility(definition).supported,
+    unavailableReason: (definition) => modelDefinitionStepCompatibility(definition).reason
+      ?? "This model is outside the STEP v1 subset.",
+  }], [exportWorkspaceModel, exportWorkspaceModelMesh, exportWorkspaceModelStep]);
   const bindingDiagnostics = workspaceSnapshot.bindingDiagnostics ?? [];
   const workspaceBindingTargets = useMemo(() => workspaceSnapshot.components.flatMap((component) => {
     const manifest = workspaceStoreRef.current?.getComponentManifest(component.type.typeId, component.type.version);
@@ -2004,6 +2581,21 @@ export default function App() {
           onVisualEffects={commitWorkspaceVisualEffects}
           manifestUpgrade={selectedWorkspaceManifestUpgrade}
           onUpgradeManifest={upgradeWorkspaceComponentManifest}
+          onCreateAssembly={createWorkspaceModelAssembly}
+          selectedWorldPlacement={selectedWorkspaceWorldPlacement}
+          assemblyOptions={workspaceAssemblyOptions}
+          onTransform={transformWorkspaceComponent}
+          onReparent={reparentWorkspaceComponent}
+          onSelectComponent={setSelectedComponentId}
+          selectedDescendantCount={selectedWorkspaceDescendantCount}
+          onDeleteComponent={deleteWorkspaceComponent}
+          modelDefinitions={workspaceModelDefinitions}
+          modelHierarchyItems={workspaceModelHierarchyItems}
+          onPublishModel={publishWorkspaceModel}
+          onInstantiateModel={instantiateWorkspaceModel}
+          modelExportActions={workspaceModelExportActions}
+          onDeleteModel={deleteWorkspaceModel}
+          onCreateModelExample={createParametricWorkbench}
           onCreateShowcase={createMixedWorkspaceShowcase}
           onSaveInlineSource={saveWorkspaceInlineSource}
           onRefreshSource={(resourceId) => void refreshWorkspaceHostFeed(resourceId)}

@@ -1,14 +1,22 @@
-import { Boxes, Database, PanelRightClose, SlidersHorizontal, TimerReset } from "lucide-react";
+import { Boxes, Database, PackageOpen, PanelRightClose, SlidersHorizontal, TimerReset } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { WorkspaceRenderComponent } from "../../../workspace/renderer";
 import type { ComponentResizePolicy } from "../../../workspace/components";
+import type { World3DPlacement } from "../../../workspace/components";
 import type { ComponentActionRequest } from "../../../workspace/renderer/contracts";
 import type { PhysicsBodyReport } from "../../../workspace/physics";
-import { WorkspaceComponentLibrary, type ComponentLibraryItem } from "./WorkspaceComponentLibrary";
+import {
+  WorkspaceComponentLibrary,
+  type ComponentCreationOptions,
+  type ComponentLibraryItem,
+} from "./WorkspaceComponentLibrary";
 import {
   WorkspaceInspector,
+  type WorkspaceAssemblyOption,
   type WorkspaceComponentManifestUpgrade,
+  type WorkspaceComponentHierarchyRequest,
   type WorkspaceComponentResizeRequest,
+  type WorkspaceComponentTransformRequest,
   type WorkspaceComponentUpdateRequest,
   type WorkspaceComponentVisualEffectsRequest,
 } from "./WorkspaceInspector";
@@ -24,8 +32,15 @@ import {
   type WorkspaceSourceBindingTarget,
   type WorkspaceSourceItem,
 } from "./WorkspaceSourcePanel";
+import type { ModelDefinition } from "../../../workspace/modeling";
+import {
+  WorkspaceModelLibrary,
+  type WorkspaceModelExportAction,
+  type WorkspaceModelHierarchyItem,
+  type WorkspaceModelPublishRequest,
+} from "./WorkspaceModelLibrary";
 
-type WorkspacePanel = "library" | "inspector" | "sources" | null;
+type WorkspacePanel = "library" | "inspector" | "models" | "sources" | null;
 
 export type WorkspaceChromeProps = Readonly<{
   catalog: readonly ComponentLibraryItem[];
@@ -35,7 +50,7 @@ export type WorkspaceChromeProps = Readonly<{
   bindingTargets?: readonly WorkspaceSourceBindingTarget[];
   bindingDiagnostics?: readonly ResourceBindingDiagnostic[];
   disabled?: boolean;
-  onCreate: (typeId: string) => void;
+  onCreate: (typeId: string, options?: ComponentCreationOptions) => void;
   onAction: (request: ComponentActionRequest) => void;
   onUpdate: (request: WorkspaceComponentUpdateRequest) => void;
   resizePolicy?: ComponentResizePolicy;
@@ -43,6 +58,21 @@ export type WorkspaceChromeProps = Readonly<{
   onVisualEffects?: (request: WorkspaceComponentVisualEffectsRequest) => void;
   manifestUpgrade?: WorkspaceComponentManifestUpgrade;
   onUpgradeManifest?: (componentId: string) => void;
+  onCreateAssembly?: (componentId: string) => void;
+  selectedWorldPlacement?: World3DPlacement;
+  assemblyOptions?: readonly WorkspaceAssemblyOption[];
+  onTransform?: (request: WorkspaceComponentTransformRequest) => void;
+  onReparent?: (request: WorkspaceComponentHierarchyRequest) => boolean | void;
+  onSelectComponent?: (componentId: string) => void;
+  selectedDescendantCount?: number;
+  onDeleteComponent?: (componentId: string) => boolean | void;
+  modelDefinitions?: readonly ModelDefinition[];
+  modelHierarchyItems?: readonly WorkspaceModelHierarchyItem[];
+  onPublishModel?: (request: WorkspaceModelPublishRequest) => boolean | void;
+  onInstantiateModel?: (definition: ModelDefinition) => boolean | void;
+  modelExportActions?: readonly WorkspaceModelExportAction[];
+  onDeleteModel?: (definition: ModelDefinition) => boolean | void;
+  onCreateModelExample?: () => void;
   onCreateShowcase: () => void;
   onSaveInlineSource?: (request: WorkspaceInlineSourceSaveRequest) => boolean;
   onRefreshSource?: (sourceId: string) => void;
@@ -71,6 +101,21 @@ export function WorkspaceChrome({
   onVisualEffects,
   manifestUpgrade,
   onUpgradeManifest,
+  onCreateAssembly,
+  selectedWorldPlacement,
+  assemblyOptions,
+  onTransform,
+  onReparent,
+  onSelectComponent,
+  selectedDescendantCount,
+  onDeleteComponent,
+  modelDefinitions = [],
+  modelHierarchyItems,
+  onPublishModel,
+  onInstantiateModel,
+  modelExportActions,
+  onDeleteModel,
+  onCreateModelExample,
   onCreateShowcase,
   onSaveInlineSource,
   onRefreshSource,
@@ -89,10 +134,15 @@ export function WorkspaceChrome({
   useEffect(() => {
     if (sourcesOnly && panel && panel !== "sources") setPanel(null);
   }, [panel, sourcesOnly]);
+  useEffect(() => {
+    if (!panelRef.current) return;
+    panelRef.current.scrollTop = 0;
+    panelRef.current.scrollLeft = 0;
+  }, [panel]);
 
   const toggle = (next: Exclude<WorkspacePanel, null>) => setPanel((current) => current === next ? null : next);
-  const createFromLibrary = (typeId: string) => {
-    onCreate(typeId);
+  const createFromLibrary = (typeId: string, options?: ComponentCreationOptions) => {
+    onCreate(typeId, options);
     if (catalog.find((item) => item.typeId === typeId)?.configureOnCreate) setPanel("inspector");
   };
   return (
@@ -104,6 +154,9 @@ export function WorkspaceChrome({
         {!sourcesOnly && <button type="button" disabled={disabled || !selected} aria-expanded={panel === "inspector"} aria-controls="workspace-tool-panel" onClick={() => toggle("inspector")}>
           <SlidersHorizontal size={17} /><span>Inspector</span>
         </button>}
+        {!sourcesOnly && <button type="button" disabled={disabled} aria-expanded={panel === "models"} aria-controls="workspace-tool-panel" onClick={() => toggle("models")}>
+          <PackageOpen size={17} /><span>Models</span>
+        </button>}
         <button type="button" disabled={disabled} aria-expanded={panel === "sources"} aria-controls="workspace-tool-panel" onClick={() => toggle("sources")}>
           <Database size={17} /><span>Sources</span>
         </button>
@@ -112,35 +165,68 @@ export function WorkspaceChrome({
         </button>}
       </nav>
       {panel && (
-        <div ref={panelRef} id="workspace-tool-panel" className="workspace-tool-panel" role="region" aria-label={`${panel} panel`}>
-          <button className="workspace-tool-panel__close" type="button" aria-label={`Close ${panel} panel`} onClick={() => setPanel(null)}>
-            <PanelRightClose size={17} />
-          </button>
-          {panel === "library" && <WorkspaceComponentLibrary items={catalog} onCreate={createFromLibrary} />}
-          {panel === "inspector" && (
-            <WorkspaceInspector
-              component={selected}
-              onAction={onAction}
-              onUpdate={onUpdate}
-              resizePolicy={resizePolicy}
-              onResize={onResize}
-              onVisualEffects={onVisualEffects}
-              manifestUpgrade={manifestUpgrade}
-              onUpgradeManifest={onUpgradeManifest}
-              physicsReport={selectedPhysicsReport}
-            />
-          )}
-          {panel === "sources" && <WorkspaceSourcePanel
-            sources={sources}
-            bindingTargets={bindingTargets}
-            diagnostics={bindingDiagnostics}
-            onSaveInlineSource={onSaveInlineSource}
-            onRefresh={onRefreshSource}
-            onPreviewHostFeed={onPreviewHostFeed}
-            onSaveHostFeed={onSaveHostFeed}
-            onUnbindSource={onUnbindSource}
-            onDeleteSource={onDeleteSource}
-          />}
+        <div id="workspace-tool-panel" className="workspace-tool-panel" role="region" aria-label={`${panel} panel`}>
+          <header className="workspace-tool-panel__header">
+            <strong>{{
+              library: "Components",
+              inspector: "Inspector",
+              models: "Models",
+              sources: "Sources",
+            }[panel]}</strong>
+            <button className="workspace-tool-panel__close" type="button" aria-label={`Close ${panel} panel`} onClick={() => setPanel(null)}>
+              <PanelRightClose size={17} />
+            </button>
+          </header>
+          <div ref={panelRef} className="workspace-tool-panel__content">
+            {panel === "library" && <WorkspaceComponentLibrary items={catalog} onCreate={createFromLibrary} />}
+            {panel === "inspector" && (
+              <WorkspaceInspector
+                component={selected}
+                onAction={onAction}
+                onUpdate={onUpdate}
+                resizePolicy={resizePolicy}
+                onResize={onResize}
+                onVisualEffects={onVisualEffects}
+                manifestUpgrade={manifestUpgrade}
+                onUpgradeManifest={onUpgradeManifest}
+                onCreateAssembly={onCreateAssembly}
+                physicsReport={selectedPhysicsReport}
+                worldPlacement={selectedWorldPlacement}
+                assemblyOptions={assemblyOptions}
+                onTransform={onTransform}
+                onReparent={onReparent}
+                onSelectComponent={onSelectComponent}
+                descendantCount={selectedDescendantCount}
+                onDeleteComponent={onDeleteComponent}
+              />
+            )}
+            {panel === "models" && <WorkspaceModelLibrary
+              definitions={modelDefinitions}
+              selectedAssembly={selected?.type.typeId === "model-assembly"
+                ? { id: selected.id, label: selected.label }
+                : undefined}
+              disabled={disabled}
+              onPublish={onPublishModel}
+              onInstantiate={onInstantiateModel}
+              exportActions={modelExportActions}
+              onDelete={onDeleteModel}
+              onCreateExample={onCreateModelExample}
+              hierarchyItems={modelHierarchyItems}
+              selectedComponentId={selected?.id}
+              onSelectComponent={onSelectComponent}
+            />}
+            {panel === "sources" && <WorkspaceSourcePanel
+              sources={sources}
+              bindingTargets={bindingTargets}
+              diagnostics={bindingDiagnostics}
+              onSaveInlineSource={onSaveInlineSource}
+              onRefresh={onRefreshSource}
+              onPreviewHostFeed={onPreviewHostFeed}
+              onSaveHostFeed={onSaveHostFeed}
+              onUnbindSource={onUnbindSource}
+              onDeleteSource={onDeleteSource}
+            />}
+          </div>
         </div>
       )}
     </>

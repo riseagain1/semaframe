@@ -1,6 +1,7 @@
 import {
   DEFAULT_WORKSPACE_AGENT_SCOPES,
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
+  WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WORKSPACE_PROTOCOL_VERSION,
   type JSONValue,
   type WorkspaceAgentError,
@@ -12,6 +13,7 @@ import {
   type WorkspaceEnginePort,
   WorkspaceEngineError,
   type WorkspaceHistoryReceipt,
+  type WorkspaceModelDefinitionView,
   type WorkspacePermissionScope,
   type WorkspacePreparedEnvelope,
   type WorkspacePreparedUpdate,
@@ -114,13 +116,22 @@ export type InspectWorkspaceComponentData = Readonly<{
   manifest_truncated: false;
 }>;
 
+export type InspectWorkspaceModelData = Readonly<{
+  client_id: string;
+  client_name?: string;
+  workspace_id: string;
+  workspace_revision: number;
+  registry_digest: string;
+  model_definition: JSONValue;
+}>;
+
 export type InspectWorkspaceSpaceData = Readonly<{
   client_id: string;
   client_name?: string;
   workspace_id: string;
   workspace_revision: number;
   registry_digest: string;
-  universal_space_data: JSONValue;
+  spatial_graph: JSONValue;
 }>;
 
 export type QuerySpatialPlacementData = Readonly<{
@@ -354,10 +365,15 @@ export function requiredScopesForWorkspaceBatch(batch: unknown): WorkspacePermis
       case "set_component_visual_effects":
       case "attach_component":
       case "detach_component":
+      case "publish_model":
         required.add("component:update");
         break;
       case "delete_component":
+      case "delete_model_definition":
         required.add("component:delete");
+        break;
+      case "instantiate_model":
+        required.add("component:create");
         break;
       case "invoke_component_action":
         required.add("component:invoke");
@@ -396,6 +412,7 @@ export function destructiveWorkspaceOperations(batch: unknown): JSONValue[] {
   return operationRecords(batch).flatMap((operation, index) => {
     if (
       operation.op !== "delete_component" &&
+      operation.op !== "delete_model_definition" &&
       operation.op !== "clear_workspace" &&
       operation.op !== "delete_resource"
     ) return [];
@@ -593,6 +610,48 @@ export class WorkspaceAgentController {
     }
   }
 
+  async inspectWorkspaceModel(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<InspectWorkspaceModelData>> {
+    try {
+      const body = exactRecord(
+        input,
+        ["session_token", "instruction_digest", "model_id", "version"],
+        [],
+      );
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["workspace:read"]);
+      const modelId = requiredString(body.model_id, "model_id", 1, 128);
+      const version = requiredString(body.version, "version", 5, 64);
+      if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(modelId)
+        || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u.test(version)) {
+        throw new WorkspaceEngineError(
+          "invalid_request",
+          "model_id and version must identify an exact published model",
+          { retryable: true },
+        );
+      }
+      const inspection = await this.consistentModelState(modelId, version, principal(session));
+      const result = ok({
+        ...publicIdentity(session),
+        workspace_id: inspection.workspaceId,
+        workspace_revision: inspection.revision,
+        registry_digest: inspection.registryDigest,
+        model_definition: structuredClone(inspection.modelDefinition),
+      });
+      if (encodedBytes(result) > WORKSPACE_MODEL_INSPECTION_MAX_BYTES) {
+        throw new WorkspaceEngineError(
+          "model_inspection_too_large",
+          "Published model inspection exceeds the public response limit",
+          { retryable: false },
+        );
+      }
+      return result;
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
   async inspectWorkspaceSpace(input: unknown): Promise<WorkspaceAgentResult<InspectWorkspaceSpaceData>> {
     try {
       const body = exactRecord(
@@ -611,7 +670,7 @@ export class WorkspaceAgentController {
         workspace_id: result.workspaceId,
         workspace_revision: result.revision,
         registry_digest: result.registryDigest,
-        universal_space_data: structuredClone(result.universalSpaceData),
+        spatial_graph: structuredClone(result.spatialGraph),
       });
     } catch (cause) {
       return fail(this.mapError(cause));
@@ -928,6 +987,8 @@ export class WorkspaceAgentController {
         return this.inspectWorkspace(input);
       case "inspect_workspace_component":
         return this.inspectWorkspaceComponent(input);
+      case "inspect_workspace_model":
+        return this.inspectWorkspaceModel(input);
       case "inspect_workspace_space":
         return this.inspectWorkspaceSpace(input);
       case "query_spatial_placement":
@@ -1133,6 +1194,26 @@ export class WorkspaceAgentController {
       "workspace_busy",
       "Workspace changed during component inspection; retry the targeted inspection",
       { retryable: true, requiredAction: "inspect_workspace_component" },
+    );
+  }
+
+  private async consistentModelState(
+    modelId: string,
+    version: string,
+    actor: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceModelDefinitionView> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const inspection = await this.engine.inspectModel(modelId, version, actor);
+      const revision = await this.engine.getRevision();
+      const registryDigest = await this.engine.getRegistryDigest();
+      if (inspection.revision === revision && inspection.registryDigest === registryDigest) {
+        return inspection;
+      }
+    }
+    throw new WorkspaceEngineError(
+      "workspace_busy",
+      "Workspace changed during model inspection; retry the targeted inspection",
+      { retryable: true, requiredAction: "inspect_workspace_model" },
     );
   }
 

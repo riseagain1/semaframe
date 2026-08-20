@@ -19,6 +19,7 @@ export function createInitialWorkspace(
     aliases: new Map(),
     sharedViews: new Map(),
     recipes: new Map(),
+    modelDefinitions: new Map(),
     history: [],
   };
 }

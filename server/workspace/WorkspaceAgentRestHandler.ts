@@ -7,6 +7,7 @@ export const WORKSPACE_REST_PATHS = Object.freeze({
   get_workspace_instructions: "/v1/workspace/instructions",
   inspect_workspace: "/v1/workspace/inspect",
   inspect_workspace_component: "/v1/workspace/components/inspect",
+  inspect_workspace_model: "/v1/workspace/models/inspect",
   inspect_workspace_space: "/v1/workspace/space/inspect",
   query_spatial_placement: "/v1/workspace/space/query",
   inspect_workspace_physics: "/v1/workspace/physics/inspect",

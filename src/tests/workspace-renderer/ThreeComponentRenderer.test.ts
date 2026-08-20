@@ -54,6 +54,53 @@ describe("ThreeComponentRenderer", () => {
     expect(scene.environment.preset).toBe("simple_room");
   });
 
+  it("projects exact parametric primitives and transform-only model assemblies", () => {
+    const source = snapshot();
+    const scene = workspaceToSceneState({
+      ...source,
+      components: [
+        source.components[0]!,
+        {
+          id: "assembly",
+          type: { typeId: "model-assembly", version: "1.0.0", digest: "assembly" },
+          label: "Assembly",
+          props: { description: "fixture", collisionPolicy: "external_only" },
+          durableState: {},
+          placement: { space: "world3d", position: { x: 2, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+          tags: [],
+          visibility: "visible",
+          locks: { placement: false },
+        },
+        {
+          id: "primitive",
+          type: { typeId: "spatial-primitive", version: "1.0.0", digest: "primitive" },
+          label: "Exact box",
+          props: {
+            geometry: { kind: "box", sizeM: { x: 1.2, y: 0.4, z: 2.5 } },
+            material: { baseColor: "#123456", metallic: 0.2, roughness: 0.3, opacity: 0.8, emissiveColor: "#010203", emissiveIntensity: 0.4 },
+            castShadow: true,
+            receiveShadow: false,
+          },
+          durableState: {},
+          placement: { space: "world3d", position: { x: 0, y: 0.2, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+          parentId: "assembly",
+          tags: [],
+          visibility: "visible",
+          locks: { placement: false },
+        },
+      ],
+    });
+    expect(scene.entities.get("assembly")?.renderGeometry).toEqual({ kind: "assembly" });
+    expect(scene.entities.get("primitive")).toMatchObject({
+      parentId: "assembly",
+      renderGeometry: {
+        kind: "parametric",
+        definition: { kind: "box", sizeM: { x: 1.2, y: 0.4, z: 2.5 } },
+        material: { baseColor: "#123456", metallic: 0.2, roughness: 0.3 },
+      },
+    });
+  });
+
   it("projects durable spatial playback instead of relying on opaque props", () => {
     const source = snapshot();
     const scene = workspaceToSceneState({

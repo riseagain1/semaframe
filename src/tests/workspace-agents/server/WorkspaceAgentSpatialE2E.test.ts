@@ -12,7 +12,7 @@ const placement = (x: number) => ({
   scale: { x: 1, y: 1, z: 1 },
 });
 
-describe("Workspace Agent Universal Space Data", () => {
+describe("Workspace Agent SemaFrame Spatial Graph", () => {
   it("inspects live spatial state, preflights collision, rejects overlap, and accepts a suggested correction", async () => {
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "seed_space", [{
@@ -40,9 +40,9 @@ describe("Workspace Agent Universal Space Data", () => {
       ok: true,
       data: {
         workspace_revision: 1,
-        universal_space_data: {
-          format: "universal-space-data",
-          version: "2.0",
+        spatial_graph: {
+          format: "semaframe-spatial-graph",
+          version: "3.0",
           mode: "full",
           stage: {
             component_id: "STAGE",
@@ -117,7 +117,7 @@ describe("Workspace Agent Universal Space Data", () => {
     const delta = await controller.inspectWorkspaceSpace({ ...session, since_revision: 1 });
     expect(delta).toMatchObject({
       ok: true,
-      data: { universal_space_data: { mode: "delta", since_revision: 1, nodes: [expect.objectContaining({ id: componentId })] } },
+      data: { spatial_graph: { mode: "delta", since_revision: 1, nodes: [expect.objectContaining({ id: componentId })] } },
     });
   });
 

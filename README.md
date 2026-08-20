@@ -39,6 +39,7 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
 - [First Agent connection](#first-agent-connection)
 - [Product tour](#product-tour)
 - [Core model](#core-model)
+- [Parametric modeling and interchange](#parametric-modeling-and-interchange)
 - [Spatial understanding and physics](#spatial-understanding-and-physics)
 - [Data feeds and websites](#data-feeds-and-websites)
 - [Agent integration](#agent-integration)
@@ -67,7 +68,7 @@ SemaFrame is useful for Agent-driven dashboards, simulation controls, spatial pl
 
 Imagine an assistant that does more than chat: it can inspect a shared 2D/3D workspace, understand where objects are, read approved live data, check collisions and physical support, and operate controls through explicit permissions.
 
-For example, an Agent could inspect a workshop layout through Universal Space Data, place a machine without intersecting existing equipment, attach a live telemetry panel, connect a 2D emergency-stop button to a 3D animation, run a bounded stability preflight, and leave every action visible in the same undoable project history.
+For example, an Agent could inspect a workshop layout through the SemaFrame Spatial Graph, place a machine without intersecting existing equipment, attach a live telemetry panel, connect a 2D emergency-stop button to a 3D animation, run a bounded stability preflight, and leave every action visible in the same undoable project history.
 
 SemaFrame provides this inspectable spatial substrate. It is not an autonomous operating system or a full engineering simulator: the browser remains authoritative, actions are scoped, and physical results are deliberately bounded.
 
@@ -76,8 +77,10 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Area | Current capability |
 | --- | --- |
 | Universal canvas | Mix navigable Three.js content with DOM/SVG panels on one canvas |
-| Component system | 16 versioned built-ins plus bounded Agent-defined declarative recipes |
-| Spatial reasoning | Revision-bound Universal Space Data with transforms, bounds, colliders, support, and intersection relations |
+| Component system | 18 versioned built-ins plus bounded Agent-defined declarative recipes |
+| Parametric modeling | Exact SI primitives, editable assemblies, immutable reusable models, collision-aware instances, and numeric Inspector controls |
+| Solid export | OpenUSD USDA assemblies, bounded Manifold STL/OBJ solids, and an OpenCascade STEP subset |
+| Spatial reasoning | Revision-bound SemaFrame Spatial Graph 3.0 with transforms, analytic geometry evidence, assemblies, bounds, colliders, support, and intersection relations |
 | Collision | Asset bounds, explicit boxes, and compound oriented-box colliders with independent enable/trigger controls |
 | Physics | Optional static/dynamic/kinematic intent, mass and material properties, constraints, stability reports, placement preflight, and deterministic settle previews |
 | Data | Local JSON/CSV snapshots and approved public HTTPS JSON/CSV/RSS/Atom feeds |
@@ -90,7 +93,7 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 
 The built-in component registry contains:
 
-- spatial: `stage-3d`, `spatial-entity`;
+- spatial and modeling: `stage-3d`, `spatial-entity`, `spatial-primitive`, `model-assembly`;
 - layout: `group`, `panel`;
 - content: `text`, `image`, `annotation`, `document`;
 - media and web: `video-player`, `web-panel`;
@@ -194,7 +197,7 @@ Every Workspace object is a versioned component with:
 - locks and provenance;
 - resource bindings;
 - declared actions and events;
-- optional collision and physics attributes for spatial entities.
+- optional collision and physics attributes for spatial entities and exact primitives.
 
 The engine validates operations against the pinned manifest. It does not silently clamp malformed commands or reinterpret stale component definitions.
 
@@ -227,29 +230,60 @@ Recipes can declare schemas, defaults, writable props, actions, events, placemen
 
 Recipes cannot execute HTML, JavaScript, JSX, iframe code, shaders, network requests, or arbitrary packages. Untrusted schemas reject regular expressions, references, unbounded combinators, and other synchronous validation-amplification paths.
 
+## Parametric modeling and interchange
+
+SemaFrame now has a closed modeling contract rather than inferring geometry from an asset label. A `spatial-primitive` stores one exact SI-metre descriptor:
+
+- box dimensions;
+- sphere radius;
+- cylinder or cone radius, height, and axis;
+- capsule radius, cylindrical height, and axis; or
+- plane dimensions and normal axis.
+
+The same canonical descriptor produces render geometry, local bounds, analytic collider evidence, volume, SSG output, physics evidence, persistence digest, and export geometry. Primitive scale remains identity so dimensions cannot silently disagree with a renderer transform. A `model-assembly` is an editable transform root with `external_only`, `all`, or `none` collision policy; reparenting can preserve world or local transforms explicitly.
+
+The **Models** panel publishes an assembly subtree as an immutable, digest-pinned model definition. An instance is materialized as an ordinary editable assembly and primitive tree, not a hidden proxy. SemaFrame chooses a collision-safe starting location, reserves every ID atomically, and preserves the source definition when an instance is edited. Agents use the same `publish_model`, `inspect_workspace_model`, `instantiate_model`, and `delete_model_definition` contract with revision, scope, and ID-reservation checks.
+
+### Export paths
+
+| Format | Implementation | Intended use |
+| --- | --- | --- |
+| USDA | Deterministic OpenUSD layer, metres and Y-up, stable prim IDs, Xforms, analytic primitives, and PreviewSurface materials | DCC, simulation, and spatial interchange |
+| STL / OBJ | Bounded Manifold 3.5.1 WebAssembly union with watertight/manifold diagnostics and hard vertex/triangle/output caps; STL coordinates are conventional millimetres, OBJ coordinates remain metres | Mesh-solid handoff and 3D-print prototyping |
+| STEP | Real OpenCascade B-rep through Replicad, AP242 Part 21 in metres | Downstream CAD handoff for the v1 box/sphere/cylinder and uniform-transform subset |
+
+CSG and CAD run in disposable, lazy-loaded Workers. Cancellation or a time limit terminates the Worker, which is the only reliable hard stop while synchronous WebAssembly geometry code is running. The OpenCascade runtime is served as one fingerprinted local WASM asset; it is not fetched from a CDN.
+
+This makes SemaFrame useful for accurate blockouts, rooms, furniture, fixtures, equipment envelopes, simple product concepts, spatial assemblies, collision/stability preflight, and light maker workflows. It is deliberately described as **AI-native parametric spatial/model assembly** or **light CAD**, not professional mechanical CAD. There is not yet a sketch constraint solver, persistent topological face naming, fillet/chamfer/shell/sweep/loft feature tree, GD&T, STEP import, or FEA certification workflow.
+
 ## Spatial understanding and physics
 
-### Universal Space Data
+### SemaFrame Spatial Graph
 
-`inspect_workspace_space` returns **Universal Space Data 2.0**: a revision-bound, model-readable projection of the open Workspace. It includes:
+`inspect_workspace_space` returns **SemaFrame Spatial Graph 3.0 (SSG)** in `data.spatial_graph`: a revision-bound, model-readable projection of the open Workspace. It includes:
 
 - stable prim paths and component identity;
 - parent-aware world transforms;
+- explicit asset, primitive, and assembly node kinds;
+- exact primitive parameters, digest, dimensions, local bounds, volume, analytic collider, and material summary;
+- assembly collision policy, model reference, ancestry, and aggregate descendant bounds;
 - asset-derived and component-derived world bounds;
 - exact collider parts;
 - rigid-body intent;
 - containment, intersection, contact, and support relations;
 - optional deltas through `since_revision` when the change is unambiguous.
 
-Universal Space Data is derived JSON, not a second scene database and not a Pixar OpenUSD file. The authoritative data remains the Workspace.
+SSG is derived JSON, not a second scene database and not a Pixar OpenUSD file. The authoritative data remains the Workspace. The names USD and OpenUSD are reserved for Pixar's interchange format.
 
 ### Collision
 
-Current spatial entities support:
+Current spatial entities and parametric primitives support:
 
 - asset-derived bounds;
 - one explicit box collider; or
 - up to 16 compound oriented-box parts.
+
+Parametric `asset_bounds` comes from the exact geometry descriptor, not an asset approximation. SSG preserves the analytic sphere/cylinder/cone/capsule evidence, while the current feasibility narrow phase conservatively tests its exact oriented bounding volume. Assembly policy can ignore internal part/part contacts while retaining external collisions, include all contacts, or exclude the assembly subtree from collision feasibility.
 
 Collision can be enabled or disabled independently of physics. A collider may also be a trigger. Solid overlaps reject the entire atomic update; touching faces and trigger volumes are represented explicitly. Parent/child attachment can use a safety margin, but true solid penetration remains invalid.
 
@@ -421,7 +455,8 @@ SemaFrame deliberately does not claim the following:
 - **Not a general code sandbox.** Recipe components use a closed declarative vocabulary.
 - **Not a general physics engine.** Current physics focuses on collision, support, conservative stability, constraints, and bounded settle previews.
 - **Not structural certification.** Material properties, stress, fatigue, fracture, tolerances, and safety factors are not modeled.
-- **Not OpenUSD.** Universal Space Data is SemaFrame's bounded JSON projection for Agent reasoning.
+- **Not full mechanical CAD.** Exact primitives, editable assemblies, manifold mesh solids, and a real B-rep STEP subset are available; sketch constraints, a general feature tree, robust persistent topology naming, STEP import, and engineering drawings are not.
+- **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
 - **Not a bundled AI model.** Model choice, voice, and realtime transport live in the connecting client.
 - **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project format.
 
@@ -474,6 +509,7 @@ src/
     data/                 Resources, feeds, bindings, connector contracts
     interaction/          Pointer, keyboard, selection, and activation routing
     persistence/          Workspace project schema and serializer
+    modeling/             Exact primitives, reusable models, OpenUSD, CSG, and bounded CAD workers
     physics/              Physics configuration, reports, and deterministic preview
     protocol/             Workspace Protocol schema, types, and validation
     renderer/             Hybrid projection bridge and 2D/3D component projection
@@ -496,6 +532,8 @@ integrations/             Installable Agent skill metadata and instructions
 npm run typecheck                       # TypeScript project check
 npm test -- --run --maxWorkers=2       # deterministic bounded full test run
 npm run build                           # production bundle
+npm run test:cad:bundle                 # assert lazy Worker/WASM packaging and no duplicate/inlined OCCT binary
+npm run test:csg:bundle                 # assert the Manifold Worker uses one external fingerprinted WASM binary
 npm run smoke:workspace                 # real browser Workspace flow
 npm run smoke:agent                     # real browser + Streamable HTTP MCP flow
 npm run test:watch                       # interactive Vitest

@@ -6,9 +6,10 @@
  */
 
 export const WORKSPACE_PROTOCOL_VERSION = "1.2" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "2.4" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "2.5" as const;
 /** Final JSON cap for one public inspect_workspace_component result. */
 export const WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES = 1_048_576;
+export const WORKSPACE_MODEL_INSPECTION_MAX_BYTES = 1_048_576;
 /**
  * Reserved for {ok,data}, snake_case key expansion, and maximum escaped
  * client_id/client_name values added by WorkspaceAgentController.
@@ -64,6 +65,7 @@ export const WORKSPACE_AGENT_TOOL_NAMES = [
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_component",
+  "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
   "inspect_workspace_physics",
@@ -146,11 +148,18 @@ export type WorkspaceComponentStateView = Readonly<{
   manifestTruncated: false;
 }>;
 
+export type WorkspaceModelDefinitionView = Readonly<{
+  workspaceId: string;
+  revision: number;
+  registryDigest: string;
+  modelDefinition: JSONValue;
+}>;
+
 export type WorkspaceSpatialStateView = Readonly<{
   workspaceId: string;
   revision: number;
   registryDigest: string;
-  universalSpaceData: JSONValue;
+  spatialGraph: JSONValue;
 }>;
 
 export type WorkspaceSpatialPlacementView = Readonly<{
@@ -232,6 +241,11 @@ export interface WorkspaceEnginePort {
     componentId: string,
     principal: WorkspaceAgentPrincipal,
   ): WorkspaceComponentStateView | Promise<WorkspaceComponentStateView>;
+  inspectModel(
+    modelId: string,
+    version: string,
+    principal: WorkspaceAgentPrincipal,
+  ): WorkspaceModelDefinitionView | Promise<WorkspaceModelDefinitionView>;
   inspectSpace(
     sinceRevision: number | undefined,
     principal: WorkspaceAgentPrincipal,

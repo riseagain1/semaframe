@@ -11,6 +11,7 @@ describe("universal component registry", () => {
     expect(BUILTIN_COMPONENT_TYPE_IDS).toEqual([
       "stage-3d", "spatial-entity", "group", "panel", "text", "image",
       "video-player", "web-panel", "data-panel", "annotation", "timer", "checklist", "chart", "table", "document", "button",
+      "spatial-primitive", "model-assembly",
     ]);
     const rebuilt = new ComponentRegistry([...DEFAULT_COMPONENT_REGISTRY.list()].reverse());
     expect(rebuilt.digest).toBe(DEFAULT_COMPONENT_REGISTRY.digest);
@@ -20,9 +21,14 @@ describe("universal component registry", () => {
     // Existing types retain 1.0/1.1 compatibility refs; button starts at 1.2,
     // while spatial-entity alone adds collision-aware 1.3, physics-aware 1.4,
     // and master-switch 1.5 contracts.
-    expect(rebuilt.list()).toHaveLength((BUILTIN_COMPONENT_TYPE_IDS.length - 1) * 3 + 4);
+    expect(rebuilt.list()).toHaveLength(51);
     for (const typeId of BUILTIN_COMPONENT_TYPE_IDS) {
-      expect(rebuilt.require(typeId).version).toBe(typeId === "spatial-entity" ? "1.5.0" : "1.2.0");
+      const expectedVersion = typeId === "spatial-entity"
+        ? "1.5.0"
+        : ["spatial-primitive", "model-assembly"].includes(typeId)
+          ? "1.0.0"
+          : "1.2.0";
+      expect(rebuilt.require(typeId).version).toBe(expectedVersion);
     }
     expect(rebuilt.require("image", "1.0.0").resizePolicy.viewport).toMatchObject({
       kind: "box2d",
@@ -51,6 +57,25 @@ describe("universal component registry", () => {
     }
   });
 
+  it("publishes closed modeling contracts with digest-pinned model references", () => {
+    const primitive = DEFAULT_COMPONENT_REGISTRY.require("spatial-primitive");
+    expect(primitive.allowedPlacements).toEqual(["world3d"]);
+    expect(primitive.resizePolicy.world3d).toEqual({ kind: "none", mode: "none" });
+    expect(() => DEFAULT_COMPONENT_REGISTRY.assertProps(primitive, {
+      ...structuredClone(primitive.defaultProps),
+      geometry: { kind: "box", sizeM: { x: 0.6, y: 0.4, z: 0.2 } },
+      material: { ...structuredClone(primitive.defaultProps.material as object), debugShader: true },
+    } as never)).toThrow(/additional properties/i);
+
+    const assembly = DEFAULT_COMPONENT_REGISTRY.require("model-assembly");
+    expect(() => DEFAULT_COMPONENT_REGISTRY.assertProps(assembly, {
+      description: "Published fixture",
+      collisionPolicy: "external_only",
+      modelRef: { modelId: "fixture-a", version: "1.0.0", digest: "sha256:abc" },
+    })).not.toThrow();
+
+  });
+
   it("rejects policies that advertise impossible host ranges or incomplete coupled axes", () => {
     const incompleteAspect = DEFAULT_COMPONENT_REGISTRY.require("image");
     const aspectPolicy = incompleteAspect.resizePolicy.viewport;
@@ -72,7 +97,7 @@ describe("universal component registry", () => {
     expect(() => new ComponentRegistry([partialUniform])).toThrow(/invalid scale3d resize policy/i);
   });
 
-  it("reserves 3D scale policies for the actually Three-rendered spatial contract", () => {
+  it("reserves 3D scale policies for actually Three-rendered spatial entities and model assemblies", () => {
     const recipe = prepareComponentRecipe({
       typeId: "recipe.fake-spatial",
       version: "1.1.0",

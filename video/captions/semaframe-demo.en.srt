@@ -24,7 +24,7 @@ Live data drives the 2D view. A typed event route drives the 3D animation.
 
 7
 00:00:41,000 --> 00:00:50,000
-Universal Space Data exposes revision-bound identity, transforms, world bounds, colliders and spatial relations.
+SemaFrame Spatial Graph exposes revision-bound identity, transforms, world bounds, colliders and spatial relations.
 
 8
 00:00:49,500 --> 00:01:00,500

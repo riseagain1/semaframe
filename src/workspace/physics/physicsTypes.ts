@@ -79,6 +79,10 @@ export type PhysicsBodyReport = Readonly<{
   enabled: boolean;
   bodyType: PhysicsBodyType;
   massKg: number;
+  /** Current 2.0 manifests require an explicit mass; no density semantics are inferred. */
+  massSource?: "explicit";
+  /** Exact world-transformed primitive volume when the body is parametric. */
+  geometryVolumeM3?: number;
   centerOfMassWorld: Vec3;
   friction: number;
   restitution: number;

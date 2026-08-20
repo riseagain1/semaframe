@@ -9,6 +9,7 @@ export const MAX_WORKSPACE_CONNECTIONS = 5_000;
 export const MAX_WORKSPACE_ALIASES = 4_000;
 export const MAX_WORKSPACE_SHARED_VIEWS = 500;
 export const MAX_WORKSPACE_RECIPES = 200;
+export const MAX_WORKSPACE_MODEL_DEFINITIONS = 200;
 export const MAX_WORKSPACE_HISTORY_SUMMARIES = 512;
 
 /** Recent commands remain undoable; older commands are folded into checkpoint. */

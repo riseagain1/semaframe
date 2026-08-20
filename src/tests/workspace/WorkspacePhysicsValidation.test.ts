@@ -6,7 +6,7 @@ import {
   simulatePhysicsSettle,
   type SpatialPhysicsConfig,
 } from "../../workspace/physics";
-import { buildUniversalSpaceData, querySpatialPlacement } from "../../workspace/spatial";
+import { buildSemaFrameSpatialGraph, querySpatialPlacement } from "../../workspace/spatial";
 import { WorkspaceProjectSerializer } from "../../workspace/persistence";
 import { WorkspaceStore } from "../../workspace/state";
 import { workspaceBatch } from "./helpers";
@@ -48,8 +48,24 @@ const spatial = (id: string, x: number, y: number, props: Record<string, unknown
   props: { assetId: "primitive_box", entityKind: "primitive", ...props },
 });
 
+const parametric = (
+  id: string,
+  x: number,
+  y: number,
+  props: Record<string, unknown> = {},
+  parentId?: string,
+) => ({
+  op: "create_component" as const,
+  op_id: `create_${id}`,
+  id,
+  component_type: DEFAULT_COMPONENT_REGISTRY.ref("spatial-primitive"),
+  ...(parentId ? { parent_id: parentId } : {}),
+  placement: placement(x, y),
+  props: { geometry: { kind: "sphere", radiusM: 0.5 }, ...props },
+});
+
 describe("Workspace deterministic physics validation", () => {
-  it("publishes 1.5 switchable rigid-body intent in Universal Space Data and reports stable support", () => {
+  it("publishes 1.5 switchable rigid-body intent in the SemaFrame Spatial Graph and reports stable support", () => {
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "stable_stack", [
       stage(),
@@ -59,8 +75,8 @@ describe("Workspace deterministic physics validation", () => {
 
     const manifest = DEFAULT_COMPONENT_REGISTRY.get("spatial-entity")!;
     expect(manifest.version).toBe("1.5.0");
-    const usd = buildUniversalSpaceData(store.getState());
-    expect(usd.nodes.find((node) => node.id === "TOP")).toMatchObject({
+    const spatialGraph = buildSemaFrameSpatialGraph(store.getState());
+    expect(spatialGraph.nodes.find((node) => node.id === "TOP")).toMatchObject({
       physics: { enabled: true, bodyType: "dynamic", massKg: 10, stabilityMode: "enforce" },
       collision: { source: "asset_bounds", parts: [expect.objectContaining({ id: "asset_bounds" })] },
     });
@@ -188,7 +204,7 @@ describe("Workspace deterministic physics validation", () => {
         ],
       },
     })]));
-    expect(buildUniversalSpaceData(store.getState()).nodes[0]?.collision).toMatchObject({
+    expect(buildSemaFrameSpatialGraph(store.getState()).nodes[0]?.collision).toMatchObject({
       shape: "compound",
       source: "compound",
       parts: [{ id: "left" }, { id: "right" }],
@@ -454,5 +470,42 @@ describe("Workspace deterministic physics validation", () => {
     });
     expect(coarse.appliedSteps).toBe(5);
     expect(fine.proposals[0]?.dropDistanceM).not.toBe(coarse.proposals[0]?.dropDistanceM);
+  });
+
+  it("reports exact parametric volume beside explicit stable-body mass evidence", () => {
+    const store = new WorkspaceStore();
+    store.apply(workspaceBatch(store, "parametric_mass_evidence", [
+      stage(),
+      {
+        op: "create_component" as const,
+        op_id: "create_model",
+        id: "MODEL",
+        component_type: DEFAULT_COMPONENT_REGISTRY.ref("model-assembly"),
+        placement: placement(0),
+        props: { collisionPolicy: "external_only" },
+      },
+      parametric("BALL", 0, 0.52, {
+        physics: physics({ bodyType: "static", massKg: 7 }),
+      }, "MODEL"),
+    ]));
+
+    const expectedVolume = (4 / 3) * Math.PI * 0.5 ** 3;
+    const graphBody = buildSemaFrameSpatialGraph(store.getState()).nodes.find((node) => node.id === "BALL")!;
+    expect(graphBody.physics).toMatchObject({
+      massKg: 7,
+      massSource: "explicit",
+      geometryVolumeM3: expectedVolume,
+    });
+    const report = buildPhysicsValidationReport(store.getState());
+    expect(report.feasible).toBe(true);
+    expect(report.bodies.map((body) => body.componentId)).toEqual(["BALL"]);
+    expect(report.bodies[0]).toMatchObject({
+      massKg: 7,
+      massSource: "explicit",
+      geometryVolumeM3: expectedVolume,
+      stable: true,
+      grounded: true,
+      stabilityReason: "anchored",
+    });
   });
 });

@@ -1,6 +1,8 @@
 import type { ComponentPlacement, Vec3 } from "../components/componentTypes";
+import type { ModelDefinitionRef } from "../modeling/modelDefinitions";
+import type { ParametricCollider, ParametricPrimitive } from "../modeling/parametricGeometry";
 
-export const UNIVERSAL_SPACE_DATA_VERSION = "2.0" as const;
+export const SEMAFRAME_SPATIAL_GRAPH_VERSION = "3.0" as const;
 export const MAX_WORKSPACE_SPATIAL_NODES = 2_000;
 
 export type SpatialCollisionRole = "solid" | "trigger" | "none";
@@ -52,7 +54,7 @@ export type SpatialBounds = Readonly<{
 
 export type SpatialResolvedCollisionPart = Readonly<{
   id: string;
-  source: "asset_bounds" | "explicit_box" | "compound_part";
+  source: "asset_bounds" | "parametric_bounds" | "explicit_box" | "compound_part";
   center: Vec3;
   halfExtents: Vec3;
   axes: readonly [Vec3, Vec3, Vec3];
@@ -63,7 +65,7 @@ export type SpatialResolvedCollision = Readonly<{
   enabled: boolean;
   role: SpatialCollisionRole;
   shape: "box" | "compound";
-  source: "asset_bounds" | "explicit_box" | "compound";
+  source: "asset_bounds" | "parametric_bounds" | "explicit_box" | "compound";
   margin: number;
   parts: readonly SpatialResolvedCollisionPart[];
   /** Backwards-compatible envelope fields; exact tests use parts. */
@@ -73,13 +75,48 @@ export type SpatialResolvedCollision = Readonly<{
   aabb: SpatialBounds;
 }>;
 
-export type UniversalSpaceDataNode = Readonly<{
+export type SpatialAssemblyCollisionPolicy = "external_only" | "all" | "none";
+
+export type SpatialAssemblySummary = Readonly<{
+  collisionPolicy: SpatialAssemblyCollisionPolicy;
+  modelRef?: ModelDefinitionRef;
+}>;
+
+/** Outermost-to-nearest assembly ancestry, bounded by the component hierarchy. */
+export type SpatialAssemblyAncestor = SpatialAssemblySummary & Readonly<{ id: string }>;
+
+export type SpatialParametricMaterialSummary = Readonly<{
+  baseColor: string;
+  metallic: number;
+  roughness: number;
+  opacity: number;
+  emissiveColor: string;
+  emissiveIntensity: number;
+}>;
+
+/** Exact, prompt-safe parametric evidence derived from one validated descriptor. */
+export type SpatialParametricGeometrySummary = Readonly<{
+  kind: ParametricPrimitive["kind"];
+  digest: string;
+  parameters: ParametricPrimitive;
+  dimensionsM: Vec3;
+  localBounds: SpatialBounds;
+  volumeM3: number;
+  collider: ParametricCollider;
+  material?: SpatialParametricMaterialSummary;
+}>;
+
+export type SemaFrameSpatialGraphNode = Readonly<{
   id: string;
   primPath: string;
   label: string;
   parentId?: string;
-  assetId: string;
+  nodeKind: "asset" | "primitive" | "assembly";
+  assetId?: string;
   entityKind: string;
+  geometry?: SpatialParametricGeometrySummary;
+  assembly?: SpatialAssemblySummary;
+  assemblyAncestry: readonly SpatialAssemblyAncestor[];
   visibility: "visible" | "hidden" | "collapsed";
   localPlacement: ComponentPlacement;
   worldTransform: SpatialTransform;
@@ -89,6 +126,8 @@ export type UniversalSpaceDataNode = Readonly<{
     enabled: boolean;
     bodyType: "static" | "dynamic" | "kinematic";
     massKg: number;
+    massSource: "explicit";
+    geometryVolumeM3?: number;
     centerOfMass: Vec3;
     friction: number;
     restitution: number;
@@ -105,9 +144,9 @@ export type SpatialCollisionConflict = Readonly<{
   overlap: Vec3;
 }>;
 
-export type UniversalSpaceDataSnapshot = Readonly<{
-  format: "universal-space-data";
-  version: typeof UNIVERSAL_SPACE_DATA_VERSION;
+export type SemaFrameSpatialGraphSnapshot = Readonly<{
+  format: "semaframe-spatial-graph";
+  version: typeof SEMAFRAME_SPATIAL_GRAPH_VERSION;
   workspaceId: string;
   workspaceRevision: number;
   coordinateSystem: Readonly<{
@@ -124,7 +163,7 @@ export type UniversalSpaceDataSnapshot = Readonly<{
   }>;
   mode: "full" | "delta";
   sinceRevision?: number;
-  nodes: readonly UniversalSpaceDataNode[];
+  nodes: readonly SemaFrameSpatialGraphNode[];
   removedNodeIds: readonly string[];
   collisionConflicts: readonly SpatialCollisionConflict[];
   collisionConflictsTruncated: boolean;
@@ -135,6 +174,7 @@ export type SpatialPlacementCandidate = Readonly<{
   componentId?: string;
   assetId?: string;
   entityKind?: string;
+  geometry?: ParametricPrimitive;
   placement: ComponentPlacement;
   collision?: SpatialCollisionConfig;
 }>;

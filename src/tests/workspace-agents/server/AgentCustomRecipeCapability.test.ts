@@ -83,7 +83,7 @@ describe("Agent custom recipe capability", () => {
     const creation = await adapter.prepare("Create one focus meter instance", 1, actor);
     const capability = creation.capability_manifest as Record<string, unknown>;
     expect(capability).toMatchObject({
-      component_type_count: 17,
+      component_type_count: 19,
       component_types: expect.arrayContaining([expect.objectContaining({
         typeId: canonicalRecipe.typeId,
         version: canonicalRecipe.version,

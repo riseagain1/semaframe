@@ -14,6 +14,7 @@ export const AGENT_REST_PATHS = Object.freeze({
   get_workspace_instructions: "/v1/workspace/instructions",
   inspect_workspace: "/v1/workspace/inspect",
   inspect_workspace_component: "/v1/workspace/components/inspect",
+  inspect_workspace_model: "/v1/workspace/models/inspect",
   inspect_workspace_space: "/v1/workspace/space/inspect",
   query_spatial_placement: "/v1/workspace/space/query",
   inspect_workspace_physics: "/v1/workspace/physics/inspect",
@@ -52,7 +53,7 @@ export function createAgentMcpServer(
 ): McpServer {
   const protocolEra = options.protocolEra ?? "legacy";
   const server = new McpServer(AGENT_MCP_SERVER_INFO, {
-    instructions: "SemaFrame is a universal 2D/3D component workspace. Call get_workspace_instructions first and set instruction_digest in every later call to the returned data.guide_digest value. Before spatial work, inspect Universal Space Data and use collision plus physics placement preflights; inspect_workspace_physics and simulate_workspace_physics expose deterministic support, center-of-mass, constraints, and short settle proposals without mutating the Workspace. To create a component: inspect_workspace, begin_workspace_update, copy its exact envelope and one reserved component ID, copy an exact typeId/version/digest from its capability manifest, then submit one schema-valid batch. A remote HTTP connection requires explicit approval in the open app; the URL itself grants no authority.",
+    instructions: "SemaFrame is a universal 2D/3D component workspace. Call get_workspace_instructions first and set instruction_digest in every later call to the returned data.guide_digest value. Before spatial work, inspect the SemaFrame Spatial Graph and use collision plus physics placement preflights; inspect_workspace_physics and simulate_workspace_physics expose deterministic support, center-of-mass, constraints, and short settle proposals without mutating the Workspace. To create a component: inspect_workspace, begin_workspace_update, copy its exact envelope and one reserved component ID, copy an exact typeId/version/digest from its capability manifest, then submit one schema-valid batch. A remote HTTP connection requires explicit approval in the open app; the URL itself grants no authority.",
   });
 
   registerWorkspaceTools(server, {

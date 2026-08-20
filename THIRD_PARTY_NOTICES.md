@@ -13,3 +13,17 @@ Remotion is not included in the SemaFrame browser runtime. The rendered demo vid
 ## Procedural assets
 
 The built-in low-poly spatial assets and SemaFrame brand graphics in this repository are generated from project-owned procedural code and data. No third-party model files are bundled.
+
+## Geometry kernels
+
+SemaFrame's optional modeling export paths lazy-load the following pinned browser-runtime packages:
+
+| Package | Version | License | Upstream |
+| --- | --- | --- | --- |
+| `manifold-3d` | 3.5.1 | Apache-2.0 | <https://github.com/elalish/manifold> |
+| `replicad` | 1.0.0 | MIT | <https://replicad.xyz/> |
+| `replicad-opencascadejs` | 1.0.0 | LGPL-2.1-only | <https://github.com/sgenoud/replicad> |
+
+Manifold provides the bounded watertight mesh CSG path. Replicad is the narrow TypeScript adapter around the OpenCascade Technology WebAssembly binary supplied by `replicad-opencascadejs`. These packages and their generated artifacts remain under their respective upstream licenses; SemaFrame's MIT license does not relicense them.
+
+The exact license texts ship in each resolved package (`node_modules/manifold-3d/LICENSE`, `node_modules/replicad/LICENSE`, and `node_modules/replicad-opencascadejs/LICENSE`) and are available from the upstream projects above. Anyone redistributing a built browser bundle must preserve the applicable copyright and license notices and satisfy the LGPL-2.1-only requirements for the OpenCascade WebAssembly library, including applicable modification, relinking, and debugging rights. Release owners should review their distribution mechanism with qualified counsel; this notice is engineering documentation, not legal advice.

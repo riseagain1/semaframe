@@ -7,5 +7,8 @@ export * from "./WorkspaceComponentViews";
 export * from "./DeclarativeRecipeView";
 export * from "./WorkspaceInspector";
 export * from "./WorkspaceComponentLibrary";
+export * from "./modelingCatalog";
+export * from "./WorkspaceModelLibrary";
+export * from "./workspaceModelActions";
 export * from "./WorkspaceSourcePanel";
 export * from "./WorkspaceChrome";

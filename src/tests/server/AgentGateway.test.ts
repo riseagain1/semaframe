@@ -90,7 +90,7 @@ describe("Agent Gateway browser boundary", () => {
       enabled: false,
       connected: false,
       engineConnected: false,
-      instructionVersion: "2.4",
+      instructionVersion: "2.5",
       csrfToken: expect.any(String),
     }));
     expect(JSON.stringify(payload)).not.toMatch(/pairing|bearer|mcpServers/u);
@@ -541,7 +541,9 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("omitted_redacted_field_count");
     expect(serialized).toContain("expected_workspace_revision");
     expect(serialized).toContain("AgentResult");
-    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(13);
+    expect(serialized).toContain("inspect_workspace_model");
+    expect(serialized).toContain("/workspace/models/inspect");
+    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(14);
     expect(serialized).not.toMatch(/get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u);
     expect(serialized).not.toContain("pairingBearer");
   });

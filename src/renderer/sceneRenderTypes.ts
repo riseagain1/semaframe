@@ -6,6 +6,8 @@
  * the compact state and timing hints consumed by the renderer.
  */
 
+import type { ParametricPrimitive } from "../workspace/modeling/parametricGeometry";
+
 export type JSONScalar = string | number | boolean | null;
 export type EntityId = string;
 
@@ -86,6 +88,26 @@ export type GenericState = {
   properties?: Record<string, JSONScalar>;
 };
 
+export type ParametricRenderMaterial = {
+  baseColor: `#${string}`;
+  metallic: number;
+  roughness: number;
+  opacity: number;
+  emissiveColor: `#${string}`;
+  emissiveIntensity: number;
+};
+
+export type EntityRenderGeometry =
+  | {
+      kind: "parametric";
+      definition: ParametricPrimitive;
+      digest: string;
+      material: ParametricRenderMaterial;
+      castShadow: boolean;
+      receiveShadow: boolean;
+    }
+  | { kind: "assembly" };
+
 export type EntityState = {
   id: EntityId;
   kind: EntityKind;
@@ -94,6 +116,8 @@ export type EntityState = {
   transform: Transform;
   appearance: AppearancePatch;
   state: CharacterState | PropState | EffectState | GenericState;
+  /** Exact render source. Omitted for manifest-pinned asset entities. */
+  renderGeometry?: EntityRenderGeometry;
   parentId?: EntityId;
   parentSocket?: string;
   tags: string[];
