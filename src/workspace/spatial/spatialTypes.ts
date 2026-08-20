@@ -2,7 +2,7 @@ import type { ComponentPlacement, Vec3 } from "../components/componentTypes";
 import type { ModelDefinitionRef } from "../modeling/modelDefinitions";
 import type { ParametricCollider, ParametricPrimitive } from "../modeling/parametricGeometry";
 
-export const SEMAFRAME_SPATIAL_GRAPH_VERSION = "3.0" as const;
+export const SEMAFRAME_SPATIAL_GRAPH_VERSION = "3.1" as const;
 export const MAX_WORKSPACE_SPATIAL_NODES = 2_000;
 
 export type SpatialCollisionRole = "solid" | "trigger" | "none";
@@ -106,16 +106,33 @@ export type SpatialParametricGeometrySummary = Readonly<{
   material?: SpatialParametricMaterialSummary;
 }>;
 
+export type SpatialRealitySummary = Readonly<{
+  assetId?: string;
+  digest?: string;
+  descriptorAvailable: boolean;
+  binaryAvailability: "host_local_unknown";
+  format?: "spz-v4" | "ply" | "sog-v2";
+  splatCount?: number;
+  engineeringAuthority: "visual_only";
+  calibrationStatus: "uncalibrated" | "metadata-declared" | "reference-distance";
+  sourceCoordinateSystem: string;
+  targetCoordinateSystem: "RUB";
+  metersPerSourceUnit?: number;
+  boundsAreMetric: boolean;
+  semanticProxyIds: readonly string[];
+}>;
+
 export type SemaFrameSpatialGraphNode = Readonly<{
   id: string;
   primPath: string;
   label: string;
   parentId?: string;
-  nodeKind: "asset" | "primitive" | "assembly";
+  nodeKind: "asset" | "primitive" | "assembly" | "reality";
   assetId?: string;
   entityKind: string;
   geometry?: SpatialParametricGeometrySummary;
   assembly?: SpatialAssemblySummary;
+  reality?: SpatialRealitySummary;
   assemblyAncestry: readonly SpatialAssemblyAncestor[];
   visibility: "visible" | "hidden" | "collapsed";
   localPlacement: ComponentPlacement;

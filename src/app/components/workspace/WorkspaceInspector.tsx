@@ -26,6 +26,12 @@ import {
   type ParametricAxis,
   type ParametricPrimitive,
 } from "../../../workspace/modeling";
+import {
+  REALITY_COORDINATE_SYSTEMS,
+  parseRealityAssetCalibration,
+  type RealityAssetCalibration,
+  type RealityCoordinateSystem,
+} from "../../../workspace/assets";
 
 export type WorkspaceComponentUpdateRequest = Readonly<{
   componentId: string;
@@ -76,6 +82,7 @@ export type WorkspaceInspectorProps = Readonly<{
   onCreateAssembly?: (componentId: string) => void;
   worldPlacement?: World3DPlacement;
   assemblyOptions?: readonly WorkspaceAssemblyOption[];
+  realityProxyOptions?: readonly WorkspaceAssemblyOption[];
   onTransform?: (request: WorkspaceComponentTransformRequest) => void;
   onReparent?: (request: WorkspaceComponentHierarchyRequest) => boolean | void;
   onSelectComponent?: (componentId: string) => void;
@@ -96,6 +103,7 @@ export function WorkspaceInspector({
   onCreateAssembly,
   worldPlacement,
   assemblyOptions = [],
+  realityProxyOptions = [],
   onTransform,
   onReparent,
   onSelectComponent,
@@ -160,6 +168,13 @@ export function WorkspaceInspector({
       {component.type.typeId === "model-assembly" && (
         <ModelAssemblyInspectorEditor component={component} onUpdate={onUpdate} />
       )}
+      {component.type.typeId === "gaussian-splat" && (
+        <RealitySplatInspectorEditor
+          component={component}
+          proxyOptions={realityProxyOptions}
+          onUpdate={onUpdate}
+        />
+      )}
       {(component.type.typeId === "spatial-entity" || component.type.typeId === "spatial-primitive")
         && Boolean(component.props.collision) && (
         <CollisionInspectorEditor component={component} onUpdate={onUpdate} />
@@ -194,7 +209,8 @@ export function WorkspaceInspector({
       )}
       {(component.type.typeId === "spatial-primitive"
         || component.type.typeId === "spatial-entity"
-        || component.type.typeId === "model-assembly") && (
+        || component.type.typeId === "model-assembly"
+        || component.type.typeId === "gaussian-splat") && (
         <ComponentLifecycleEditor
           component={component}
           descendantCount={descendantCount}
@@ -666,6 +682,170 @@ function ModelAssemblyInspectorEditor({
       <button type="submit" disabled={locked || !displayName.trim()}>Apply model settings</button>
     </form>
     {modelRef && <dl className="workspace-inspector__model-ref" aria-label="Published model reference"><div><dt>Model</dt><dd>{stringValue(modelRef.modelId)}</dd></div><div><dt>Version</dt><dd>{stringValue(modelRef.version)}</dd></div><div><dt>Digest</dt><dd>{stringValue(modelRef.digest)}</dd></div></dl>}
+  </section>;
+}
+
+type RealityCalibrationMode = RealityAssetCalibration["status"];
+type RealityQuality = "auto" | "low" | "medium" | "high";
+type RealityDeclaredUnit = "metre" | "centimetre" | "millimetre" | "inch" | "foot";
+
+const REALITY_UNIT_SCALE: Readonly<Record<RealityDeclaredUnit, number>> = Object.freeze({
+  metre: 1,
+  centimetre: 0.01,
+  millimetre: 0.001,
+  inch: 0.0254,
+  foot: 0.3048,
+});
+
+function safeRealityCalibration(value: unknown): RealityAssetCalibration {
+  try {
+    return parseRealityAssetCalibration(value);
+  } catch {
+    return {
+      version: 1,
+      status: "uncalibrated",
+      sourceCoordinateSystem: "UNKNOWN",
+      targetCoordinateSystem: "RUB",
+      metersPerSourceUnit: null,
+    };
+  }
+}
+
+function RealitySplatInspectorEditor({
+  component,
+  proxyOptions,
+  onUpdate,
+}: Readonly<{
+  component: WorkspaceRenderComponent;
+  proxyOptions: readonly WorkspaceAssemblyOption[];
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+}>) {
+  const formId = useId();
+  const calibration = safeRealityCalibration(component.props.calibration);
+  const currentQuality: RealityQuality = ["low", "medium", "high"].includes(String(component.props.quality))
+    ? component.props.quality as RealityQuality
+    : "auto";
+  const currentProxyIds = Array.isArray(component.props.semanticProxyIds)
+    ? component.props.semanticProxyIds.filter((value): value is string => typeof value === "string")
+    : [];
+  const signature = JSON.stringify({ calibration, currentQuality, currentProxyIds });
+  const [mode, setMode] = useState<RealityCalibrationMode>(calibration.status);
+  const [coordinateSystem, setCoordinateSystem] = useState<RealityCoordinateSystem>(calibration.sourceCoordinateSystem);
+  const [declaredUnit, setDeclaredUnit] = useState<RealityDeclaredUnit>(
+    calibration.status === "metadata-declared" ? calibration.declaredUnit : "metre",
+  );
+  const [sourceDistance, setSourceDistance] = useState(
+    calibration.status === "reference-distance" ? String(calibration.sourceDistance) : "1",
+  );
+  const [referenceDistanceM, setReferenceDistanceM] = useState(
+    calibration.status === "reference-distance" ? String(calibration.referenceDistanceM) : "1",
+  );
+  const [quality, setQuality] = useState<RealityQuality>(currentQuality);
+  const [proxyIds, setProxyIds] = useState<readonly string[]>(currentProxyIds);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    setMode(calibration.status);
+    setCoordinateSystem(calibration.sourceCoordinateSystem);
+    setDeclaredUnit(calibration.status === "metadata-declared" ? calibration.declaredUnit : "metre");
+    setSourceDistance(calibration.status === "reference-distance" ? String(calibration.sourceDistance) : "1");
+    setReferenceDistanceM(calibration.status === "reference-distance" ? String(calibration.referenceDistanceM) : "1");
+    setQuality(currentQuality);
+    setProxyIds(currentProxyIds);
+    setError(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [component.id, signature]);
+
+  const locked = component.locks.props || !onUpdate;
+  const assetRef = recordValue(component.props.assetRef);
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (mode !== "uncalibrated" && coordinateSystem === "UNKNOWN") {
+      setError("Choose the capture's source coordinate system before claiming metric calibration.");
+      return;
+    }
+
+    let nextCalibration: RealityAssetCalibration;
+    try {
+      if (mode === "uncalibrated") {
+        nextCalibration = parseRealityAssetCalibration({
+          version: 1,
+          status: "uncalibrated",
+          sourceCoordinateSystem: coordinateSystem,
+          targetCoordinateSystem: "RUB",
+          metersPerSourceUnit: null,
+        });
+      } else if (mode === "metadata-declared") {
+        nextCalibration = parseRealityAssetCalibration({
+          version: 1,
+          status: "metadata-declared",
+          sourceCoordinateSystem: coordinateSystem,
+          targetCoordinateSystem: "RUB",
+          metersPerSourceUnit: REALITY_UNIT_SCALE[declaredUnit],
+          declaredUnit,
+        });
+      } else {
+        const nextSourceDistance = Number(sourceDistance);
+        const nextReferenceDistanceM = Number(referenceDistanceM);
+        if (!inRange(nextSourceDistance, 1e-12, 1e9)
+          || !inRange(nextReferenceDistanceM, 1e-12, 1e6)
+          || !inRange(nextReferenceDistanceM / nextSourceDistance, 1e-12, 1e6)) {
+          throw new Error("Reference distances or their resulting metric scale exceed the Reality component limits.");
+        }
+        nextCalibration = parseRealityAssetCalibration({
+          version: 1,
+          status: "reference-distance",
+          sourceCoordinateSystem: coordinateSystem,
+          targetCoordinateSystem: "RUB",
+          metersPerSourceUnit: nextReferenceDistanceM / nextSourceDistance,
+          sourceDistance: nextSourceDistance,
+          referenceDistanceM: nextReferenceDistanceM,
+        });
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Reality calibration is invalid.");
+      return;
+    }
+
+    setError(undefined);
+    onUpdate?.({
+      componentId: component.id,
+      props: {
+        assetRef: assetRef ? structuredClone(assetRef) : null,
+        calibration: structuredClone(nextCalibration),
+        quality,
+        semanticProxyIds: [...proxyIds],
+      } as unknown as JSONObject,
+    });
+  };
+
+  return <section className="workspace-inspector__modeling workspace-inspector__reality" aria-labelledby={`${formId}-heading`}>
+    <h3 id={`${formId}-heading`}>Reality layer</h3>
+    <p className="workspace-inspector__hint">
+      Gaussian splats are visual evidence, never collision, physics, CAD, or feasibility authority.
+      Link editable spatial proxies when engineering meaning is required.
+    </p>
+    {assetRef ? <dl className="workspace-inspector__model-ref" aria-label="Reality asset reference">
+      <div><dt>Asset</dt><dd>{stringValue(assetRef.assetId)}</dd></div>
+      <div><dt>Digest</dt><dd>{stringValue(assetRef.digest)}</dd></div>
+    </dl> : <p className="workspace-inspector__privacy">No asset is linked. The renderer will keep a placeholder.</p>}
+    <form onSubmit={submit} noValidate>
+      <label htmlFor={`${formId}-quality`}><span>Render quality</span><select id={`${formId}-quality`} aria-label="Render quality" value={quality} disabled={locked} onChange={(event) => setQuality(event.target.value as RealityQuality)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+      <label htmlFor={`${formId}-calibration`}><span>Calibration</span><select id={`${formId}-calibration`} aria-label="Calibration" value={mode} disabled={locked} onChange={(event) => { setMode(event.target.value as RealityCalibrationMode); setError(undefined); }}><option value="uncalibrated">Uncalibrated</option><option value="metadata-declared">Declared unit</option><option value="reference-distance">Reference distance</option></select></label>
+      <label htmlFor={`${formId}-coordinates`}><span>Source coordinates</span><select id={`${formId}-coordinates`} aria-label="Source coordinates" value={coordinateSystem} disabled={locked} onChange={(event) => { setCoordinateSystem(event.target.value as RealityCoordinateSystem); setError(undefined); }}>{REALITY_COORDINATE_SYSTEMS.map((system) => <option key={system} value={system}>{system}{system === "RUB" ? " · right/up/back" : system === "UNKNOWN" ? " · unknown" : ""}</option>)}</select></label>
+      {mode === "metadata-declared" && <label htmlFor={`${formId}-unit`}><span>Source unit</span><select id={`${formId}-unit`} aria-label="Source unit" value={declaredUnit} disabled={locked} onChange={(event) => setDeclaredUnit(event.target.value as RealityDeclaredUnit)}><option value="metre">Metre</option><option value="centimetre">Centimetre</option><option value="millimetre">Millimetre</option><option value="inch">Inch</option><option value="foot">Foot</option></select></label>}
+      {mode === "reference-distance" && <fieldset>
+        <legend>Known reference</legend>
+        <label htmlFor={`${formId}-source-distance`}><span>Source distance</span><input id={`${formId}-source-distance`} aria-label="Source distance" type="number" min="0.000000000001" max="1000000000" step="any" value={sourceDistance} disabled={locked} onChange={(event) => { setSourceDistance(event.target.value); setError(undefined); }} /></label>
+        <label htmlFor={`${formId}-reference-distance`}><span>Real distance (m)</span><input id={`${formId}-reference-distance`} aria-label="Real distance (m)" type="number" min="0.000000000001" max="1000000" step="any" value={referenceDistanceM} disabled={locked} onChange={(event) => { setReferenceDistanceM(event.target.value); setError(undefined); }} /></label>
+      </fieldset>}
+      <fieldset>
+        <legend>Engineering proxies</legend>
+        {proxyOptions.length === 0 ? <p className="workspace-inspector__hint">Create an editable primitive, entity, or assembly to provide collision and engineering semantics.</p> : proxyOptions.map((option) => { const checked = proxyIds.includes(option.id); return <label key={option.id}><input type="checkbox" checked={checked} disabled={locked || (!checked && proxyIds.length >= 128)} onChange={(event) => setProxyIds((current) => event.target.checked ? [...current, option.id] : current.filter((id) => id !== option.id))} />{option.label}</label>; })}
+      </fieldset>
+      {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
+      <button type="submit" disabled={locked}>Apply Reality settings</button>
+    </form>
   </section>;
 }
 

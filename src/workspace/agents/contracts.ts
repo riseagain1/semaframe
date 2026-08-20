@@ -5,8 +5,8 @@
  * Wire-facing DTOs use snake_case; the engine port uses normal TypeScript names.
  */
 
-export const WORKSPACE_PROTOCOL_VERSION = "1.2" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "2.5" as const;
+export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "2.6" as const;
 /** Final JSON cap for one public inspect_workspace_component result. */
 export const WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES = 1_048_576;
 export const WORKSPACE_MODEL_INSPECTION_MAX_BYTES = 1_048_576;
@@ -37,6 +37,8 @@ export const WORKSPACE_PERMISSION_SCOPES = [
   "event:connect",
   "view:present",
   "workspace:clear",
+  /** Gateway-only authorization for one-time, byte-verified Reality Asset imports. */
+  "asset:import",
   "effect:data_read",
   "effect:external_write",
   "extension:install",
@@ -59,18 +61,23 @@ export const DEFAULT_WORKSPACE_AGENT_SCOPES = [
   "connector:bind",
   "event:connect",
   "view:present",
+  "asset:import",
 ] as const satisfies readonly WorkspacePermissionScope[];
 
 export const WORKSPACE_AGENT_TOOL_NAMES = [
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_component",
+  "inspect_workspace_asset",
   "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
   "inspect_workspace_physics",
   "query_stable_placement",
   "simulate_workspace_physics",
+  "begin_workspace_asset_import",
+  "cancel_workspace_asset_import",
+  "complete_workspace_asset_import",
   "begin_workspace_update",
   "submit_workspace_batch",
   "undo_workspace_batch",
@@ -153,6 +160,15 @@ export type WorkspaceModelDefinitionView = Readonly<{
   revision: number;
   registryDigest: string;
   modelDefinition: JSONValue;
+}>;
+
+/** Exact, descriptor-only Reality Asset inspection. Binary presence stays host-local. */
+export type WorkspaceRealityAssetView = Readonly<{
+  workspaceId: string;
+  revision: number;
+  registryDigest: string;
+  descriptor: JSONValue;
+  binaryAvailability: "host_local_unknown";
 }>;
 
 export type WorkspaceSpatialStateView = Readonly<{
@@ -241,6 +257,10 @@ export interface WorkspaceEnginePort {
     componentId: string,
     principal: WorkspaceAgentPrincipal,
   ): WorkspaceComponentStateView | Promise<WorkspaceComponentStateView>;
+  inspectRealityAsset(
+    assetId: string,
+    principal: WorkspaceAgentPrincipal,
+  ): WorkspaceRealityAssetView | Promise<WorkspaceRealityAssetView>;
   inspectModel(
     modelId: string,
     version: string,

@@ -19,6 +19,8 @@ export function commandHistoryText(command: WorkspaceCommandRecord): string {
     case "invoke_component_action": return `Invoked ${operation.action} on ${operation.id}`;
     case "upsert_resource": return `Updated data source ${operation.resource.id}`;
     case "delete_resource": return `Deleted data source ${operation.resource_id}`;
+    case "register_reality_asset": return `Imported Reality Asset ${operation.asset.assetId}`;
+    case "delete_reality_asset": return `Deleted Reality Asset ${operation.asset_id}`;
     case "bind_resource": return `Bound data source ${operation.binding.resourceId}`;
     case "unbind_resource": return `Removed binding ${operation.binding_id}`;
     case "connect_event": return `Connected event ${operation.connection.id}`;

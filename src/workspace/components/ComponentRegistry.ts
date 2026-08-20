@@ -84,7 +84,9 @@ function assertResizePolicyShape(manifest: ComponentManifest): void {
         || policy.allowedAxes.some((axis) => axis !== "x" && axis !== "y" && axis !== "z")
         || placement !== "world3d"
         || manifest.trustTier !== "builtin"
-        || (manifest.typeId !== "spatial-entity" && manifest.typeId !== "model-assembly")
+        || (manifest.typeId !== "spatial-entity"
+          && manifest.typeId !== "model-assembly"
+          && manifest.typeId !== "gaussian-splat")
         || (policy.mode === "uniform"
           && (policy.defaultScale.x !== policy.defaultScale.y
             || policy.defaultScale.y !== policy.defaultScale.z

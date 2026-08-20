@@ -12,6 +12,7 @@ import {
   type ParametricPrimitive,
 } from "../modeling/parametricGeometry";
 import type { WorkspaceState } from "../state/workspaceState";
+import { isSpatialRenderTypeId } from "./spatialComponentKinds";
 import { effectiveSpatialPhysicsConfig } from "../physics";
 import { supportContactPatches } from "./contactGeometry";
 import {
@@ -352,15 +353,14 @@ function primSegment(value: string): string {
 
 function isSpatialComponent(component: ComponentInstance | undefined): component is ComponentInstance {
   return component !== undefined
-    && (component.type.typeId === "spatial-entity"
-      || component.type.typeId === "spatial-primitive"
-      || component.type.typeId === "model-assembly")
+    && isSpatialRenderTypeId(component.type.typeId)
     && component.placement.space === "world3d";
 }
 
 function spatialNodeKind(component: ComponentInstance): SemaFrameSpatialGraphNode["nodeKind"] {
   if (component.type.typeId === "spatial-primitive") return "primitive";
   if (component.type.typeId === "model-assembly") return "assembly";
+  if (component.type.typeId === "gaussian-splat") return "reality";
   return "asset";
 }
 
@@ -441,6 +441,72 @@ function pointBounds(point: Vec3): SpatialBounds {
   };
 }
 
+function realityReference(value: unknown): { assetId: string; digest: string } | undefined {
+  if (!isObject(value) || typeof value.assetId !== "string" || typeof value.digest !== "string") {
+    return undefined;
+  }
+  return { assetId: value.assetId, digest: value.digest };
+}
+
+function realityCalibration(value: unknown): Readonly<{
+  status: "uncalibrated" | "metadata-declared" | "reference-distance";
+  sourceCoordinateSystem: string;
+  metersPerSourceUnit?: number;
+}> {
+  if (!isObject(value)) {
+    return { status: "uncalibrated", sourceCoordinateSystem: "UNKNOWN" };
+  }
+  const status = value.status === "metadata-declared" || value.status === "reference-distance"
+    ? value.status
+    : "uncalibrated";
+  return {
+    status,
+    sourceCoordinateSystem: typeof value.sourceCoordinateSystem === "string"
+      ? value.sourceCoordinateSystem
+      : "UNKNOWN",
+    ...(typeof value.metersPerSourceUnit === "number" && Number.isFinite(value.metersPerSourceUnit)
+      && value.metersPerSourceUnit > 0
+      ? { metersPerSourceUnit: value.metersPerSourceUnit }
+      : {}),
+  };
+}
+
+function coordinateSigns(system: string): Vec3 {
+  if (!/^[LR][UD][BF]$/u.test(system)) return { x: 1, y: 1, z: 1 };
+  return {
+    x: system[0] === "R" ? 1 : -1,
+    y: system[1] === "U" ? 1 : -1,
+    z: system[2] === "B" ? 1 : -1,
+  };
+}
+
+function realityLocalBounds(
+  sourceBounds: Readonly<{ min: Vec3; max: Vec3 }> | undefined,
+  sourceCoordinateSystem: string,
+  metersPerSourceUnit: number | undefined,
+): LocalBoundsSource | undefined {
+  if (!sourceBounds) return undefined;
+  const signs = coordinateSigns(sourceCoordinateSystem);
+  const factor = metersPerSourceUnit ?? 1;
+  const first = multiply(sourceBounds.min, scale(signs, factor));
+  const second = multiply(sourceBounds.max, scale(signs, factor));
+  const min = {
+    x: Math.min(first.x, second.x),
+    y: Math.min(first.y, second.y),
+    z: Math.min(first.z, second.z),
+  };
+  const max = {
+    x: Math.max(first.x, second.x),
+    y: Math.max(first.y, second.y),
+    z: Math.max(first.z, second.z),
+  };
+  return {
+    center: scale(add(min, max), 0.5),
+    size: subtract(max, min),
+    source: "asset_bounds",
+  };
+}
+
 function componentPrimPath(component: ComponentInstance, components: ReadonlyMap<string, ComponentInstance>): string {
   const segments: string[] = [primSegment(component.id)];
   const seen = new Set([component.id]);
@@ -503,6 +569,61 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
         worldTransform: transform,
         worldBounds: pointBounds(transform.position),
         relations: [],
+      }];
+    }
+
+    if (nodeKind === "reality") {
+      const reference = realityReference(component.props.assetRef);
+      const descriptor = reference ? state.realityAssets.get(reference.assetId) : undefined;
+      const calibration = realityCalibration(component.props.calibration);
+      const localBounds = realityLocalBounds(
+        descriptor?.sourceBounds,
+        calibration.sourceCoordinateSystem,
+        calibration.metersPerSourceUnit,
+      );
+      const worldBounds = localBounds
+        ? resolvedBoxPart(
+            "reality_bounds",
+            "asset_bounds",
+            localBounds.center,
+            localBounds.size,
+            { x: 0, y: 0, z: 0 },
+            transform,
+            0,
+          ).aabb
+        : pointBounds(transform.position);
+      const semanticProxyIds = Array.isArray(component.props.semanticProxyIds)
+        ? component.props.semanticProxyIds.filter((id): id is string => typeof id === "string")
+          .sort((left, right) => left.localeCompare(right))
+        : [];
+      return [{
+        id: component.id,
+        primPath: componentPrimPath(component, state.components),
+        label: component.label,
+        ...(parentId ? { parentId } : {}),
+        nodeKind,
+        entityKind: "gaussian-splat",
+        reality: {
+          ...(reference ? { assetId: reference.assetId, digest: reference.digest } : {}),
+          descriptorAvailable: Boolean(descriptor),
+          binaryAvailability: "host_local_unknown",
+          ...(descriptor ? { format: descriptor.format, splatCount: descriptor.splatCount } : {}),
+          engineeringAuthority: "visual_only",
+          calibrationStatus: calibration.status,
+          sourceCoordinateSystem: calibration.sourceCoordinateSystem,
+          targetCoordinateSystem: "RUB",
+          ...(calibration.metersPerSourceUnit === undefined
+            ? {}
+            : { metersPerSourceUnit: calibration.metersPerSourceUnit }),
+          boundsAreMetric: calibration.metersPerSourceUnit !== undefined,
+          semanticProxyIds,
+        },
+        assemblyAncestry: ancestry,
+        visibility: component.visibility,
+        localPlacement: structuredClone(component.placement),
+        worldTransform: transform,
+        worldBounds,
+        relations: semanticProxyIds.map((id) => `represented_by:${id}`),
       }];
     }
 
@@ -627,6 +748,13 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
     aggregateCache.set(node.id, bounds);
     return bounds;
   };
+  const byId = new Map(baseNodes.map((node) => [node.id, node]));
+  for (const node of baseNodes) {
+    if (node.nodeKind !== "reality") continue;
+    for (const proxyId of node.reality?.semanticProxyIds ?? []) {
+      byId.get(proxyId)?.relations.push(`proxy_for:${node.id}`);
+    }
+  }
   return baseNodes.map((node): MutableNode => node.nodeKind === "assembly"
     ? { ...node, worldBounds: aggregateAssemblyBounds(node) }
     : node);

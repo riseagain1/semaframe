@@ -319,8 +319,8 @@ function assertWorkspaceProject(serialized) {
   if (!desk || !spatialComponents.some((component) => component.label === "Presenter")) {
     throw new Error("Saved Workspace project did not preserve both mixed-demo 3D components.");
   }
-  if (project.protocolVersion !== "1.2" || project.workspaceSchemaVersion !== "1.2") {
-    throw new Error("Saved Workspace project did not use the visual-effects-aware Protocol and Schema 1.2 envelope.");
+  if (project.protocolVersion !== "1.3" || project.workspaceSchemaVersion !== "1.3") {
+    throw new Error("Saved Workspace project did not use the Reality-aware Protocol and Schema 1.3 envelope.");
   }
   if (video?.placement?.size?.width !== 640 || video?.placement?.size?.height !== 408) {
     throw new Error("Saved Workspace project did not preserve the human-resized video player geometry.");
@@ -1090,7 +1090,7 @@ try {
   }
 
   if (problems.length) throw new Error(`Browser reported warnings/errors:\n${problems.join("\n")}`);
-  console.log("Workspace browser smoke passed: exclusive pre-handshake Agent gate, authenticated Workspace unlock, unified hybrid canvas, one-batch 3D desk + presenter + 2D timer, normal-path active video creation, one-command aspect-locked resize, universal 2D halo and 3D emission/bloom effects, microscopic-to-planetary hybrid zoom with adaptive clipping and Frame recovery, screen-fixed iframe preservation and unchanged Workspace history, desktop/mobile full screen with native fallback, explicit/Escape exit, exact stage dimensions and 3D scale, semantic timer action/live projection, Protocol 1.2 universal save validation, gated blank reset/open round trip, connected Agent management, and responsive layout.");
+  console.log("Workspace browser smoke passed: exclusive pre-handshake Agent gate, authenticated Workspace unlock, unified hybrid canvas, one-batch 3D desk + presenter + 2D timer, normal-path active video creation, one-command aspect-locked resize, universal 2D halo and 3D emission/bloom effects, microscopic-to-planetary hybrid zoom with adaptive clipping and Frame recovery, screen-fixed iframe preservation and unchanged Workspace history, desktop/mobile full screen with native fallback, explicit/Escape exit, exact stage dimensions and 3D scale, semantic timer action/live projection, Protocol 1.3 universal save validation, gated blank reset/open round trip, connected Agent management, and responsive layout.");
   console.log(`Screenshots: ${join(artifacts, "workspace-smoke-mixed.png")}, ${join(artifacts, "workspace-smoke-fullscreen.png")}, ${join(artifacts, "workspace-smoke-fullscreen-mobile.png")}, ${join(artifacts, "workspace-smoke-agent.png")}, ${join(artifacts, "workspace-smoke-agent-mobile.png")}`);
 } catch (error) {
   const safeLogs = processLogs.join("").replace(/[A-Za-z0-9_-]{40,}/gu, "[redacted]");

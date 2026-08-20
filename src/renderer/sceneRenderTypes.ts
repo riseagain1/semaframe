@@ -106,7 +106,22 @@ export type EntityRenderGeometry =
       castShadow: boolean;
       receiveShadow: boolean;
     }
-  | { kind: "assembly" };
+  | { kind: "assembly" }
+  | {
+      kind: "reality";
+      asset?: Readonly<{
+        assetId: string;
+        digest: string;
+        format: "spz-v4" | "ply" | "sog-v2";
+        byteLength: number;
+        splatCount: number;
+      }>;
+      bounds: Readonly<{ min: Vec3; max: Vec3 }>;
+      sourceAxisSigns: Vec3;
+      metersPerSourceUnit: number;
+      quality: "auto" | "low" | "medium" | "high";
+      engineeringAuthority: "visual_only";
+    };
 
 export type EntityState = {
   id: EntityId;

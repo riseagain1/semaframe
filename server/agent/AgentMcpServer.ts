@@ -14,12 +14,16 @@ export const AGENT_REST_PATHS = Object.freeze({
   get_workspace_instructions: "/v1/workspace/instructions",
   inspect_workspace: "/v1/workspace/inspect",
   inspect_workspace_component: "/v1/workspace/components/inspect",
+  inspect_workspace_asset: "/v1/workspace/assets/inspect",
   inspect_workspace_model: "/v1/workspace/models/inspect",
   inspect_workspace_space: "/v1/workspace/space/inspect",
   query_spatial_placement: "/v1/workspace/space/query",
   inspect_workspace_physics: "/v1/workspace/physics/inspect",
   query_stable_placement: "/v1/workspace/physics/placement/query",
   simulate_workspace_physics: "/v1/workspace/physics/simulate",
+  begin_workspace_asset_import: "/v1/assets/imports/begin",
+  cancel_workspace_asset_import: "/v1/assets/imports/cancel",
+  complete_workspace_asset_import: "/v1/assets/imports/complete",
   begin_workspace_update: "/v1/workspace/updates/begin",
   submit_workspace_batch: "/v1/workspace/updates/submit",
   undo_workspace_batch: "/v1/workspace/undo",
@@ -33,6 +37,14 @@ export type AgentMcpClientContext = WorkspaceMcpClientContext;
 export type AgentMcpBackend = Readonly<{
   dispatch(
     name: AgentCommandName,
+    input: unknown,
+    client: AgentMcpClientContext,
+  ): Promise<AgentMcpBackendResult>;
+  beginAssetImport?(
+    input: unknown,
+    client: AgentMcpClientContext,
+  ): Promise<AgentMcpBackendResult>;
+  cancelAssetImport?(
     input: unknown,
     client: AgentMcpClientContext,
   ): Promise<AgentMcpBackendResult>;
@@ -58,6 +70,12 @@ export function createAgentMcpServer(
 
   registerWorkspaceTools(server, {
     dispatch: (name: WorkspaceAgentToolName, input, client) => backend.dispatch(name, input, client),
+    ...(backend.beginAssetImport ? {
+      beginAssetImport: (input: unknown, client: AgentMcpClientContext) => backend.beginAssetImport!(input, client),
+    } : {}),
+    ...(backend.cancelAssetImport ? {
+      cancelAssetImport: (input: unknown, client: AgentMcpClientContext) => backend.cancelAssetImport!(input, client),
+    } : {}),
   }, {
     protocolEra,
     registerGuideResource: true,

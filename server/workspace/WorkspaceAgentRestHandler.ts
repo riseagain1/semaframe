@@ -7,12 +7,16 @@ export const WORKSPACE_REST_PATHS = Object.freeze({
   get_workspace_instructions: "/v1/workspace/instructions",
   inspect_workspace: "/v1/workspace/inspect",
   inspect_workspace_component: "/v1/workspace/components/inspect",
+  inspect_workspace_asset: "/v1/workspace/assets/inspect",
   inspect_workspace_model: "/v1/workspace/models/inspect",
   inspect_workspace_space: "/v1/workspace/space/inspect",
   query_spatial_placement: "/v1/workspace/space/query",
   inspect_workspace_physics: "/v1/workspace/physics/inspect",
   query_stable_placement: "/v1/workspace/physics/placement/query",
   simulate_workspace_physics: "/v1/workspace/physics/simulate",
+  begin_workspace_asset_import: "/v1/assets/imports/begin",
+  cancel_workspace_asset_import: "/v1/assets/imports/cancel",
+  complete_workspace_asset_import: "/v1/assets/imports/complete",
   begin_workspace_update: "/v1/workspace/updates/begin",
   submit_workspace_batch: "/v1/workspace/updates/submit",
   undo_workspace_batch: "/v1/workspace/undo",
@@ -94,7 +98,7 @@ function statusForResult(result: WorkspaceAgentResult<unknown>): number {
   const { code } = result.error;
   if (code === "instructions_required" || code === "session_expired") return 401;
   if (code === "instruction_digest_mismatch" || code === "permission_denied" || code === "destructive_permission_required") return 403;
-  if (/stale|transaction|retry_mismatch|envelope_mismatch/u.test(code)) return 409;
+  if (/stale|transaction|retry_mismatch|envelope_mismatch|session_mismatch/u.test(code)) return 409;
   if (/invalid|validation|unsupported/u.test(code)) return 422;
   return 500;
 }

@@ -735,6 +735,34 @@
 .workspace-feed-preview small { color: #9eabb9; font-size: .68rem; overflow-wrap: anywhere; }
 .workspace-feed-preview pre { max-height: 180px; margin: 3px 0 0; padding: 8px; overflow: auto; border-radius: 6px; background: rgba(4, 8, 13, .72); color: #cbd6df; font: .66rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.workspace-reality__import { display: grid; gap: 8px; margin-bottom: 14px; padding: 11px; border: 1px solid rgba(159, 232, 112, .24); border-radius: 9px; background: rgba(159, 232, 112, .055); }
+.workspace-reality__import h3 { margin: 0; font-size: .84rem; }
+.workspace-reality__import p { margin: 0; color: #aeb8c8; font-size: .71rem; line-height: 1.45; }
+.workspace-reality__import button { min-height: 44px; }
+.workspace-reality__import .workspace-reality__status { color: #dff7ff; }
+.workspace-reality__list { align-content: start; }
+.workspace-reality-card { display: grid !important; gap: 8px !important; padding: 10px; border: 1px solid rgba(255,255,255,.11); border-radius: 9px; background: rgba(255,255,255,.025); }
+.workspace-reality-card__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.workspace-reality-card__heading strong { font-size: .78rem; }
+.workspace-reality-card__heading span { color: #9aa7b8; font-size: .62rem; }
+.workspace-reality-card__heading span.is-available { color: #9fe870; }
+.workspace-reality-card__heading span.is-missing,
+.workspace-reality-card__heading span.is-error { color: #ffb86b; }
+.workspace-reality-card code { color: #afdced; font: 600 .64rem/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.workspace-reality-card dl { margin: 0; font-size: .67rem; }
+.workspace-reality-card dl > div { padding: 2px 0; }
+.workspace-reality-card__instances { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.workspace-reality-card__instances span { flex: 1 1 100%; color: #9aa7b8; font-size: .66rem; }
+.workspace-reality-card__instances button { min-height: 36px; }
+.workspace-reality-card__relink { display: grid; gap: 7px; padding: 8px; border: 1px solid rgba(255,184,107,.3); border-radius: 8px; background: rgba(255,184,107,.06); }
+.workspace-reality-card__relink p,
+.workspace-reality-card__delete p { margin: 0; color: #d8c6a8; font-size: .68rem; line-height: 1.42; }
+.workspace-reality-card__relink button { min-height: 44px; }
+.workspace-reality-card__remove { justify-self: start; }
+.workspace-reality-card .is-danger { color: #fff; border-color: rgba(255,102,125,.62); background: rgba(131,35,52,.58); }
+.workspace-reality-card__delete { display: grid; gap: 7px; padding: 9px; border: 1px solid rgba(255,102,125,.42); border-radius: 8px; background: rgba(101,26,40,.3); }
+.workspace-reality-card__delete > div { display: flex; justify-content: flex-end; gap: 6px; }
+
 .workspace-inspector__editor { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .11); }
 .workspace-inspector__resize { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .11); }
 .workspace-inspector__resize h3 { margin: 0; font-size: .9rem; }

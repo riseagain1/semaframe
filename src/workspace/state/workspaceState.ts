@@ -14,6 +14,7 @@ import type {
   WorkspaceSchemaVersion,
 } from "../protocol/workspaceTypes";
 import type { ModelDefinition } from "../modeling/modelDefinitions";
+import type { RealityAssetDescriptor } from "../assets";
 
 export type WorkspaceState = {
   workspaceId: string;
@@ -23,6 +24,8 @@ export type WorkspaceState = {
   registryDigest: string;
   components: Map<ComponentId, ComponentInstance>;
   resources: Map<string, WorkspaceResource>;
+  /** Content-addressed, visual-only Reality Asset metadata. Never contains bytes or paths. */
+  realityAssets: Map<string, RealityAssetDescriptor>;
   connections: Map<string, WorkspaceConnection>;
   aliases: Map<string, ComponentId>;
   sharedViews: Map<string, SharedView>;

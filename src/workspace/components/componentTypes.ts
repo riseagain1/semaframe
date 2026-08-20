@@ -1,4 +1,4 @@
-/** Renderer-independent component contracts for Workspace Protocol 1.2. */
+/** Renderer-independent component contracts for Workspace Protocol 1.3. */
 
 export type JSONPrimitive = string | number | boolean | null;
 export type JSONValue = JSONPrimitive | JSONObject | JSONValue[];

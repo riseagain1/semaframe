@@ -19,7 +19,7 @@ import {
 
 export const WORKSPACE_MCP_SERVER_INFO = Object.freeze({
   name: "semaframe-workspace-engine",
-  version: "1.6.0",
+  version: "1.7.0",
 });
 
 export type WorkspaceMcpBackendResult = Readonly<{
@@ -40,6 +40,14 @@ export interface WorkspaceMcpBackend {
     input: unknown,
     client: WorkspaceMcpClientContext,
   ): Promise<WorkspaceMcpBackendResult>;
+  beginAssetImport?(
+    input: unknown,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
+  cancelAssetImport?(
+    input: unknown,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
 }
 
 export type RegisterWorkspaceToolsOptions = Readonly<{
@@ -51,12 +59,16 @@ const requiredActionSchema = z.enum([
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_component",
+  "inspect_workspace_asset",
   "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
   "inspect_workspace_physics",
   "query_stable_placement",
   "simulate_workspace_physics",
+  "begin_workspace_asset_import",
+  "cancel_workspace_asset_import",
+  "complete_workspace_asset_import",
   "begin_workspace_update",
   "submit_workspace_batch",
   "undo_workspace_batch",
@@ -190,7 +202,7 @@ const {
 
 /**
  * Keep the transport advertisement and runtime validation on the canonical
- * Protocol 1.2 schema. Nesting the batch behind a local definition preserves
+ * Protocol 1.3 schema. Nesting the batch behind a local definition preserves
  * every operation definition and its root-relative references in tools/list.
  */
 const submitWorkspaceBatchInputSchema = fromJsonSchema<SubmitWorkspaceBatchInput>({
@@ -292,6 +304,24 @@ export function registerWorkspaceTools(
     },
     async (input, context) => componentInspectionToolResult(
       await backend.dispatch("inspect_workspace_component", input, clientContext({}, context, protocolEra)),
+    ),
+  );
+
+  server.registerTool(
+    "inspect_workspace_asset",
+    {
+      title: "Inspect one registered Reality Asset",
+      description: "Reads one exact content-addressed Reality Asset descriptor by asset ID. This returns safe metadata only: never raw bytes, file names, local paths, upload capabilities, or a claim about browser-local binary availability.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        asset_id: z.string().length(67).regex(/^ra_[a-f0-9]{64}$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "inspect_workspace_asset",
+      await backend.dispatch("inspect_workspace_asset", input, clientContext({}, context, protocolEra)),
     ),
   );
 
@@ -540,6 +570,70 @@ export function registerWorkspaceTools(
     async (input, context) => toolResult(
       "simulate_workspace_physics",
       await backend.dispatch("simulate_workspace_physics", input, clientContext({}, context, protocolEra)),
+    ),
+  );
+
+  server.registerTool(
+    "begin_workspace_asset_import",
+    {
+      title: "Begin a Reality Asset import",
+      description: "After explicit asset:import approval, mint a one-time streaming PUT grant for a user-provided PLY, SPZ, or SOG file. Bytes never enter MCP JSON. Compute the exact SHA-256 and byte length before calling this tool.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        request_id: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._~-]*$/u),
+        workspace_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/u),
+        display_name: z.string().min(1).max(255),
+        format: z.enum(["ply", "spz", "sog"]),
+        media_type: z.string().min(3).max(192),
+        byte_length: z.number().int().positive().max(256 * 1024 * 1024),
+        sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "begin_workspace_asset_import",
+      await (backend.beginAssetImport
+        ? backend.beginAssetImport(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("begin_workspace_asset_import", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "cancel_workspace_asset_import",
+    {
+      title: "Cancel a staged Reality Asset import",
+      description: "Cancels and deletes one pending upload candidate belonging to this approved connection.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        candidate_handle: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "cancel_workspace_asset_import",
+      await (backend.cancelAssetImport
+        ? backend.cancelAssetImport(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("cancel_workspace_asset_import", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "complete_workspace_asset_import",
+    {
+      title: "Validate and register an uploaded Reality Asset",
+      description: "Asks the authoritative SemaFrame browser to stream, independently preflight, content-hash, store, and register a ready candidate. Returns a digest-pinned asset reference; create a gaussian-splat component in a normal prepared Workspace batch afterward.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        candidate_handle: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/u),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "complete_workspace_asset_import",
+      await backend.dispatch("complete_workspace_asset_import", input, clientContext({}, context, protocolEra)),
     ),
   );
 

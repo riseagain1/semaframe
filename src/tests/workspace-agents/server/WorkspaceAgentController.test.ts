@@ -11,6 +11,7 @@ import {
   stableJson,
 } from "../../../workspace/agents/guide";
 import type {
+  JSONValue,
   WorkspaceAgentPrincipal,
   WorkspaceAgentResult,
   WorkspaceCommitReceipt,
@@ -21,6 +22,7 @@ import type {
   WorkspaceModelDefinitionView,
   WorkspacePermissionScope,
   WorkspacePreparedUpdate,
+  WorkspaceRealityAssetView,
   WorkspaceSpatialPlacementView,
   WorkspaceSpatialStateView,
   WorkspacePhysicsPlacementView,
@@ -164,6 +166,27 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
     };
   }
 
+  inspectRealityAsset(assetId: string): WorkspaceRealityAssetView {
+    if (assetId === `ra_${"0".repeat(64)}`) {
+      throw new WorkspaceEngineError("reality_asset_not_found", "Reality Asset does not exist", {
+        retryable: true,
+        requiredAction: "inspect_workspace",
+      });
+    }
+    return {
+      workspaceId: "workspace_main",
+      revision: this.revision,
+      registryDigest: this.registryDigest,
+      descriptor: {
+        version: 1,
+        assetId,
+        digest: `sha256:${assetId.slice(3)}`,
+        engineeringAuthority: "visual_only",
+      },
+      binaryAvailability: "host_local_unknown",
+    };
+  }
+
   getRegistryDigest(): string {
     return this.registryDigest;
   }
@@ -218,7 +241,7 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
     this.inputRevision += 1;
     return {
       envelope: {
-        protocol_version: "1.2",
+        protocol_version: "1.3",
         request_id: `workspace_request_${this.inputRevision}`,
         workspace_id: "workspace_main",
         input_revision: this.inputRevision,
@@ -345,8 +368,8 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("2.5");
-    expect(instructions.guide.protocol_version).toBe("1.2");
+    expect(instructions.guide.guide_version).toBe("2.6");
+    expect(instructions.guide.protocol_version).toBe("1.3");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),
       stock_chart: {
@@ -361,6 +384,20 @@ describe("WorkspaceAgentController", () => {
       },
       interactions: expect.any(Array),
     });
+    expect(instructions.guide.reality_asset_quickstart).toMatchObject({
+      required_scopes: expect.arrayContaining(["asset:import"]),
+      accepted_inputs: { formats: ["ply", "spz", "sog"], maximum_bytes: 268435456 },
+      import_steps: expect.arrayContaining([
+        expect.stringContaining("complete_workspace_asset_import"),
+        expect.stringContaining("inspect_workspace_asset"),
+      ]),
+      gaussian_splat_rules: {
+        authority: expect.stringContaining("visual_only"),
+        proxies: expect.stringContaining("semanticProxyIds"),
+        calibration: expect.any(String),
+        persistence: expect.stringContaining("exact same digest"),
+      },
+    });
     expect(instructions.guide.instructions).toContain("registered video-player component");
     expect(instructions.guide.instructions).toContain("Do not put iframe markup");
     expect(instructions.guide.instructions).toContain("Connect through SemaFrame agent controls");
@@ -372,6 +409,8 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("explicit resize_component operation");
     expect(instructions.guide.instructions).toContain("current_geometry");
     expect(instructions.guide.instructions).toContain("inspect_workspace_component");
+    expect(instructions.guide.instructions).toContain("inspect_workspace_asset");
+    expect(instructions.guide.instructions).toContain("engineeringAuthority visual_only");
     expect(instructions.guide.instructions).toContain("stage_dimensions");
     expect(instructions.guide.instructions).toContain("never silently clamps an Agent value");
     expect(instructions.guide.instructions).toContain("instruction_digest to the exact");
@@ -513,6 +552,83 @@ describe("WorkspaceAgentController", () => {
       ...deniedSession,
       component_id: "CMP_TARGET_061",
     })).toMatchObject({ ok: false, error: { code: "permission_denied" } });
+  });
+
+  it("inspects one exact Reality Asset descriptor without claiming local binary access", async () => {
+    const engine = new FakeWorkspaceEngine();
+    const controller = controllerFor(engine, ["workspace:read"]);
+    const session = await sessionFor(controller, ["workspace:read"]);
+    const assetId = `ra_${"a".repeat(64)}`;
+    expect(unwrap(await controller.inspectWorkspaceAsset({
+      ...session,
+      asset_id: assetId,
+    }))).toMatchObject({
+      workspace_id: "workspace_main",
+      workspace_revision: 0,
+      registry_digest: "registry_digest_v1",
+      descriptor: {
+        assetId,
+        digest: `sha256:${"a".repeat(64)}`,
+        engineeringAuthority: "visual_only",
+      },
+      binary_availability: "host_local_unknown",
+    });
+    expect(await controller.inspectWorkspaceAsset({ ...session, asset_id: "ra_not-a-digest" }))
+      .toMatchObject({ ok: false, error: { code: "invalid_request" } });
+    expect(await controller.inspectWorkspaceAsset({
+      ...session,
+      asset_id: `ra_${"0".repeat(64)}`,
+    })).toMatchObject({
+      ok: false,
+      error: { code: "reality_asset_not_found", required_action: "inspect_workspace" },
+    });
+  });
+
+  it("deduplicates concurrent and repeated asset completion per session and clears failures for retry", async () => {
+    const engine = new FakeWorkspaceEngine();
+    let release!: (value: JSONValue) => void;
+    const pending = new Promise<JSONValue>((resolve) => { release = resolve; });
+    let failureAttempts = 0;
+    const completeRealityAssetImport = vi.fn(async (candidateHandle: string): Promise<JSONValue> => {
+      if (candidateHandle === "a".repeat(43)) return pending;
+      failureAttempts += 1;
+      if (failureAttempts === 1) throw new Error("preflight failed");
+      return { asset_ref: { asset_id: `ra_${"b".repeat(64)}`, digest: `sha256:${"b".repeat(64)}` } };
+    });
+    let tokenSequence = 0;
+    const controller = new WorkspaceAgentController(engine, {
+      randomToken: (prefix) => `${prefix}_${String(++tokenSequence).padStart(32, "0")}`,
+      grantScopes: () => ["workspace:read", "asset:import"],
+      completeRealityAssetImport,
+    });
+    const firstSession = await sessionFor(controller, ["workspace:read", "asset:import"]);
+    const input = { ...firstSession, candidate_handle: "a".repeat(43) };
+    const first = controller.completeWorkspaceAssetImport(input);
+    const concurrent = controller.completeWorkspaceAssetImport(input);
+    await Promise.resolve();
+    expect(completeRealityAssetImport).toHaveBeenCalledTimes(1);
+    const completedValue = {
+      asset_ref: { asset_id: `ra_${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
+    } satisfies JSONValue;
+    release(completedValue);
+    expect(unwrap(await first)).toMatchObject({ result: completedValue });
+    expect(unwrap(await concurrent)).toMatchObject({ result: completedValue });
+    expect(unwrap(await controller.completeWorkspaceAssetImport(input))).toMatchObject({ result: completedValue });
+    expect(completeRealityAssetImport).toHaveBeenCalledTimes(1);
+
+    const secondSession = await sessionFor(controller, ["workspace:read", "asset:import"]);
+    expect(await controller.completeWorkspaceAssetImport({
+      ...secondSession,
+      candidate_handle: "a".repeat(43),
+    })).toMatchObject({ ok: false, error: { code: "asset_import_session_mismatch" } });
+
+    const retryInput = { ...firstSession, candidate_handle: "b".repeat(43) };
+    expect(await controller.completeWorkspaceAssetImport(retryInput))
+      .toMatchObject({ ok: false, error: { code: "engine_error", retryable: true } });
+    expect(unwrap(await controller.completeWorkspaceAssetImport(retryInput))).toMatchObject({
+      result: { asset_ref: { asset_id: `ra_${"b".repeat(64)}` } },
+    });
+    expect(completeRealityAssetImport).toHaveBeenCalledTimes(3);
   });
 
   it("keeps the final public inspection wrapper within one MiB at maximum client identity lengths", async () => {

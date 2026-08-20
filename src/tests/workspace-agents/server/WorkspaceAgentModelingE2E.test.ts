@@ -429,7 +429,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
         version: string;
         nodes: Array<Record<string, unknown>>;
       };
-      expect(space).toMatchObject({ format: "semaframe-spatial-graph", version: "3.0" });
+      expect(space).toMatchObject({ format: "semaframe-spatial-graph", version: "3.1" });
       const instanceAssembly = space.nodes.find(({ id }) => id === instanceAssemblyId)!;
       const instanceBase = space.nodes.find(({ id }) => id === instanceBaseId)!;
       const instancePost = space.nodes.find(({ id }) => id === instancePostId)!;

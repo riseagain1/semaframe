@@ -46,6 +46,10 @@ import {
   cameraDistanceLimits,
   floatingOriginFor,
 } from "./infiniteNavigation";
+import {
+  RealitySplatRuntime,
+  type RealitySplatInstanceDescriptor,
+} from "./reality";
 
 export type ThreeRendererOptions = {
   getSceneState?: () => Readonly<SceneState>;
@@ -58,6 +62,12 @@ export type ThreeRendererOptions = {
   reducedMotion?: boolean;
   assetRegistry?: AssetRegistry;
   gltfAssetLoader?: GltfAssetLoader;
+  /** Host-owned immutable byte provider. Undefined means Reality layers render as placeholders. */
+  openRealityAsset?: (
+    assetId: string,
+    digest: string,
+    signal?: AbortSignal,
+  ) => Promise<Blob | Uint8Array | ArrayBuffer | undefined>;
 };
 
 type ActiveTween = {
@@ -108,6 +118,8 @@ export class ThreeRenderer implements RendererAdapter {
   private readonly renderOrigin = new THREE.Vector3();
   private readonly navigationBoundsCenter = DEFAULT_CAMERA_TARGET.clone();
   private navigationBoundsRadius = 2;
+  private realityRuntime: RealitySplatRuntime | null = null;
+  private readonly realityLoads = new Map<EntityId, AbortController>();
 
   private readonly handleReducedMotionChange = (event: MediaQueryListEvent): void => {
     this.setReducedMotion(event.matches);
@@ -169,6 +181,22 @@ export class ThreeRenderer implements RendererAdapter {
       renderer.domElement.style.height = "100%";
       container.appendChild(renderer.domElement);
       this.renderer = renderer;
+      this.realityRuntime = new RealitySplatRuntime({
+        renderer,
+        scene,
+        onStatus: (status) => {
+          if (status.kind !== "error") return;
+          this.options.onStatus?.({
+            kind: "asset-fallback",
+            assetId: status.instanceId ?? "reality-asset",
+            note: {
+              code: "asset_load_failed",
+              entityId: status.instanceId ?? "reality-asset",
+              message: status.message,
+            },
+          });
+        },
+      });
       this.keyboardTarget = containerOwnsKeyboardFocus ? container : renderer.domElement;
 
       const controls = new OrbitControls(camera, renderer.domElement);
@@ -228,7 +256,7 @@ export class ThreeRenderer implements RendererAdapter {
   ): Promise<void> {
     this.requireInitialized();
     this.cancelTweens();
-    for (const root of this.entities.values()) disposeObject(root);
+    for (const [id, root] of this.entities) this.disposeManagedEntity(id, root);
     this.entities.clear();
     this.currentState = state;
     this.rebuildEnvironment(state.environment);
@@ -282,9 +310,16 @@ export class ThreeRenderer implements RendererAdapter {
     for (const id of delta.removed) {
       this.cancelTweensForEntity(id);
       const root = this.entities.get(id);
-      if (!root) continue;
       if (this.selectedEntityId === id) this.setSelectedEntity(null);
-      disposeObject(root);
+      if (root) this.disposeManagedEntity(id, root);
+      else {
+        this.realityLoads.get(id)?.abort();
+        this.realityLoads.delete(id);
+        // A loaded Reality root is deliberately absent from `entities` while
+        // its WebGL resources are being restored. Removal must still cancel the
+        // addressable restore record so stale geometry cannot be resurrected.
+        this.realityRuntime?.remove(id);
+      }
       this.entities.delete(id);
     }
 
@@ -438,6 +473,9 @@ export class ThreeRenderer implements RendererAdapter {
     if (entityId !== null && (!this.entities.has(entityId)
       || !isEntityVisuallyPresent(this.currentState?.entities.get(entityId)))) entityId = null;
     this.selectedEntityId = entityId;
+    for (const id of this.realityRuntime?.snapshot().instanceIds ?? []) {
+      this.realityRuntime?.setSelected(id, id === entityId);
+    }
     this.refreshSelectionHelper();
     if (notify) this.options.onSelectEntity?.(entityId);
   }
@@ -467,7 +505,11 @@ export class ThreeRenderer implements RendererAdapter {
     this.composer?.dispose();
     this.composer = null;
     this.bloomPass = null;
-    for (const root of this.entities.values()) disposeObject(root);
+    for (const controller of this.realityLoads.values()) controller.abort();
+    this.realityLoads.clear();
+    this.realityRuntime?.dispose();
+    this.realityRuntime = null;
+    for (const [id, root] of this.entities) this.disposeManagedEntity(id, root);
     this.entities.clear();
     if (this.environmentRoot) disposeObject(this.environmentRoot);
     this.fadingEnvironmentRoots.clear();
@@ -533,7 +575,9 @@ export class ThreeRenderer implements RendererAdapter {
   private async ensureEntity(entity: EntityState): Promise<ProceduralEntity> {
     const existing = this.entities.get(entity.id);
     const identity = entityRenderIdentity(entity);
-    if (existing?.userData.renderIdentity === identity) return existing;
+    if (existing?.userData.renderIdentity === identity && existing.userData.realityAssetMissing !== true) {
+      return existing;
+    }
     if (existing) {
       // A managed child may be parented under this root. Detach every managed
       // descendant before disposal so replacement never destroys another
@@ -543,9 +587,32 @@ export class ThreeRenderer implements RendererAdapter {
         this.entityLayer.add(otherRoot);
       }
       if (this.selectedEntityId === entity.id) this.selectionHelper?.removeFromParent();
-      disposeObject(existing);
+      this.disposeManagedEntity(entity.id, existing);
       this.entities.delete(entity.id);
       this.replacedEntityIds.add(entity.id);
+    }
+    this.realityLoads.get(entity.id)?.abort();
+    this.realityLoads.delete(entity.id);
+    if (entity.renderGeometry?.kind === "reality") {
+      // Also cancels a context-restore record when this authoritative entity is
+      // being recreated while its old GPU root is temporarily absent.
+      this.realityRuntime?.remove(entity.id);
+      const controller = new AbortController();
+      this.realityLoads.set(entity.id, controller);
+      let root: ProceduralEntity;
+      try {
+        root = await this.createRealityEntity(entity, controller.signal);
+      } finally {
+        if (this.realityLoads.get(entity.id) === controller) this.realityLoads.delete(entity.id);
+      }
+      if (this.disposed || controller.signal.aborted) {
+        this.disposeManagedEntity(entity.id, root);
+        return root;
+      }
+      root.userData.renderIdentity = identity;
+      this.entityLayer.add(root);
+      this.entities.set(entity.id, root);
+      return root;
     }
     const record = this.assets.get(entity.assetId);
     let root: ProceduralEntity;
@@ -587,6 +654,13 @@ export class ThreeRenderer implements RendererAdapter {
     root.userData.assetId = entity.assetId;
     root.userData.kind = entity.kind;
     root.userData.locked = entity.locked;
+    if (entity.renderGeometry?.kind === "reality" && entity.renderGeometry.asset) {
+      try {
+        this.realityRuntime?.update(realityInstance(entity));
+      } catch {
+        // A missing/failed asset is represented by the deterministic placeholder.
+      }
+    }
     restoreObjectVisualEffects(root);
     applyEntityAppearance(entity, root);
     applyEntityState(entity, root);
@@ -599,6 +673,104 @@ export class ThreeRenderer implements RendererAdapter {
       glowSpread: entity.appearance.glowSpread ?? 0.5,
     });
     if (!deferVisibility) root.visible = isEntityVisuallyPresent(entity);
+  }
+
+  private async createRealityEntity(entity: EntityState, signal: AbortSignal): Promise<ProceduralEntity> {
+    const geometry = entity.renderGeometry;
+    if (geometry?.kind !== "reality" || !geometry.asset || !this.options.openRealityAsset || !this.realityRuntime) {
+      return createRealityPlaceholder(entity, geometry?.kind === "reality" ? geometry : undefined);
+    }
+    const { assetId, digest } = geometry.asset;
+    const read = async (readSignal?: AbortSignal): Promise<Uint8Array | ArrayBuffer> => {
+      const value = await this.options.openRealityAsset?.(assetId, digest, readSignal);
+      if (!value) throw new Error("Reality asset bytes are not present in this browser. Relink the same digest to render it.");
+      return value instanceof Blob ? value.arrayBuffer() : value;
+    };
+    try {
+      const bytes = await read(signal);
+      if (signal.aborted) throw new DOMException("Reality asset load was cancelled.", "AbortError");
+      const handle = await this.realityRuntime.load({
+        instance: realityInstance(entity),
+        bytes,
+        reloadBytes: () => read(),
+      }, signal);
+      return this.prepareRealityRoot(entity, handle.root as ProceduralEntity);
+    } catch (error) {
+      this.realityRuntime.remove(entity.id);
+      const contextLost = this.realityRuntime.snapshot().contextLost;
+      if (signal.aborted || ((error instanceof DOMException && error.name === "AbortError") && !contextLost)) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : "Reality asset could not be rendered.";
+      this.options.onStatus?.({
+        kind: "asset-fallback",
+        assetId,
+        note: {
+          code: "asset_load_failed",
+          entityId: entity.id,
+          message,
+        },
+      });
+      return createRealityPlaceholder(entity, geometry, message);
+    }
+  }
+
+  private prepareRealityRoot(entity: EntityState, root: ProceduralEntity): ProceduralEntity {
+    const geometry = entity.renderGeometry;
+    if (geometry?.kind !== "reality") return root;
+    const previousSigns = root.userData.realitySourceAxisSigns as Vec3 | undefined;
+    const nextSigns = geometry.sourceAxisSigns;
+    for (const child of root.children) {
+      if (previousSigns) child.scale.multiply(vector(previousSigns));
+      child.scale.multiply(vector(nextSigns));
+    }
+    root.userData.entityId = entity.id;
+    root.userData.realityRuntime = true;
+    root.userData.realitySourceAxisSigns = { ...nextSigns };
+    return root;
+  }
+
+  private async reconcileRealityAfterContextRestore(isCurrent: () => boolean): Promise<void> {
+    const runtime = this.realityRuntime;
+    const state = this.currentState;
+    if (!runtime || !state || !isCurrent() || runtime.snapshot().contextLost) return;
+
+    for (const id of runtime.snapshot().instanceIds) {
+      const entity = state.entities.get(id);
+      if (entity?.renderGeometry?.kind !== "reality" || !entity.renderGeometry.asset) runtime.remove(id);
+    }
+
+    for (const entity of state.entities.values()) {
+      if (!isCurrent() || entity.renderGeometry?.kind !== "reality") continue;
+      const handle = runtime.getHandle(entity.id);
+      let root: ProceduralEntity;
+      if (handle) {
+        const existing = this.entities.get(entity.id);
+        if (existing && existing !== handle.root) disposeObject(existing);
+        root = this.prepareRealityRoot(entity, handle.root as ProceduralEntity);
+        root.userData.renderIdentity = entityRenderIdentity(entity);
+        this.entityLayer.add(root);
+        this.entities.set(entity.id, root);
+      } else {
+        root = await this.ensureEntity(entity);
+      }
+      if (!isCurrent()) return;
+      this.applyEntityPresentation(entity, root);
+      this.setEntityTransform(root, this.targetTransform(entity), false);
+    }
+    this.reconcileHierarchy(state);
+    this.refreshNavigationBounds();
+    this.refreshSelectionHelper();
+  }
+
+  private disposeManagedEntity(id: EntityId, root: THREE.Object3D): void {
+    this.realityLoads.get(id)?.abort();
+    this.realityLoads.delete(id);
+    if (root.userData.realityRuntime === true) {
+      this.realityRuntime?.remove(id);
+      return;
+    }
+    disposeObject(root);
   }
 
   private transitionEntityVisualEffects(
@@ -1209,12 +1381,39 @@ export class ThreeRenderer implements RendererAdapter {
 
   private handleContextLost = (event: Event): void => {
     event.preventDefault();
+    this.realityRuntime?.handleContextLost(event);
+    // Runtime disposal removes these roots from the scene immediately. Removing
+    // the stale map entries makes every state update during recovery fail closed
+    // to a placeholder/retry instead of mutating disposed GPU objects.
+    for (const [id, root] of this.entities) {
+      if (root.userData.realityRuntime === true) this.entities.delete(id);
+    }
+    this.refreshSelectionHelper();
     this.options.onStatus?.({ kind: "context-lost" });
   };
 
   private handleContextRestored = (): void => {
-    this.options.onStatus?.({ kind: "context-restored" });
-    if (this.currentState) void this.renderState(this.currentState);
+    const runtime = this.realityRuntime;
+    if (!runtime) {
+      this.options.onStatus?.({ kind: "context-restored" });
+      return;
+    }
+    void runtime.handleContextRestored()
+      .then(() => runtime.snapshot().contextLost
+        ? undefined
+        : this.enqueueStateRender((isCurrent) => this.reconcileRealityAfterContextRestore(isCurrent)))
+      .catch((error) => {
+        this.options.onStatus?.({
+          kind: "error",
+          message: error instanceof Error ? error.message : "Reality layers could not recover after WebGL restoration.",
+        });
+      })
+      .finally(() => {
+        // A second loss can interrupt the asynchronous reload. The browser will
+        // emit another restored event for that context; do not announce success
+        // or reconcile placeholders until that recovery actually completes.
+        if (!runtime.snapshot().contextLost) this.options.onStatus?.({ kind: "context-restored" });
+      });
   };
 
   private preventContextMenu = (event: Event): void => event.preventDefault();
@@ -1223,7 +1422,79 @@ export class ThreeRenderer implements RendererAdapter {
 function entityRenderIdentity(entity: EntityState): string {
   if (entity.renderGeometry?.kind === "assembly") return "assembly";
   if (entity.renderGeometry?.kind === "parametric") return "parametric";
+  if (entity.renderGeometry?.kind === "reality") {
+    const asset = entity.renderGeometry.asset;
+    const signs = entity.renderGeometry.sourceAxisSigns;
+    return asset
+      ? `reality:${asset.assetId}:${asset.digest}:${signs.x},${signs.y},${signs.z}`
+      : "reality:unlinked";
+  }
   return `asset:${entity.kind}:${entity.assetId}`;
+}
+
+function realityInstance(entity: EntityState): RealitySplatInstanceDescriptor {
+  const geometry = entity.renderGeometry;
+  if (geometry?.kind !== "reality" || !geometry.asset) {
+    throw new Error("Reality render identity requires an exact RealityAsset reference.");
+  }
+  return {
+    instanceId: entity.id,
+    entityId: entity.id,
+    asset: {
+      ...geometry.asset,
+      bounds: geometry.bounds,
+    },
+    visible: isEntityVisuallyPresent(entity),
+    opacity: entity.appearance.opacity ?? 1,
+    quality: geometry.quality,
+  };
+}
+
+function createRealityPlaceholder(
+  entity: EntityState,
+  reality?: Extract<NonNullable<EntityState["renderGeometry"]>, { kind: "reality" }>,
+  message?: string,
+): ProceduralEntity {
+  const root = new THREE.Group() as ProceduralEntity;
+  const signs = vector(reality?.sourceAxisSigns ?? { x: 1, y: 1, z: 1 });
+  const first = reality ? vector(reality.bounds.min).multiply(signs) : new THREE.Vector3(-0.5, -0.5, -0.5);
+  const second = reality ? vector(reality.bounds.max).multiply(signs) : new THREE.Vector3(0.5, 0.5, 0.5);
+  const min = new THREE.Vector3(
+    Math.min(first.x, second.x),
+    Math.min(first.y, second.y),
+    Math.min(first.z, second.z),
+  );
+  const max = new THREE.Vector3(
+    Math.max(first.x, second.x),
+    Math.max(first.y, second.y),
+    Math.max(first.z, second.z),
+  );
+  const size = max.clone().sub(min);
+  size.set(Math.max(1e-6, size.x), Math.max(1e-6, size.y), Math.max(1e-6, size.z));
+  const center = min.clone().add(max).multiplyScalar(0.5);
+  const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const fill = new THREE.MeshBasicMaterial({
+    color: 0x68d5ff,
+    transparent: true,
+    opacity: 0.08,
+    depthWrite: false,
+  });
+  const shell = new THREE.Mesh(geometry, fill);
+  shell.position.copy(center);
+  shell.userData.entityId = entity.id;
+  root.add(shell);
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry),
+    new THREE.LineDashedMaterial({ color: 0x68d5ff, dashSize: 0.08, gapSize: 0.045 }),
+  );
+  edges.position.copy(center);
+  edges.computeLineDistances();
+  edges.raycast = () => undefined;
+  root.add(edges);
+  root.userData.entityId = entity.id;
+  root.userData.realityAssetMissing = true;
+  root.userData.realityFallbackMessage = message ?? "Reality asset bytes are unavailable in this browser.";
+  return root;
 }
 
 function isObjectDescendantOf(object: THREE.Object3D, ancestor: THREE.Object3D): boolean {

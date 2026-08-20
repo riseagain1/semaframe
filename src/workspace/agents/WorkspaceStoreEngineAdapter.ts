@@ -68,6 +68,7 @@ import {
   type WorkspaceModelDefinitionView,
   type WorkspacePermissionScope,
   type WorkspacePreparedUpdate,
+  type WorkspaceRealityAssetView,
   type WorkspaceSpatialPlacementView,
   type WorkspaceSpatialStateView,
   type WorkspacePhysicsPlacementView,
@@ -217,6 +218,25 @@ function spatialGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameSpatialG
         assembly: {
           collision_policy: node.assembly.collisionPolicy,
           ...(node.assembly.modelRef ? { model_ref: node.assembly.modelRef } : {}),
+        },
+      } : {}),
+      ...(node.reality ? {
+        reality: {
+          ...(node.reality.assetId ? { asset_id: node.reality.assetId } : {}),
+          ...(node.reality.digest ? { digest: node.reality.digest } : {}),
+          descriptor_available: node.reality.descriptorAvailable,
+          binary_availability: node.reality.binaryAvailability,
+          ...(node.reality.format ? { format: node.reality.format } : {}),
+          ...(node.reality.splatCount === undefined ? {} : { splat_count: node.reality.splatCount }),
+          engineering_authority: node.reality.engineeringAuthority,
+          calibration_status: node.reality.calibrationStatus,
+          source_coordinate_system: node.reality.sourceCoordinateSystem,
+          target_coordinate_system: node.reality.targetCoordinateSystem,
+          ...(node.reality.metersPerSourceUnit === undefined
+            ? {}
+            : { meters_per_source_unit: node.reality.metersPerSourceUnit }),
+          bounds_are_metric: node.reality.boundsAreMetric,
+          semantic_proxy_ids: node.reality.semanticProxyIds,
         },
       } : {}),
       assembly_ancestry: node.assemblyAncestry.map((ancestor) => ({
@@ -729,6 +749,8 @@ function workspaceSummary(
     .sort((left, right) => left.id.localeCompare(right.id));
   const resources = [...state.resources.values()]
     .sort((left, right) => left.id.localeCompare(right.id));
+  const realityAssets = [...state.realityAssets.values()]
+    .sort((left, right) => left.assetId.localeCompare(right.assetId));
   const componentCandidates = components.slice(0, maxComponents).map((component) => {
     const manifest = store.getComponentManifest(component.type.typeId, component.type.version);
     const policy = manifest
@@ -787,6 +809,18 @@ function workspaceSummary(
       last_error: resource.lastError ? "[redacted connector error]" : undefined,
     });
   });
+  const realityAssetCandidates = realityAssets.slice(0, Math.min(maxResources, 50)).map((asset) => ({
+    asset_id: asset.assetId,
+    digest: asset.digest,
+    format: asset.format,
+    byte_length: asset.byteLength,
+    splat_count: asset.splatCount,
+    spherical_harmonics_degree: asset.sphericalHarmonicsDegree,
+    model: asset.model,
+    coordinate_system: asset.coordinateSystem,
+    ...(asset.sourceBounds ? { source_bounds: asset.sourceBounds } : {}),
+    engineering_authority: asset.engineeringAuthority,
+  }));
   const connectionCandidates = [...state.connections.values()]
     .sort((left, right) => left.id.localeCompare(right.id))
     .slice(0, 100)
@@ -821,6 +855,7 @@ function workspaceSummary(
 
   const includedComponents: typeof componentCandidates = [];
   const includedResources: typeof resourceCandidates = [];
+  const includedRealityAssets: typeof realityAssetCandidates = [];
   const includedConnections: typeof connectionCandidates = [];
   const includedViews: typeof viewCandidates = [];
   const build = () => ({
@@ -829,6 +864,7 @@ function workspaceSummary(
     registry_digest: state.registryDigest,
     component_count: components.length,
     resource_count: resources.length,
+    reality_asset_count: realityAssets.length,
     connection_count: state.connections.size,
     recipe_count: state.recipes.size,
     shared_view_count: state.sharedViews.size,
@@ -854,6 +890,7 @@ function workspaceSummary(
         component.type.typeId === "spatial-entity"
         || component.type.typeId === "spatial-primitive"
         || component.type.typeId === "model-assembly"
+        || component.type.typeId === "gaussian-splat"
       )).length,
       collision_enabled_node_count: components.filter((component) => {
         if (component.type.typeId !== "spatial-entity" && component.type.typeId !== "spatial-primitive") return false;
@@ -881,6 +918,8 @@ function workspaceSummary(
     omitted_component_count: components.length - includedComponents.length,
     resources: includedResources,
     omitted_resource_count: resources.length - includedResources.length,
+    reality_assets: includedRealityAssets,
+    omitted_reality_asset_count: realityAssets.length - includedRealityAssets.length,
     connections: includedConnections,
     omitted_connection_count: state.connections.size - includedConnections.length,
     shared_views: includedViews,
@@ -904,6 +943,12 @@ function workspaceSummary(
     includedResources.pop();
     break;
   }
+  for (const candidate of realityAssetCandidates) {
+    includedRealityAssets.push(candidate);
+    if (encodedBytes(build()) <= maxBytes) continue;
+    includedRealityAssets.pop();
+    break;
+  }
   for (const candidate of connectionCandidates) {
     includedConnections.push(candidate);
     if (encodedBytes(build()) <= maxBytes) continue;
@@ -922,9 +967,9 @@ function workspaceSummary(
 function authorizationFor(principal: WorkspaceAgentPrincipal): WorkspaceAuthorization {
   return {
     actor: "agent",
-    permissions: principal.scopes.filter(
-      (scope): scope is WorkspacePermission => CORE_PERMISSIONS.has(scope as WorkspacePermission),
-    ),
+    permissions: principal.scopes
+      .filter((scope) => CORE_PERMISSIONS.has(scope as WorkspacePermission))
+      .map((scope) => scope as WorkspacePermission),
   };
 }
 
@@ -1043,6 +1088,31 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
       ),
       capabilityManifest: capabilityManifest(this.store, this.maxCapabilityBytes),
     };
+  }
+
+  inspectRealityAsset(
+    assetId: string,
+    principal: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceRealityAssetView> {
+    return this.runSerialized(() => {
+      requireAgentScope(principal, "workspace:read");
+      const state = this.store.getState();
+      const descriptor = state.realityAssets.get(assetId);
+      if (!descriptor) {
+        throw new WorkspaceEngineError(
+          "reality_asset_not_found",
+          `Reality Asset ${assetId} does not exist`,
+          { retryable: true, requiredAction: "inspect_workspace" },
+        );
+      }
+      return {
+        workspaceId: state.workspaceId,
+        revision: state.revision,
+        registryDigest: state.registryDigest,
+        descriptor: asJSON(descriptor),
+        binaryAvailability: "host_local_unknown",
+      };
+    });
   }
 
   inspectModel(

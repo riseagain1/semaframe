@@ -24,14 +24,14 @@ body:
     id: version
     attributes:
       label: Version or commit
-      placeholder: v0.2.0 or a commit SHA
+      placeholder: v0.3.0 or a commit SHA
     validations:
       required: true
   - type: input
     id: environment
     attributes:
       label: Environment
-      placeholder: macOS 15, Node 20.19, Chrome 139
+      placeholder: macOS 15, Node 22.12, Chrome 139
     validations:
       required: true
   - type: textarea

@@ -90,7 +90,7 @@ describe("Agent Gateway browser boundary", () => {
       enabled: false,
       connected: false,
       engineConnected: false,
-      instructionVersion: "2.5",
+      instructionVersion: "2.6",
       csrfToken: expect.any(String),
     }));
     expect(JSON.stringify(payload)).not.toMatch(/pairing|bearer|mcpServers/u);
@@ -304,6 +304,54 @@ describe("Agent Gateway browser boundary", () => {
     expect(await json(external)).toEqual(coreResult);
   });
 
+  it("bridges exact Reality Asset and model inspection through the public REST surface", async () => {
+    const { handle } = setup();
+    const browser = await browserSetup(handle);
+    const cases = [
+      {
+        path: "/v1/workspace/assets/inspect",
+        body: {
+          session_token: "workspace_session_example",
+          instruction_digest: "workspace_guide_digest",
+          asset_id: `ra_${"a".repeat(64)}`,
+        },
+        name: "inspect_workspace_asset",
+      },
+      {
+        path: "/v1/workspace/models/inspect",
+        body: {
+          session_token: "workspace_session_example",
+          instruction_digest: "workspace_guide_digest",
+          model_id: "com.example.fixture",
+          version: "1.0.0",
+        },
+        name: "inspect_workspace_model",
+      },
+    ] as const;
+
+    for (const entry of cases) {
+      const pollPromise = browserPost(handle, browser.csrfToken, "/api/agent/browser/poll", {
+        browserConnectionId: browser.browserConnectionId,
+      });
+      const externalPromise = handle(jsonRequest(entry.path, entry.body, {
+        authorization: `Bearer ${browser.bearer}`,
+      }));
+      const poll = await json(await pollPromise);
+      const command = poll.command as Record<string, unknown>;
+      expect(command).toMatchObject({ name: entry.name, input: entry.body });
+      const coreResult = { ok: true, data: { inspected: entry.name } };
+      await browserPost(handle, browser.csrfToken, "/api/agent/browser/result", {
+        browserConnectionId: browser.browserConnectionId,
+        commandId: command.id,
+        ok: true,
+        result: coreResult,
+      });
+      const external = await externalPromise;
+      expect(external.status).toBe(200);
+      expect(await json(external)).toEqual(coreResult);
+    }
+  });
+
   it("requires explicit session and instruction tokens in closed update inputs", async () => {
     const { handle } = setup();
     const browser = await browserSetup(handle);
@@ -332,6 +380,21 @@ describe("Agent Gateway browser boundary", () => {
       component_id: "bad component id",
     }, { authorization: `Bearer ${browser.bearer}` }));
     expect(invalidComponentId.status).toBe(400);
+
+    const invalidAssetId = await handle(jsonRequest("/v1/workspace/assets/inspect", {
+      session_token: "workspace_session_example",
+      instruction_digest: "workspace_guide_digest",
+      asset_id: "ra_not-a-digest",
+    }, { authorization: `Bearer ${browser.bearer}` }));
+    expect(invalidAssetId.status).toBe(400);
+
+    const invalidModelVersion = await handle(jsonRequest("/v1/workspace/models/inspect", {
+      session_token: "workspace_session_example",
+      instruction_digest: "workspace_guide_digest",
+      model_id: "com.example.fixture",
+      version: "latest",
+    }, { authorization: `Bearer ${browser.bearer}` }));
+    expect(invalidModelVersion.status).toBe(400);
   });
 
   it("expires stale browser registrations instead of resurrecting them", async () => {
@@ -534,6 +597,7 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("WorkspaceCommandBatch");
     expect(serialized).toContain("get_workspace_instructions");
     expect(serialized).toContain("inspect_workspace_component");
+    expect(serialized).toContain("inspect_workspace_asset");
     expect(serialized).toContain("/workspace/components/inspect");
     expect(serialized).toContain("component_metadata_truncated");
     expect(serialized).toContain("omitted_binding_count");
@@ -543,7 +607,24 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("AgentResult");
     expect(serialized).toContain("inspect_workspace_model");
     expect(serialized).toContain("/workspace/models/inspect");
-    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(14);
+    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(19);
+    expect(payload.paths).toEqual(expect.objectContaining({
+      "/assets/imports/begin": expect.any(Object),
+      "/assets/imports/cancel": expect.any(Object),
+      "/assets/imports/complete": expect.any(Object),
+      "/assets/uploads/{grant_id}": expect.any(Object),
+    }));
+    const paths = payload.paths as Record<string, {
+      post?: { requestBody?: { content?: { "application/json"?: { schema?: { required?: unknown } } } } };
+    }>;
+    expect(paths["/assets/imports/begin"]?.post?.requestBody?.content?.["application/json"]?.schema?.required)
+      .toEqual(expect.arrayContaining(["session_token", "instruction_digest"]));
+    expect(paths["/assets/imports/cancel"]?.post?.requestBody?.content?.["application/json"]?.schema?.required)
+      .toEqual(expect.arrayContaining(["session_token", "instruction_digest"]));
+    const beginResponse = (paths["/assets/imports/begin"]?.post as {
+      responses?: { "200"?: { content?: { "application/json"?: { schema?: unknown } } } };
+    } | undefined)?.responses?.["200"]?.content?.["application/json"]?.schema;
+    expect(beginResponse).toEqual({ $ref: "#/components/schemas/AgentAssetImportResult" });
     expect(serialized).not.toMatch(/get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u);
     expect(serialized).not.toContain("pairingBearer");
   });

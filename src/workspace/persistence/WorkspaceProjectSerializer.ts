@@ -15,6 +15,10 @@ import { ComponentRegistry, DEFAULT_COMPONENT_REGISTRY } from "../components/Com
 import { deterministicDigest, stableStringify } from "../components/manifestDigest";
 import type { ResourceBinding, WorkspaceConnection, WorkspaceResource } from "../data/dataTypes";
 import {
+  parseRealityAssetDescriptor,
+  type RealityAssetDescriptor,
+} from "../assets";
+import {
   assertWorkspaceResourceSafe,
   WorkspaceResourceValidationError,
 } from "../data/resourceSecurity";
@@ -72,6 +76,8 @@ export type SerializableWorkspaceState = {
   registryDigest: string;
   components: Array<[string, ComponentInstance]>;
   resources: Array<[string, WorkspaceResource]>;
+  /** Added in Workspace 1.3. Missing means an older project with no Reality Assets. */
+  realityAssets?: Array<[string, RealityAssetDescriptor]>;
   connections: Array<[string, WorkspaceConnection]>;
   aliases: Array<[string, string]>;
   sharedViews: Array<[string, SharedView]>;
@@ -152,6 +158,7 @@ export function workspaceToSerializable(state: WorkspaceState): SerializableWork
     registryDigest: state.registryDigest,
     components: stableEntries(state.components),
     resources: stableEntries(state.resources),
+    realityAssets: stableEntries(state.realityAssets),
     connections: stableEntries(state.connections),
     aliases: stableEntries(state.aliases),
     sharedViews: stableEntries(state.sharedViews),
@@ -207,6 +214,28 @@ export function workspaceFromSerializable(state: SerializableWorkspaceState): Wo
     }
     modelDefinitions.set(key, structuredClone(definition));
   }
+  const realityAssets = new Map<string, RealityAssetDescriptor>();
+  for (const [key, descriptorValue] of state.realityAssets ?? []) {
+    if (realityAssets.has(key)) {
+      throw new WorkspaceProjectError(`Duplicate Reality Asset ${key}`, "invalid_project");
+    }
+    let descriptor: RealityAssetDescriptor;
+    try {
+      descriptor = parseRealityAssetDescriptor(descriptorValue);
+    } catch (error) {
+      throw new WorkspaceProjectError(
+        `Invalid Reality Asset ${key}: ${error instanceof Error ? error.message : String(error)}`,
+        "invalid_project",
+      );
+    }
+    if (key !== descriptor.assetId) {
+      throw new WorkspaceProjectError(
+        `Reality Asset key ${key} does not match ${descriptor.assetId}`,
+        "invalid_project",
+      );
+    }
+    realityAssets.set(key, structuredClone(descriptor));
+  }
   return {
     workspaceId: state.workspaceId,
     revision: state.revision,
@@ -215,6 +244,7 @@ export function workspaceFromSerializable(state: SerializableWorkspaceState): Wo
     registryDigest: state.registryDigest,
     components: entriesToMap("component", state.components, true),
     resources: entriesToMap("resource", state.resources, true),
+    realityAssets,
     connections: entriesToMap("connection", state.connections, true),
     aliases,
     sharedViews: entriesToMap("view", state.sharedViews, true),
@@ -473,6 +503,12 @@ export class WorkspaceProjectSerializer {
       workspaceFromSerializable(normalized.workspace),
       this.registry,
     ));
+    // Protocol 1.2 projects have the same command semantics as 1.3, with an
+    // empty Reality Asset catalog supplied by state migration. Promote the
+    // envelope after both snapshots are normalized so save/reopen converges on
+    // one current version instead of retaining mixed outer/inner versions.
+    normalized.protocolVersion = WORKSPACE_PROTOCOL_VERSION;
+    normalized.workspaceSchemaVersion = WORKSPACE_SCHEMA_VERSION;
     return normalized;
   }
 

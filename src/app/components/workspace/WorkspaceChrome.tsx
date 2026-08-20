@@ -1,4 +1,4 @@
-import { Boxes, Database, PackageOpen, PanelRightClose, SlidersHorizontal, TimerReset } from "lucide-react";
+import { Boxes, Database, PackageOpen, PanelRightClose, ScanLine, SlidersHorizontal, TimerReset } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { WorkspaceRenderComponent } from "../../../workspace/renderer";
 import type { ComponentResizePolicy } from "../../../workspace/components";
@@ -39,8 +39,12 @@ import {
   type WorkspaceModelHierarchyItem,
   type WorkspaceModelPublishRequest,
 } from "./WorkspaceModelLibrary";
+import {
+  WorkspaceRealityAssets,
+  type WorkspaceRealityAssetItem,
+} from "./WorkspaceRealityAssets";
 
-type WorkspacePanel = "library" | "inspector" | "models" | "sources" | null;
+type WorkspacePanel = "library" | "inspector" | "models" | "reality" | "sources" | null;
 
 export type WorkspaceChromeProps = Readonly<{
   catalog: readonly ComponentLibraryItem[];
@@ -61,6 +65,7 @@ export type WorkspaceChromeProps = Readonly<{
   onCreateAssembly?: (componentId: string) => void;
   selectedWorldPlacement?: World3DPlacement;
   assemblyOptions?: readonly WorkspaceAssemblyOption[];
+  realityProxyOptions?: readonly WorkspaceAssemblyOption[];
   onTransform?: (request: WorkspaceComponentTransformRequest) => void;
   onReparent?: (request: WorkspaceComponentHierarchyRequest) => boolean | void;
   onSelectComponent?: (componentId: string) => void;
@@ -73,6 +78,12 @@ export type WorkspaceChromeProps = Readonly<{
   modelExportActions?: readonly WorkspaceModelExportAction[];
   onDeleteModel?: (definition: ModelDefinition) => boolean | void;
   onCreateModelExample?: () => void;
+  realityAssets?: readonly WorkspaceRealityAssetItem[];
+  realityImportBusy?: boolean;
+  realityImportStatus?: string;
+  onImportRealityAsset?: () => void;
+  onRelinkRealityAsset?: (assetId: string) => void;
+  onDeleteRealityAsset?: (assetId: string) => boolean | void | Promise<boolean | void>;
   onCreateShowcase: () => void;
   onSaveInlineSource?: (request: WorkspaceInlineSourceSaveRequest) => boolean;
   onRefreshSource?: (sourceId: string) => void;
@@ -104,6 +115,7 @@ export function WorkspaceChrome({
   onCreateAssembly,
   selectedWorldPlacement,
   assemblyOptions,
+  realityProxyOptions,
   onTransform,
   onReparent,
   onSelectComponent,
@@ -116,6 +128,12 @@ export function WorkspaceChrome({
   modelExportActions,
   onDeleteModel,
   onCreateModelExample,
+  realityAssets = [],
+  realityImportBusy,
+  realityImportStatus,
+  onImportRealityAsset,
+  onRelinkRealityAsset,
+  onDeleteRealityAsset,
   onCreateShowcase,
   onSaveInlineSource,
   onRefreshSource,
@@ -157,6 +175,9 @@ export function WorkspaceChrome({
         {!sourcesOnly && <button type="button" disabled={disabled} aria-expanded={panel === "models"} aria-controls="workspace-tool-panel" onClick={() => toggle("models")}>
           <PackageOpen size={17} /><span>Models</span>
         </button>}
+        {!sourcesOnly && <button type="button" disabled={disabled} aria-expanded={panel === "reality"} aria-controls="workspace-tool-panel" onClick={() => toggle("reality")}>
+          <ScanLine size={17} /><span>Reality</span>
+        </button>}
         <button type="button" disabled={disabled} aria-expanded={panel === "sources"} aria-controls="workspace-tool-panel" onClick={() => toggle("sources")}>
           <Database size={17} /><span>Sources</span>
         </button>
@@ -171,6 +192,7 @@ export function WorkspaceChrome({
               library: "Components",
               inspector: "Inspector",
               models: "Models",
+              reality: "Reality",
               sources: "Sources",
             }[panel]}</strong>
             <button className="workspace-tool-panel__close" type="button" aria-label={`Close ${panel} panel`} onClick={() => setPanel(null)}>
@@ -193,6 +215,7 @@ export function WorkspaceChrome({
                 physicsReport={selectedPhysicsReport}
                 worldPlacement={selectedWorldPlacement}
                 assemblyOptions={assemblyOptions}
+                realityProxyOptions={realityProxyOptions}
                 onTransform={onTransform}
                 onReparent={onReparent}
                 onSelectComponent={onSelectComponent}
@@ -213,6 +236,16 @@ export function WorkspaceChrome({
               onCreateExample={onCreateModelExample}
               hierarchyItems={modelHierarchyItems}
               selectedComponentId={selected?.id}
+              onSelectComponent={onSelectComponent}
+            />}
+            {panel === "reality" && <WorkspaceRealityAssets
+              items={realityAssets}
+              disabled={disabled}
+              importBusy={realityImportBusy}
+              importStatus={realityImportStatus}
+              onImport={onImportRealityAsset}
+              onRelink={onRelinkRealityAsset}
+              onDelete={onDeleteRealityAsset}
               onSelectComponent={onSelectComponent}
             />}
             {panel === "sources" && <WorkspaceSourcePanel

@@ -2,9 +2,17 @@ import { createMcpHandler } from "@modelcontextprotocol/server";
 import { WORKSPACE_AGENT_GUIDE } from "../../src/workspace/agents";
 import { AgentGateway, AgentGatewayError } from "./AgentGateway";
 import { AGENT_MCP_SERVER_INFO, createAgentMcpServer } from "./AgentMcpServer";
+import {
+  AGENT_ASSET_IMPORT_SCOPE,
+  AgentAssetIngress,
+  AgentAssetIngressError,
+  toAgentAssetImportGrantWire,
+  type AgentAssetFormat,
+} from "./AgentAssetIngress";
 
 export type AgentMcpHttpOptions = Readonly<{
   allowedOrigins: readonly string[];
+  assetIngress?: AgentAssetIngress;
 }>;
 
 export type AgentMcpHttpHandler = Readonly<{
@@ -31,6 +39,7 @@ function errorResponse(status: number, code: string, message: string): Response 
 
 function statusFor(error: AgentGatewayError): number {
   if (error.code === "connection_offer_expired") return 410;
+  if (error.code === "authorization_scope_missing" || error.code === "instructions_required") return 403;
   if (error.code === "agent_mode_disabled" || error.code === "gateway_closed") return 503;
   if (error.code === "connection_invalid") return 404;
   return 409;
@@ -87,6 +96,57 @@ export function createAgentMcpHttpHandler(
       const pathname = requestInfo ? new URL(requestInfo.url).pathname : "";
       return createAgentMcpServer({
         dispatch: (name, input, client) => gateway.dispatchOffer(pathname, name, input, client),
+        ...(options.assetIngress ? {
+          beginAssetImport: async (input, client) => {
+            const validation = await gateway.dispatchOffer(
+              pathname,
+              "begin_workspace_asset_import",
+              input,
+              client,
+            );
+            if (!successfulWorkspaceResult(validation.payload)) return validation;
+            try {
+              const body = assetImportInput(input);
+              const principal = gateway.requireApprovedClientScope(AGENT_ASSET_IMPORT_SCOPE);
+              const grant = await options.assetIngress!.begin(principal, {
+                requestId: body.request_id,
+                workspaceId: body.workspace_id,
+                displayName: body.display_name,
+                format: body.format,
+                mediaType: body.media_type,
+                byteLength: body.byte_length,
+                sha256: body.sha256,
+              });
+              return {
+                responseOk: true,
+                status: 200,
+                payload: { ok: true, data: toAgentAssetImportGrantWire(grant) },
+              };
+            } catch (error) {
+              return assetImportBackendError(error);
+            }
+          },
+          cancelAssetImport: async (input, client) => {
+            const validation = await gateway.dispatchOffer(
+              pathname,
+              "cancel_workspace_asset_import",
+              input,
+              client,
+            );
+            if (!successfulWorkspaceResult(validation.payload)) return validation;
+            try {
+              const body = assetCancelInput(input);
+              const principal = gateway.requireApprovedClientScope(AGENT_ASSET_IMPORT_SCOPE);
+              const result = await options.assetIngress!.cancelFromAgent(
+                body.candidate_handle,
+                principal.authorizationId,
+              );
+              return { responseOk: true, status: 200, payload: { ok: true, data: result } };
+            } catch (error) {
+              return assetImportBackendError(error);
+            }
+          },
+        } : {}),
       }, { protocolEra: era });
     },
     {
@@ -175,4 +235,65 @@ export function createAgentMcpHttpHandler(
     },
     close: () => mcp.close(),
   });
+}
+
+type AssetImportMcpInput = Readonly<{
+  request_id: string;
+  workspace_id: string;
+  display_name: string;
+  format: AgentAssetFormat;
+  media_type: string;
+  byte_length: number;
+  sha256: string;
+}>;
+
+function successfulWorkspaceResult(value: unknown): value is { ok: true; data: unknown } {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && (value as { ok?: unknown }).ok === true;
+}
+
+function assetImportInput(value: unknown): AssetImportMcpInput {
+  const record = value as Record<string, unknown>;
+  return {
+    request_id: String(record.request_id),
+    workspace_id: String(record.workspace_id),
+    display_name: String(record.display_name),
+    format: record.format as AgentAssetFormat,
+    media_type: String(record.media_type),
+    byte_length: Number(record.byte_length),
+    sha256: String(record.sha256),
+  };
+}
+
+function assetCancelInput(value: unknown): { candidate_handle: string } {
+  return { candidate_handle: String((value as Record<string, unknown>).candidate_handle) };
+}
+
+function assetImportBackendError(error: unknown): {
+  responseOk: boolean;
+  status: number;
+  payload: unknown;
+} {
+  if (error instanceof AgentAssetIngressError) {
+    return {
+      responseOk: false,
+      status: error.status,
+      payload: { ok: false, error: { code: error.code, message: error.message, retryable: false } },
+    };
+  }
+  if (error instanceof AgentGatewayError) {
+    return {
+      responseOk: false,
+      status: statusFor(error),
+      payload: { ok: false, error: { code: error.code, message: error.message, retryable: false } },
+    };
+  }
+  return {
+    responseOk: false,
+    status: 500,
+    payload: {
+      ok: false,
+      error: { code: "asset_ingress_error", message: "The Reality Asset import could not begin.", retryable: false },
+    },
+  };
 }

@@ -14,6 +14,18 @@ Remotion is not included in the SemaFrame browser runtime. The rendered demo vid
 
 The built-in low-poly spatial assets and SemaFrame brand graphics in this repository are generated from project-owned procedural code and data. No third-party model files are bundled.
 
+## Gaussian splat rendering
+
+The optional Reality Layer lazy-loads the following pinned browser-runtime packages only when a Gaussian splat component is present:
+
+| Package | Version | License | Upstream |
+| --- | --- | --- | --- |
+| `@sparkjsdev/spark` | 2.1.0 | MIT | <https://github.com/sparkjsdev/spark> |
+| `three` | 0.180.0 | MIT | <https://github.com/mrdoob/three.js> |
+| `fflate` | 0.8.3 | MIT | <https://github.com/101arrowz/fflate> |
+
+The published Spark package metadata and included license file identify the distributed package as MIT. SemaFrame consumes that published distribution and does not bundle Spark source or training tools. Its implementation remains in a separate lazy chunk so projects without Reality Layer content do not download or initialize it.
+
 ## Geometry kernels
 
 SemaFrame's optional modeling export paths lazy-load the following pinned browser-runtime packages:

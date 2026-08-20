@@ -11,6 +11,7 @@ import type {
   World3DPlacement,
 } from "../components/componentTypes";
 import type { ModelDefinitionRef } from "../modeling/modelDefinitions";
+import type { RealityAssetDescriptor } from "../assets";
 import type {
   EventConnection,
   ResourceBinding,
@@ -22,8 +23,11 @@ export const LEGACY_WORKSPACE_PROTOCOL_VERSION = "1.0" as const;
 export const LEGACY_WORKSPACE_SCHEMA_VERSION = "1.0" as const;
 export const PREVIOUS_WORKSPACE_PROTOCOL_VERSION = "1.1" as const;
 export const PREVIOUS_WORKSPACE_SCHEMA_VERSION = "1.1" as const;
-export const WORKSPACE_PROTOCOL_VERSION = "1.2" as const;
-export const WORKSPACE_SCHEMA_VERSION = "1.2" as const;
+/** Last release before the content-addressed Reality Asset catalog. */
+export const MODELING_WORKSPACE_PROTOCOL_VERSION = "1.2" as const;
+export const MODELING_WORKSPACE_SCHEMA_VERSION = "1.2" as const;
+export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
+export const WORKSPACE_SCHEMA_VERSION = "1.3" as const;
 export const MAX_WORKSPACE_OPERATIONS = 100;
 export const MAX_WORKSPACE_BATCH_BYTES = 1_048_576;
 export const MAX_WORKSPACE_JSON_DEPTH = 32;
@@ -31,10 +35,12 @@ export const MAX_WORKSPACE_JSON_DEPTH = 32;
 export type WorkspaceProtocolVersion =
   | typeof LEGACY_WORKSPACE_PROTOCOL_VERSION
   | typeof PREVIOUS_WORKSPACE_PROTOCOL_VERSION
+  | typeof MODELING_WORKSPACE_PROTOCOL_VERSION
   | typeof WORKSPACE_PROTOCOL_VERSION;
 export type WorkspaceSchemaVersion =
   | typeof LEGACY_WORKSPACE_SCHEMA_VERSION
   | typeof PREVIOUS_WORKSPACE_SCHEMA_VERSION
+  | typeof MODELING_WORKSPACE_SCHEMA_VERSION
   | typeof WORKSPACE_SCHEMA_VERSION;
 
 export type WorkspaceActor = "user" | "agent" | "system" | "migration";
@@ -49,6 +55,8 @@ export type WorkspacePermission =
   | "connector:write"
   | "connector:delete"
   | "connector:bind"
+  /** Internal registration boundary used only after a host-verified binary import. */
+  | "asset:register"
   | "event:connect"
   | "view:present"
   | "workspace:clear"
@@ -193,6 +201,22 @@ export interface DeleteResourceOperation extends WorkspaceOperationBase {
   cascade?: boolean;
 }
 
+/**
+ * Host-resolved Reality Asset registration. Public agents cannot submit this
+ * operation directly; the dedicated import flow verifies bytes before the
+ * controller commits the canonical descriptor.
+ */
+export interface RegisterRealityAssetOperation extends WorkspaceOperationBase {
+  op: "register_reality_asset";
+  asset: RealityAssetDescriptor;
+}
+
+export interface DeleteRealityAssetOperation extends WorkspaceOperationBase {
+  op: "delete_reality_asset";
+  asset_id: string;
+  confirm: true;
+}
+
 export interface BindResourceOperation extends WorkspaceOperationBase {
   op: "bind_resource";
   binding: ResourceBinding;
@@ -230,6 +254,8 @@ export interface ClearWorkspaceOperation extends WorkspaceOperationBase {
   confirm: true;
   /** Resources are retained unless explicitly included. */
   include_resources?: boolean;
+  /** Reality Asset descriptors are retained unless explicitly included. */
+  include_reality_assets?: boolean;
 }
 
 export interface PublishModelOperation extends WorkspaceOperationBase {
@@ -268,6 +294,8 @@ export type WorkspaceOperation =
   | InvokeComponentActionOperation
   | UpsertResourceOperation
   | DeleteResourceOperation
+  | RegisterRealityAssetOperation
+  | DeleteRealityAssetOperation
   | BindResourceOperation
   | UnbindResourceOperation
   | ConnectEventOperation
@@ -348,6 +376,7 @@ export type WorkspaceDelta = {
   updated: ComponentId[];
   removed: ComponentId[];
   resourcesChanged: string[];
+  realityAssetsChanged: string[];
   connectionsChanged: string[];
   viewsChanged: string[];
   modelsChanged: string[];

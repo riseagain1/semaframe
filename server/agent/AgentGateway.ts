@@ -104,6 +104,7 @@ type ApprovalClaim = {
   clientId?: string;
   clientName?: string;
   scopes: readonly string[];
+  grantedScopes?: readonly string[];
   requestedAt: number;
   expiresAt: number;
   decision: "pending" | "approved" | "denied";
@@ -140,6 +141,13 @@ export type PairingReveal = Readonly<{
   mcpConfig: string;
   restEndpoint: string;
 }> & AgentConnectionOffer;
+
+export type ApprovedAgentScopePrincipal = Readonly<{
+  authorizationId: string;
+  clientId?: string;
+  clientName?: string;
+  scopes: readonly string[];
+}>;
 
 function secret(): string {
   return randomBytes(32).toString("base64url");
@@ -192,8 +200,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isSuccessfulAgentResult(value: unknown): boolean {
+function isSuccessfulAgentResult(value: unknown): value is { ok: true; data: unknown } {
   return isRecord(value) && value.ok === true;
+}
+
+function grantedAgentScopes(value: unknown): readonly string[] {
+  if (!isSuccessfulAgentResult(value) || !isRecord(value.data) || !Array.isArray(value.data.granted_scopes)) {
+    return Object.freeze([]);
+  }
+  return Object.freeze([
+    ...new Set(value.data.granted_scopes.filter((scope): scope is string => typeof scope === "string" && scope.length > 0)),
+  ].sort());
 }
 
 function isRetryableAgentResult(value: unknown): boolean {
@@ -280,7 +297,7 @@ export class AgentGateway {
     const offer = this.#offerView(currentOffer);
     const pendingApproval = this.#pendingApprovalView();
     const approvedScopes = currentOffer?.claim?.instructionsSucceeded
-      ? [...currentOffer.claim.scopes]
+      ? [...(currentOffer.claim.grantedScopes ?? currentOffer.claim.scopes)]
       : undefined;
     const snapshot = {
       version: AGENT_GATEWAY_VERSION,
@@ -311,6 +328,42 @@ export class AgentGateway {
     const actual = Buffer.from(received);
     const expected = Buffer.from(this.#pairingBearer);
     return actual.byteLength === expected.byteLength && timingSafeEqual(actual, expected);
+  }
+
+  /**
+   * Resolves authority from the exact user-approved connection claim. This is
+   * deliberately narrower than the legacy pairing bearer: high-bandwidth host
+   * capabilities such as asset ingress must be bound to an approved client and
+   * scope, not merely to possession of the process-wide pairing credential.
+   */
+  requireApprovedClientScope(scope: string): ApprovedAgentScopePrincipal {
+    this.#assertOpen();
+    this.#assertEnabled();
+    const claim = this.#offer?.claim;
+    if (!claim || claim.decision !== "approved" || !claim.instructionsSucceeded) {
+      throw new AgentGatewayError(
+        "instructions_required",
+        "Complete an approved instruction handshake before using this capability.",
+      );
+    }
+    if (!this.#isBrowserConnected()) {
+      throw new AgentGatewayError(
+        "engine_unavailable",
+        "The browser-authoritative SemaFrame engine is unavailable.",
+      );
+    }
+    if (!claim.scopes.includes(scope) || !claim.grantedScopes?.includes(scope)) {
+      throw new AgentGatewayError(
+        "authorization_scope_missing",
+        `The approved connection does not include the required ${scope} scope.`,
+      );
+    }
+    return Object.freeze({
+      authorizationId: claim.id,
+      ...(claim.clientId ? { clientId: claim.clientId } : {}),
+      ...(claim.clientName ? { clientName: claim.clientName } : {}),
+      scopes: Object.freeze([...claim.scopes]),
+    });
   }
 
   revealPairing(): PairingReveal {
@@ -623,6 +676,7 @@ export class AgentGateway {
           this.#offer.claim.decision === "approved"
         ) {
           this.#offer.claim.instructionsSucceeded = true;
+          this.#offer.claim.grantedScopes = grantedAgentScopes(result.result);
         }
       } else if (coreSucceeded && this.#lastClientSeenAt !== undefined) {
         this.#lastClientSeenAt = this.#now();

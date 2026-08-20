@@ -10,5 +10,6 @@ export * from "./WorkspaceComponentLibrary";
 export * from "./modelingCatalog";
 export * from "./WorkspaceModelLibrary";
 export * from "./workspaceModelActions";
+export * from "./WorkspaceRealityAssets";
 export * from "./WorkspaceSourcePanel";
 export * from "./WorkspaceChrome";

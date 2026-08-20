@@ -15,6 +15,7 @@ export function createInitialWorkspace(
     registryDigest: registry.digest,
     components: new Map(),
     resources: new Map(),
+    realityAssets: new Map(),
     connections: new Map(),
     aliases: new Map(),
     sharedViews: new Map(),

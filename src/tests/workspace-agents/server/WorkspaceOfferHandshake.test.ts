@@ -178,9 +178,13 @@ describe("Workspace MCP connection offer", () => {
     );
 
     expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
+      "begin_workspace_asset_import",
       "begin_workspace_update",
+      "cancel_workspace_asset_import",
+      "complete_workspace_asset_import",
       "get_workspace_instructions",
       "inspect_workspace",
+      "inspect_workspace_asset",
       "inspect_workspace_component",
       "inspect_workspace_model",
       "inspect_workspace_physics",

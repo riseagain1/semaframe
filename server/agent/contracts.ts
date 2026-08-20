@@ -44,7 +44,10 @@ export function isAgentCommandName(value: unknown): value is AgentCommandName {
 }
 
 export function isMutationCommand(name: AgentCommandName): boolean {
-  return name === "begin_workspace_update" ||
+  return name === "begin_workspace_asset_import" ||
+    name === "cancel_workspace_asset_import" ||
+    name === "complete_workspace_asset_import" ||
+    name === "begin_workspace_update" ||
     name === "submit_workspace_batch" ||
     name === "undo_workspace_batch" ||
     name === "redo_workspace_batch";

@@ -62,6 +62,53 @@ const parametricMaterialSchema = objectSchema({
   emissiveIntensity: { type: "number", minimum: 0, maximum: 8 },
 }, ["baseColor", "metallic", "roughness", "opacity", "emissiveColor", "emissiveIntensity"]);
 
+const realityAssetReferenceSchema: JSONSchema = {
+  oneOf: [
+    { type: "null" },
+    objectSchema({
+      assetId: { type: "string", pattern: "^ra_[0-9a-f]{64}$" },
+      digest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+    }, ["assetId", "digest"]),
+  ],
+};
+
+const realityCoordinateSystemSchema: JSONSchema = {
+  enum: [
+    "UNKNOWN",
+    "LDB", "RDB", "LUB", "RUB", "LDF", "RDF", "LUF", "RUF",
+    "LFD", "RFD", "LFU", "RFU", "LBD", "RBD", "LBU", "RBU",
+  ],
+};
+
+const realityCalibrationCommon = {
+  version: { const: 1 },
+  sourceCoordinateSystem: realityCoordinateSystemSchema,
+  targetCoordinateSystem: { const: "RUB" },
+};
+
+const realityCalibrationSchema: JSONSchema = {
+  oneOf: [
+    objectSchema({
+      ...realityCalibrationCommon,
+      status: { const: "uncalibrated" },
+      metersPerSourceUnit: { type: "null" },
+    }, ["version", "status", "sourceCoordinateSystem", "targetCoordinateSystem", "metersPerSourceUnit"]),
+    objectSchema({
+      ...realityCalibrationCommon,
+      status: { const: "metadata-declared" },
+      metersPerSourceUnit: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 },
+      declaredUnit: { enum: ["metre", "centimetre", "millimetre", "inch", "foot"] },
+    }, ["version", "status", "sourceCoordinateSystem", "targetCoordinateSystem", "metersPerSourceUnit", "declaredUnit"]),
+    objectSchema({
+      ...realityCalibrationCommon,
+      status: { const: "reference-distance" },
+      metersPerSourceUnit: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 },
+      sourceDistance: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000_000 },
+      referenceDistanceM: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 },
+    }, ["version", "status", "sourceCoordinateSystem", "targetCoordinateSystem", "metersPerSourceUnit", "sourceDistance", "referenceDistanceM"]),
+  ],
+};
+
 function action(inputSchema: JSONSchema = emptyObjectSchema) {
   return { inputSchema, effectClass: "semantic" as const };
 }
@@ -858,9 +905,56 @@ const modelAssembly = modernManifest({
   events: structuredClone(visibilityEvents),
 });
 
+const gaussianSplat = modernManifest({
+  typeId: "gaussian-splat",
+  version: "1.0.0",
+  displayName: "Gaussian Splat Reality Layer",
+  allowedPlacements: ["world3d"],
+  resizePolicy: {
+    world3d: {
+      kind: "scale3d",
+      mode: "uniform",
+      defaultScale: { x: 1, y: 1, z: 1 },
+      minScale: { x: 0.01, y: 0.01, z: 0.01 },
+      maxScale: { x: 100, y: 100, z: 100 },
+      allowedAxes: ["x", "y", "z"],
+      units: "ratio",
+    },
+  },
+  propsSchema: objectSchema({
+    assetRef: realityAssetReferenceSchema,
+    calibration: realityCalibrationSchema,
+    quality: { enum: ["auto", "low", "medium", "high"] },
+    semanticProxyIds: {
+      type: "array",
+      maxItems: 128,
+      uniqueItems: true,
+      items: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+    },
+  }, ["assetRef", "calibration", "quality", "semanticProxyIds"]),
+  durableStateSchema: emptyObjectSchema,
+  defaultProps: {
+    assetRef: null,
+    calibration: {
+      version: 1,
+      status: "uncalibrated",
+      sourceCoordinateSystem: "UNKNOWN",
+      targetCoordinateSystem: "RUB",
+      metersPerSourceUnit: null,
+    },
+    quality: "auto",
+    semanticProxyIds: [],
+  },
+  defaultDurableState: {},
+  writableProps: ["assetRef", "calibration", "quality", "semanticProxyIds"],
+  actions: structuredClone(visibilityActions),
+  events: structuredClone(visibilityEvents),
+});
+
 const MODELING_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.freeze([
   spatialPrimitive,
   modelAssembly,
+  gaussianSplat,
 ]);
 
 const LEGACY_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.freeze([

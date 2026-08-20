@@ -35,6 +35,10 @@ import {
   WorkspaceModelExportGate,
 } from "./components/workspace/workspaceModelActions";
 import type { WorkspaceInlineSourceSaveRequest } from "./components/workspace/WorkspaceSourcePanel";
+import type {
+  RealityAssetAvailability,
+  WorkspaceRealityAssetItem,
+} from "./components/workspace/WorkspaceRealityAssets";
 import type { AppNotice, WorkspaceHistoryEntry, WorkspaceHistoryStatus } from "./uiTypes";
 import {
   WorkspaceAgentCommandRouter,
@@ -123,11 +127,51 @@ import {
 } from "../workspace/modeling";
 import { historyEntriesForStore } from "./workspaceHistory";
 import { safeStorageGet, safeStorageRemove, safeStorageSet } from "./browserStorage";
+import { RealityAssetCompletionLedger } from "./realityAssetCompletion";
+import {
+  BrowserAssetVault,
+  MemoryAssetVault,
+  RealityAssetError,
+  preflightRealityAssetInWorker,
+  type AssetVault,
+  type RealityAssetCandidate,
+  type RealityAssetDescriptor,
+} from "../workspace/assets";
 
 const RECOVERY_KEY = "semaframe-workspace-recovery-v2";
 const AGENT_CONTROL_ENDPOINT = import.meta.env.VITE_AGENT_CONTROL_ENDPOINT?.trim() || "/api/agent";
 const AGENT_BROWSER_INSTANCE_KEY = "semaframe-agent-browser-v1";
 const MAX_VISIBLE_HISTORY_ENTRIES = 256;
+
+type AppRealityAssetVault = Readonly<{
+  vault: AssetVault;
+  persistent: boolean;
+}>;
+
+type AppRealityAssetCompletion = Readonly<{
+  requestId: string;
+  inputRevision: number;
+  descriptor: RealityAssetDescriptor;
+  result: JSONObject;
+}>;
+
+function createAppRealityAssetVault(): AppRealityAssetVault {
+  try {
+    return { vault: new BrowserAssetVault(), persistent: true };
+  } catch {
+    // Non-browser/test/private hosts still get the exact same content-addressed
+    // safety boundary, but bytes last only for this App lifetime.
+    return { vault: new MemoryAssetVault(), persistent: false };
+  }
+}
+
+function realityAssetReference(value: unknown): Readonly<{ assetId: string; digest: string }> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.assetId === "string" && typeof candidate.digest === "string"
+    ? { assetId: candidate.assetId, digest: candidate.digest }
+    : undefined;
+}
 
 const ProjectBar = lazy(() => import("./components/ProjectBar").then((module) => ({ default: module.ProjectBar })));
 const Viewport = lazy(() => import("./components/Viewport").then((module) => ({ default: module.Viewport })));
@@ -320,13 +364,23 @@ export default function App() {
       registry: DEFAULT_COMPONENT_REGISTRY,
     });
   }
+  const realityAssetVaultRef = useRef<AppRealityAssetVault | null>(null);
+  if (!realityAssetVaultRef.current) realityAssetVaultRef.current = createAppRealityAssetVault();
   const hybridCanvasRef = useRef<HybridWorkspaceCanvasHandle>(null);
   const workspaceAgentControllerRef = useRef<WorkspaceAgentController | null>(null);
   const workspaceAgentRouterRef = useRef<WorkspaceAgentCommandRouter | null>(null);
+  const completeRealityAssetImportRef = useRef<((candidateHandle: string) => Promise<JSONObject>) | null>(null);
+  const realityAssetCompletionLedgerRef = useRef(
+    new RealityAssetCompletionLedger<AppRealityAssetCompletion>(),
+  );
   const agentGatewayRef = useRef<AgentGatewayClient | null>(null);
   const recoverySnapshotRef = useRef<() => void>(() => undefined);
   const allowAgentDestructiveRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const realityFileRef = useRef<HTMLInputElement>(null);
+  const pendingRealityRelinkRef = useRef<string | null>(null);
+  const realityImportAbortRef = useRef<AbortController | null>(null);
+  const realityVaultLifecycleRef = useRef(0);
   const workspaceUnsubscribeRef = useRef<(() => void) | null>(null);
   const workspaceSerializerRef = useRef(new WorkspaceProjectSerializer(DEFAULT_COMPONENT_REGISTRY));
   const workspaceModelExportGateRef = useRef(new WorkspaceModelExportGate());
@@ -366,6 +420,9 @@ export default function App() {
   const [agentError, setAgentError] = useState<string>();
   const [agentBrowserOccupied, setAgentBrowserOccupied] = useState(false);
   const [allowAgentDestructive, setAllowAgentDestructive] = useState(false);
+  const [realityAssetAvailability, setRealityAssetAvailability] = useState<Record<string, RealityAssetAvailability>>({});
+  const [realityImportStatus, setRealityImportStatus] = useState<string>();
+  const [realityImportBusy, setRealityImportBusy] = useState(false);
   const [hostFeedRuntime, setHostFeedRuntime] = useState<Record<string, Readonly<{
     refreshing: boolean;
     error?: string;
@@ -380,6 +437,7 @@ export default function App() {
   const [hostFeedAutomationRevision, setHostFeedAutomationRevision] = useState(0);
   const workspaceGenerationRef = useRef(0);
   const [workspaceRenderGeneration, setWorkspaceRenderGeneration] = useState(0);
+  const [realityRenderGeneration, setRealityRenderGeneration] = useState(0);
   const busy = busyCount > 0;
 
   const advanceWorkspaceGeneration = useCallback(() => {
@@ -390,10 +448,26 @@ export default function App() {
     hostFeedRefreshInFlightRef.current.clear();
     hostFeedOnOpenSeenRef.current.clear();
     hostFeedAutomationConsentRef.current.reset();
+    realityAssetCompletionLedgerRef.current.clear();
     setHostFeedRuntime({});
     setHostFeedAutomationRevision((current) => current + 1);
     workspaceGenerationRef.current += 1;
     setWorkspaceRenderGeneration(workspaceGenerationRef.current);
+  }, []);
+
+  useEffect(() => {
+    const lifecycle = ++realityVaultLifecycleRef.current;
+    return () => {
+      realityImportAbortRef.current?.abort();
+      // React StrictMode intentionally performs a setup/cleanup/setup cycle.
+      // Delay disposal one microtask so the second setup can retain the vault,
+      // while a real unmount still closes its database and Worker resources.
+      queueMicrotask(() => {
+        if (realityVaultLifecycleRef.current === lifecycle) {
+          realityAssetVaultRef.current?.vault.dispose();
+        }
+      });
+    };
   }, []);
 
   useEffect(() => {
@@ -410,6 +484,50 @@ export default function App() {
     const item = { id: uid("notice"), message, tone };
     setNotices((current) => [...current, item].slice(-3));
     window.setTimeout(() => setNotices((current) => current.filter((entry) => entry.id !== item.id)), 4_500);
+  }, []);
+
+  const realityAssetDescriptorSignature = useMemo(() => JSON.stringify(
+    [...workspace.realityAssets.values()]
+      .map((descriptor) => [descriptor.assetId, descriptor.digest, descriptor.byteLength])
+      .sort(([left], [right]) => String(left).localeCompare(String(right))),
+  ), [workspace.realityAssets]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const descriptors = [...workspace.realityAssets.values()];
+    setRealityAssetAvailability(Object.fromEntries(descriptors.map((descriptor) => [
+      descriptor.assetId,
+      "checking" satisfies RealityAssetAvailability,
+    ])));
+    void Promise.all(descriptors.map(async (descriptor) => {
+      let availability: RealityAssetAvailability;
+      try {
+        const blob = await realityAssetVaultRef.current!.vault.open(descriptor.assetId);
+        availability = blob.size === descriptor.byteLength ? "available" : "error";
+      } catch (error) {
+        availability = error instanceof RealityAssetError && error.code === "not_found"
+          ? "missing"
+          : "error";
+      }
+      if (!cancelled) {
+        setRealityAssetAvailability((current) => ({ ...current, [descriptor.assetId]: availability }));
+      }
+    }));
+    return () => { cancelled = true; };
+  }, [realityAssetDescriptorSignature, realityRenderGeneration, workspaceRenderGeneration]);
+
+  const openRealityAsset = useCallback(async (
+    assetId: string,
+    digest: string,
+    signal?: AbortSignal,
+  ): Promise<Blob | undefined> => {
+    if (signal?.aborted) throw new DOMException("Reality asset read cancelled", "AbortError");
+    const descriptor = workspaceStoreRef.current?.getState().realityAssets.get(assetId);
+    if (!descriptor || descriptor.digest !== digest) return undefined;
+    const blob = await realityAssetVaultRef.current!.vault.open(descriptor.assetId);
+    if (signal?.aborted) throw new DOMException("Reality asset read cancelled", "AbortError");
+    if (blob.size !== descriptor.byteLength) throw new Error("Reality asset bytes do not match the registered descriptor.");
+    return blob;
   }, []);
 
   const runExclusive = useCallback(async <T,>(operation: () => T | Promise<T>): Promise<T | undefined> => {
@@ -468,6 +586,11 @@ export default function App() {
         ].includes(scope)) return false;
         return true;
       }) as WorkspacePermissionScope[],
+      completeRealityAssetImport: async (candidateHandle) => {
+        const complete = completeRealityAssetImportRef.current;
+        if (!complete) throw new Error("The browser Reality Asset importer is not ready.");
+        return complete(candidateHandle);
+      },
     });
     workspaceAgentControllerRef.current = controller;
     workspaceAgentRouterRef.current = new WorkspaceAgentCommandRouter(controller);
@@ -553,7 +676,9 @@ export default function App() {
       );
       downloadJson(projectName, workspaceSerializerRef.current.serialize(project));
       setDirty(false);
-      notice("Workspace saved with its components, data, connections, and resolved history.", "success");
+      notice(store.getState().realityAssets.size > 0
+        ? "Workspace saved with Reality references; private Reality bytes remain in this browser's local vault."
+        : "Workspace saved with its components, data, connections, and resolved history.", "success");
     } catch (error) { notice(`Couldn’t save: ${friendlyError(error)}`, "error"); }
   }, [notice, projectId, projectName]);
 
@@ -790,6 +915,350 @@ export default function App() {
       notice(friendlyError(error), "error");
     }
   }, [applyWorkspaceOperations, notice]);
+
+  const putRealityAssetBytes = useCallback(async (
+    candidate: RealityAssetCandidate,
+    blob: Blob,
+    signal?: AbortSignal,
+  ): Promise<Readonly<{ descriptor: RealityAssetDescriptor; previouslyAvailable: boolean }>> => {
+    const vault = realityAssetVaultRef.current!.vault;
+    let previouslyAvailable = false;
+    try {
+      const existing = await vault.open(candidate.descriptor.assetId);
+      previouslyAvailable = existing.size === candidate.descriptor.byteLength;
+    } catch {
+      previouslyAvailable = false;
+    }
+    if (!previouslyAvailable) await vault.delete(candidate.descriptor.assetId).catch(() => false);
+    const stored = await vault.put(candidate, blob, { signal });
+    return { descriptor: stored.descriptor, previouslyAvailable };
+  }, []);
+
+  const announceRealityAssetCompletion = useCallback((completion: AppRealityAssetCompletion) => {
+    setEntries((current) => current.some((entry) => entry.id === completion.requestId) ? current : [...current, {
+      id: completion.requestId,
+      inputRevision: completion.inputRevision,
+      text: "Agent imported a verified visual-only Reality asset",
+      status: "committed",
+      source: "agent",
+      clientName: agentGatewayRef.current?.config?.clientName,
+      traceId: completion.requestId,
+      summary: "Imported a verified visual-only Reality asset",
+    }]);
+    setRealityAssetAvailability((values) => ({
+      ...values,
+      [completion.descriptor.assetId]: "available",
+    }));
+    setRealityRenderGeneration((generation) => generation + 1);
+    setRealityImportStatus("Agent import verified and stored. The asset is ready for a Gaussian Splat component.");
+    notice("Agent imported a verified visual-only Reality asset.", "success");
+  }, [notice, setEntries]);
+
+  const completeRealityAssetImport = useCallback(async (candidateHandle: string): Promise<JSONObject> => {
+    const completed = await runExclusive(async () => {
+      const client = agentGatewayRef.current;
+      const store = workspaceStoreRef.current;
+      if (!client || !store) throw new Error("The authoritative browser importer is unavailable.");
+      const initialState = store.getState();
+      const workspaceId = initialState.workspaceId;
+      const baseRevision = initialState.revision;
+      const workspaceGeneration = workspaceGenerationRef.current;
+      const completionContext = `${workspaceGeneration}:${workspaceId}`;
+      const pendingCompletion = realityAssetCompletionLedgerRef.current.peek(
+        candidateHandle,
+        completionContext,
+      );
+      if (pendingCompletion) {
+        const registered = store.getState().realityAssets.get(pendingCompletion.descriptor.assetId);
+        if (!registered || registered.digest !== pendingCompletion.descriptor.digest) {
+          realityAssetCompletionLedgerRef.current.abandon(candidateHandle);
+          throw new Error("The locally completed Reality Asset is no longer registered in this Workspace.");
+        }
+        const retried = await realityAssetCompletionLedgerRef.current.acknowledgeRetry(
+          candidateHandle,
+          completionContext,
+          () => client.completeAssetCandidate(candidateHandle, workspaceId),
+        );
+        if (!retried) throw new Error("The pending Reality Asset completion was not available for retry.");
+        announceRealityAssetCompletion(retried);
+        return structuredClone(retried.result);
+      }
+      let stored: Awaited<ReturnType<typeof putRealityAssetBytes>> | undefined;
+      let registeredNow = false;
+      let hadRegistration = false;
+      try {
+        const inspected = await client.inspectAssetCandidate(candidateHandle, workspaceId);
+        const opened = await client.openAssetCandidate(candidateHandle, workspaceId);
+        if (opened.descriptor.candidateHandle !== inspected.candidateHandle
+          || opened.descriptor.sha256 !== inspected.sha256
+          || opened.descriptor.byteLength !== inspected.byteLength
+          || opened.descriptor.format !== inspected.format) {
+          await opened.body.cancel().catch(() => undefined);
+          throw new Error("The staged Reality asset changed between inspection and streaming.");
+        }
+        const blob = await new Response(opened.body, {
+          headers: { "Content-Type": inspected.mediaType },
+        }).blob();
+        if (blob.size !== inspected.byteLength) throw new Error("The staged Reality asset stream ended at the wrong byte length.");
+        const candidate = await preflightRealityAssetInWorker(blob);
+        const expectedFormat = inspected.format === "spz"
+          ? "spz-v4"
+          : inspected.format === "sog" ? "sog-v2" : "ply";
+        if (candidate.descriptor.digest !== inspected.sha256
+          || candidate.descriptor.byteLength !== inspected.byteLength
+          || candidate.descriptor.format !== expectedFormat) {
+          throw new Error("The staged Reality asset metadata does not match browser preflight.");
+        }
+
+        if (workspaceStoreRef.current !== store
+          || workspaceGenerationRef.current !== workspaceGeneration
+          || store.getState().workspaceId !== workspaceId
+          || store.getState().revision !== baseRevision) {
+          throw new Error("The project changed while the staged Reality asset was being verified.");
+        }
+
+        stored = await putRealityAssetBytes(candidate, blob);
+        const registered = store.getState().realityAssets.get(candidate.descriptor.assetId);
+        hadRegistration = Boolean(registered);
+        if (registered && registered.digest !== candidate.descriptor.digest) {
+          throw new Error("The staged content conflicts with registered Reality asset metadata.");
+        }
+        if (!registered) {
+          applyWorkspaceSystemOperations([{
+            op: "register_reality_asset",
+            op_id: uid("op_agent_register_reality"),
+            asset: structuredClone(candidate.descriptor),
+          }]);
+          registeredNow = true;
+        }
+
+        if (workspaceStoreRef.current !== store
+          || workspaceGenerationRef.current !== workspaceGeneration
+          || store.getState().workspaceId !== workspaceId) {
+          throw new Error("The project changed before the staged Reality asset could be finalized.");
+        }
+        const result = {
+          asset_ref: {
+            asset_id: candidate.descriptor.assetId,
+            digest: candidate.descriptor.digest,
+          },
+          descriptor: structuredClone(candidate.descriptor),
+          warnings: [...candidate.warnings],
+        } as unknown as JSONObject;
+        const completion: AppRealityAssetCompletion = {
+          requestId: inspected.requestId,
+          inputRevision: store.getState().revision,
+          descriptor: structuredClone(candidate.descriptor),
+          result,
+        };
+        await realityAssetCompletionLedgerRef.current.acknowledgeFirst(
+          candidateHandle,
+          completionContext,
+          completion,
+          () => client.completeAssetCandidate(candidateHandle, workspaceId),
+        );
+        announceRealityAssetCompletion(completion);
+        return structuredClone(result);
+      } catch (error) {
+        const preservedCompletion = realityAssetCompletionLedgerRef.current.peek(
+          candidateHandle,
+          completionContext,
+        );
+        if (preservedCompletion) {
+          // The browser has already verified and durably committed the exact
+          // content. A status-less/lost gateway acknowledgement is ambiguous:
+          // retain the local source of truth and let an identical tool retry
+          // consume the server's idempotent completion tombstone.
+          announceRealityAssetCompletion(preservedCompletion);
+          throw error;
+        }
+        // Best-effort transaction rollback: failed completion must not leave a
+        // newly registered descriptor or newly written local bytes behind.
+        if (registeredNow && workspaceStoreRef.current === store) {
+          const current = store.getState();
+          const referenced = [...current.components.values()].some((component) =>
+            realityAssetReference(component.props.assetRef)?.assetId === stored?.descriptor.assetId);
+          if (!referenced && stored && current.realityAssets.has(stored.descriptor.assetId)) {
+            try {
+              applyWorkspaceSystemOperations([{
+                op: "delete_reality_asset",
+                op_id: uid("op_rollback_agent_reality"),
+                asset_id: stored.descriptor.assetId,
+                confirm: true,
+              }]);
+              registeredNow = false;
+            } catch {
+              // Preserve the registered descriptor if a concurrent reference
+              // made rollback unsafe; its digest-verified bytes stay usable.
+            }
+          }
+        }
+        if (stored && !stored.previouslyAvailable && !hadRegistration && !registeredNow) {
+          await realityAssetVaultRef.current!.vault.delete(stored.descriptor.assetId).catch(() => false);
+        }
+        await client.cancelAssetCandidate(candidateHandle, workspaceId).catch(() => undefined);
+        throw error;
+      }
+    });
+    if (!completed) throw new Error("Another Workspace operation is still in progress.");
+    return completed;
+  }, [announceRealityAssetCompletion, applyWorkspaceSystemOperations, putRealityAssetBytes, runExclusive]);
+  completeRealityAssetImportRef.current = completeRealityAssetImport;
+
+  const importRealityAssetFile = useCallback(async (file: File, relinkAssetId?: string) => {
+    await runExclusive(async () => {
+      const controller = new AbortController();
+      realityImportAbortRef.current?.abort();
+      realityImportAbortRef.current = controller;
+      setRealityImportBusy(true);
+      setRealityImportStatus(relinkAssetId ? "Verifying exact replacement content…" : "Inspecting format, bounds, and digest…");
+      let stored: Awaited<ReturnType<typeof putRealityAssetBytes>> | undefined;
+      let keepStoredBytesOnFailure = false;
+      try {
+        const store = workspaceStoreRef.current;
+        if (!store) throw new Error("The component workspace is not ready.");
+        const expected = relinkAssetId ? store.getState().realityAssets.get(relinkAssetId) : undefined;
+        if (relinkAssetId && !expected) throw new Error("The Reality asset is no longer registered in this project.");
+
+        const candidate = await preflightRealityAssetInWorker(file, { signal: controller.signal });
+        if (expected && (candidate.descriptor.assetId !== expected.assetId
+          || candidate.descriptor.digest !== expected.digest)) {
+          throw new Error("That file is different content. Relink requires the exact registered SHA-256 digest.");
+        }
+
+        stored = await putRealityAssetBytes(candidate, file, controller.signal);
+        if (expected) {
+          const current = store.getState().realityAssets.get(expected.assetId);
+          if (!current || current.digest !== expected.digest) {
+            throw new Error("The project changed while the Reality asset was being relinked.");
+          }
+          keepStoredBytesOnFailure = true;
+          setRealityAssetAvailability((values) => ({ ...values, [expected.assetId]: "available" }));
+          setRealityRenderGeneration((generation) => generation + 1);
+          setRealityImportStatus("Exact asset relinked. The visual layer is loading from local storage.");
+          notice("Reality asset relinked by exact content digest.", "success");
+          return;
+        }
+
+        const state = store.getState();
+        const registered = state.realityAssets.get(candidate.descriptor.assetId);
+        if (registered && registered.digest !== candidate.descriptor.digest) {
+          throw new Error("This content-addressed asset ID conflicts with registered project metadata.");
+        }
+        keepStoredBytesOnFailure = Boolean(registered);
+        const hasStage = [...state.components.values()].some((component) => component.type.typeId === "stage-3d");
+        const stageManifest = hasStage ? undefined : store.getComponentManifest("stage-3d");
+        const realityManifest = store.getComponentManifest("gaussian-splat");
+        if (!realityManifest) throw new Error("The built-in Gaussian Splat Reality Layer is unavailable.");
+        if (!hasStage && !stageManifest) throw new Error("The built-in 3D Stage is unavailable.");
+        const ids = store.reserveComponentIds(hasStage ? 1 : 2);
+        const stageId = hasStage ? undefined : ids[0];
+        const realityId = ids[hasStage ? 0 : 1];
+        if (!realityId || (!hasStage && !stageId)) throw new Error("The workspace could not reserve Reality component IDs.");
+
+        const operations: WorkspaceOperation[] = [];
+        if (!registered) operations.push({
+          op: "register_reality_asset",
+          op_id: uid("op_register_reality"),
+          asset: structuredClone(candidate.descriptor),
+        });
+        if (stageId && stageManifest) operations.push({
+          op: "create_component",
+          op_id: uid("op_create_reality_stage"),
+          id: stageId,
+          component_type: {
+            typeId: stageManifest.typeId,
+            version: stageManifest.version,
+            digest: stageManifest.digest,
+          },
+          label: "3D Stage",
+          placement: defaultWorkspacePlacement(stageManifest, state.components.size),
+        });
+        operations.push({
+          op: "create_component",
+          op_id: uid("op_create_reality_layer"),
+          id: realityId,
+          component_type: {
+            typeId: realityManifest.typeId,
+            version: realityManifest.version,
+            digest: realityManifest.digest,
+          },
+          label: `Reality capture ${[...state.components.values()].filter((component) => component.type.typeId === "gaussian-splat").length + 1}`,
+          props: {
+            assetRef: {
+              assetId: candidate.descriptor.assetId,
+              digest: candidate.descriptor.digest,
+            },
+            calibration: {
+              version: 1,
+              status: "uncalibrated",
+              sourceCoordinateSystem: candidate.descriptor.coordinateSystem.system,
+              targetCoordinateSystem: "RUB",
+              metersPerSourceUnit: null,
+            },
+            quality: "auto",
+            semanticProxyIds: [],
+          },
+          placement: defaultWorkspacePlacement(realityManifest, state.components.size + (stageId ? 1 : 0)),
+          tags: ["reality", "visual-reference"],
+        });
+
+        applyWorkspaceOperations(operations, "Imported a visual-only Reality capture");
+        keepStoredBytesOnFailure = true;
+        setSelectedComponentId(realityId);
+        setRealityAssetAvailability((values) => ({ ...values, [candidate.descriptor.assetId]: "available" }));
+        setRealityImportStatus(candidate.warnings.length
+          ? `Imported with ${candidate.warnings.length} preflight ${candidate.warnings.length === 1 ? "warning" : "warnings"}. Calibrate before metric use.`
+          : "Imported safely. Calibrate scale and link engineering proxies in Inspector.");
+        window.setTimeout(() => hybridCanvasRef.current?.frameAll(), 120);
+      } catch (error) {
+        if (stored && !stored.previouslyAvailable && !keepStoredBytesOnFailure) {
+          await realityAssetVaultRef.current!.vault.delete(stored.descriptor.assetId).catch(() => false);
+        }
+        const message = friendlyError(error);
+        setRealityImportStatus(message);
+        notice(`Reality asset import failed: ${message}`, "error");
+      } finally {
+        if (realityImportAbortRef.current === controller) realityImportAbortRef.current = null;
+        setRealityImportBusy(false);
+      }
+    });
+  }, [applyWorkspaceOperations, notice, putRealityAssetBytes, runExclusive]);
+
+  const chooseRealityAssetFile = useCallback((relinkAssetId?: string) => {
+    pendingRealityRelinkRef.current = relinkAssetId ?? null;
+    realityFileRef.current?.click();
+  }, []);
+
+  const deleteRealityAsset = useCallback(async (assetId: string): Promise<boolean> => {
+    const result = await runExclusive(async () => {
+      try {
+        const state = workspaceStoreRef.current?.getState();
+        const descriptor = state?.realityAssets.get(assetId);
+        if (!state || !descriptor) throw new Error("The Reality asset is no longer registered.");
+        const references = [...state.components.values()].filter((component) => {
+          const reference = realityAssetReference(component.props.assetRef);
+          return reference?.assetId === descriptor.assetId && reference.digest === descriptor.digest;
+        });
+        if (references.length > 0) throw new Error("Delete every Reality layer instance before deleting its asset metadata.");
+        applyWorkspaceOperations([{
+          op: "delete_reality_asset",
+          op_id: uid("op_delete_reality"),
+          asset_id: descriptor.assetId,
+          confirm: true,
+        }], "Deleted an unreferenced Reality asset");
+        setRealityAssetAvailability((current) => Object.fromEntries(
+          Object.entries(current).filter(([id]) => id !== descriptor.assetId),
+        ));
+        setRealityImportStatus("Removed project metadata. Content-addressed local bytes remain cached for other projects.");
+        return true;
+      } catch (error) {
+        notice(friendlyError(error), "error");
+        return false;
+      }
+    });
+    return result === true;
+  }, [applyWorkspaceOperations, notice, runExclusive]);
 
   const createWorkspaceModelAssembly = useCallback((componentId: string) => {
     try {
@@ -2302,6 +2771,27 @@ export default function App() {
       .map((component) => ({ id: component.id, label: component.label }))
       .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
   }, [selectedComponentId, workspace]);
+  const workspaceRealityProxyOptions = useMemo(() => [...workspace.components.values()]
+    .filter((component) => ["spatial-primitive", "spatial-entity", "model-assembly"].includes(component.type.typeId)
+      && component.placement.space === "world3d"
+      && component.id !== selectedComponentId)
+    .map((component) => ({ id: component.id, label: component.label }))
+    .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id)),
+  [selectedComponentId, workspace]);
+  const workspaceRealityAssets = useMemo<readonly WorkspaceRealityAssetItem[]>(() => (
+    [...workspace.realityAssets.values()]
+      .map((descriptor) => ({
+        descriptor,
+        availability: realityAssetAvailability[descriptor.assetId] ?? "checking",
+        componentIds: [...workspace.components.values()].flatMap((component) => {
+          const reference = realityAssetReference(component.props.assetRef);
+          return reference?.assetId === descriptor.assetId && reference.digest === descriptor.digest
+            ? [component.id]
+            : [];
+        }).sort(),
+      }))
+      .sort((left, right) => left.descriptor.assetId.localeCompare(right.descriptor.assetId))
+  ), [realityAssetAvailability, workspace]);
   const selectedWorkspaceDescendantCount = useMemo(() => {
     if (!selectedComponentId) return 0;
     return [...workspace.components.values()].filter((candidate) => {
@@ -2320,7 +2810,8 @@ export default function App() {
       component.type.typeId === "stage-3d"
       || component.type.typeId === "model-assembly"
       || component.type.typeId === "spatial-primitive"
-      || component.type.typeId === "spatial-entity"));
+      || component.type.typeId === "spatial-entity"
+      || component.type.typeId === "gaussian-splat"));
     const children = new Map<string, string[]>();
     for (const component of included.values()) {
       if (!component.parentId || !included.has(component.parentId)) continue;
@@ -2543,10 +3034,11 @@ export default function App() {
         onZoomOut={() => hybridCanvasRef.current?.zoomOut()}
       >
         <HybridWorkspaceCanvas
-          key={`workspace-canvas-${workspaceRenderGeneration}`}
+          key={`workspace-canvas-${workspaceRenderGeneration}-${realityRenderGeneration}`}
           ref={hybridCanvasRef}
           state={workspaceSnapshot}
           commit={workspaceRenderCommit}
+          rendererOptions={{ threeOptions: { openRealityAsset } }}
           selectedId={selectedComponentId}
           onSelect={setSelectedComponentId}
           onActivate={activateWorkspaceComponent}
@@ -2584,6 +3076,7 @@ export default function App() {
           onCreateAssembly={createWorkspaceModelAssembly}
           selectedWorldPlacement={selectedWorkspaceWorldPlacement}
           assemblyOptions={workspaceAssemblyOptions}
+          realityProxyOptions={workspaceRealityProxyOptions}
           onTransform={transformWorkspaceComponent}
           onReparent={reparentWorkspaceComponent}
           onSelectComponent={setSelectedComponentId}
@@ -2596,6 +3089,14 @@ export default function App() {
           modelExportActions={workspaceModelExportActions}
           onDeleteModel={deleteWorkspaceModel}
           onCreateModelExample={createParametricWorkbench}
+          realityAssets={workspaceRealityAssets}
+          realityImportBusy={realityImportBusy}
+          realityImportStatus={realityImportStatus ?? (realityAssetVaultRef.current.persistent
+            ? undefined
+            : "Private persistent storage is unavailable; imported bytes last for this App session only.")}
+          onImportRealityAsset={() => chooseRealityAssetFile()}
+          onRelinkRealityAsset={chooseRealityAssetFile}
+          onDeleteRealityAsset={deleteRealityAsset}
           onCreateShowcase={createMixedWorkspaceShowcase}
           onSaveInlineSource={saveWorkspaceInlineSource}
           onRefreshSource={(resourceId) => void refreshWorkspaceHostFeed(resourceId)}
@@ -2623,6 +3124,7 @@ export default function App() {
     </main>}
     {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => { safeStorageRemove(RECOVERY_KEY); setRecoveryAvailable(false); }}>Dismiss</button></div>}
     <input ref={fileRef} hidden type="file" accept=".json,.semaframe.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
+    <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
     <ConfirmDialog open={confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
     <ConfirmDialog open={confirm === "open"} title="Open another project?" detail="Your current project has unsaved changes. Opening another file will replace it in this window." confirmLabel="Open project" tone="danger" onCancel={() => { setConfirm(null); setPendingFile(null); }} onConfirm={() => { const file = pendingFile; setConfirm(null); setPendingFile(null); if (file) void loadProject(file); }} />
     <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>

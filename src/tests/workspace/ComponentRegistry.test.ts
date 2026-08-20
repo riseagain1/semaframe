@@ -11,7 +11,7 @@ describe("universal component registry", () => {
     expect(BUILTIN_COMPONENT_TYPE_IDS).toEqual([
       "stage-3d", "spatial-entity", "group", "panel", "text", "image",
       "video-player", "web-panel", "data-panel", "annotation", "timer", "checklist", "chart", "table", "document", "button",
-      "spatial-primitive", "model-assembly",
+      "spatial-primitive", "model-assembly", "gaussian-splat",
     ]);
     const rebuilt = new ComponentRegistry([...DEFAULT_COMPONENT_REGISTRY.list()].reverse());
     expect(rebuilt.digest).toBe(DEFAULT_COMPONENT_REGISTRY.digest);
@@ -21,11 +21,11 @@ describe("universal component registry", () => {
     // Existing types retain 1.0/1.1 compatibility refs; button starts at 1.2,
     // while spatial-entity alone adds collision-aware 1.3, physics-aware 1.4,
     // and master-switch 1.5 contracts.
-    expect(rebuilt.list()).toHaveLength(51);
+    expect(rebuilt.list()).toHaveLength(52);
     for (const typeId of BUILTIN_COMPONENT_TYPE_IDS) {
       const expectedVersion = typeId === "spatial-entity"
         ? "1.5.0"
-        : ["spatial-primitive", "model-assembly"].includes(typeId)
+        : ["spatial-primitive", "model-assembly", "gaussian-splat"].includes(typeId)
           ? "1.0.0"
           : "1.2.0";
       expect(rebuilt.require(typeId).version).toBe(expectedVersion);

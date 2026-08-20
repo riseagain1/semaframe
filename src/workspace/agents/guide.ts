@@ -254,6 +254,31 @@ export const WORKSPACE_MODELING_QUICKSTART: JSONValue = Object.freeze(jsonContra
   },
 }));
 
+export const WORKSPACE_REALITY_ASSET_QUICKSTART: JSONValue = Object.freeze(jsonContract({
+  required_scopes: ["workspace:read", "workspace:write", "component:create", "asset:import"],
+  accepted_inputs: {
+    formats: ["ply", "spz", "sog"],
+    format_versions: ["PLY Gaussian splat", "SPZ v4", "SOG v2"],
+    maximum_bytes: 268435456,
+    maximum_splats: 4000000,
+    source_rule: "Import only a file the user supplied to the Agent. Never scan local paths or fetch an arbitrary URL.",
+  },
+  import_steps: [
+    "Compute the exact byte length and SHA-256 digest before requesting a grant.",
+    "Call begin_workspace_asset_import with a stable request_id and the current exact workspace_id.",
+    "Stream the original bytes once to the returned exact PUT URL using its one-time bearer, content type, and content length. Do not embed bytes or base64 in MCP JSON.",
+    "Call complete_workspace_asset_import with candidate_handle. The authoritative browser independently preflights, hashes, stores, and registers the candidate.",
+    "Retain the returned digest-pinned asset_ref. Use inspect_workspace_asset for exact descriptor rediscovery when the bounded summary omits it.",
+    "In a normal begin_workspace_update/submit_workspace_batch transaction, create gaussian-splat@1.0.0. Set props.assetRef.assetId to result.asset_ref.asset_id, copy result.asset_ref.digest exactly, and supply an explicit calibration.",
+  ],
+  gaussian_splat_rules: {
+    authority: "Every Reality Asset is engineeringAuthority visual_only. It never supplies collision, physics, CAD, stability, or feasibility truth.",
+    calibration: "Choose uncalibrated, metadata-declared, or reference-distance explicitly. Target coordinates are RUB. Uncalibrated bounds are not metric.",
+    proxies: "Put editable spatial-primitive, spatial-entity, or model-assembly IDs in semanticProxyIds when engineering reasoning is required. The proxies, not the splat, own collision and physics.",
+    persistence: "Projects store safe content-addressed descriptors and component references, never raw bytes, local paths, source file names, upload grants, or tokens. Missing bytes render as a placeholder and require the exact same digest to relink.",
+  },
+}));
+
 export const WORKSPACE_AGENT_GUIDE_TEXT = `
 You control a deterministic universal 2D/3D component workspace. You are the
 planner; the Workspace engine validates, resolves, commits, stores, and projects.
@@ -371,6 +396,26 @@ Component and placement rules
   exact one-to-one id_map. Instances are ordinary editable component trees, not
   hidden proxies. delete_model_definition is destructive, requires
   component:delete, and is rejected while an instance root still references it.
+- Reality capture is represented by gaussian-splat@1.0.0 and a separately
+  registered, content-addressed Reality Asset descriptor. Import requires the
+  explicit asset:import scope. For a user-supplied PLY, SPZ v4, or SOG v2 file,
+  compute exact byte_length and sha256, call begin_workspace_asset_import,
+  stream bytes to its one-time PUT capability, then call
+  complete_workspace_asset_import. Never put bytes, base64, a local path,
+  source filename, upload URL, or bearer in a Workspace batch or saved project.
+  The authoritative browser independently preflights and hashes the stream.
+  Use inspect_workspace_asset with an exact ra_<sha256> ID to rediscover the
+  complete safe descriptor if inspect_workspace omitted it; its
+  binary_availability remains host_local_unknown to Agents.
+- A Gaussian splat is always engineeringAuthority visual_only. It contributes
+  calibrated visual bounds to SSG 3.1 but never a collider, rigid body, support
+  surface, CAD solid, or feasibility result. Choose uncalibrated,
+  metadata-declared, or reference-distance calibration explicitly and map the
+  source coordinate system to RUB. When engineering reasoning is needed, create
+  editable physical components and list their IDs in semanticProxyIds. Those
+  proxies own collision and physics; SSG exposes represented_by and proxy_for
+  relations. Missing browser-local bytes produce a placeholder, and relinking
+  accepts only bytes with the descriptor's exact digest.
 - Physics uses the explicit enabled master switch, bodyType static/dynamic/kinematic, massKg, a local
   centerOfMass offset, friction, restitution, gravityScale, stabilityMode, and
   at most 16 fixed/hinge/slider/ball constraints. inspect_workspace_physics
@@ -593,6 +638,7 @@ export const WORKSPACE_AGENT_GUIDE = Object.freeze({
   creation_quickstart: WORKSPACE_CREATE_COMPONENT_QUICKSTART,
   data_interaction_quickstart: WORKSPACE_DATA_INTERACTION_QUICKSTART,
   modeling_quickstart: WORKSPACE_MODELING_QUICKSTART,
+  reality_asset_quickstart: WORKSPACE_REALITY_ASSET_QUICKSTART,
   create_component_schema: WORKSPACE_CREATE_COMPONENT_SCHEMA,
   workspace_command_schema: workspaceCommandSchema as unknown as JSONValue,
 }) satisfies JSONValue;

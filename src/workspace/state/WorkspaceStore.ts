@@ -2,6 +2,11 @@ import type { ValidateFunction } from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
 import { DEFAULT_ASSET_REGISTRY } from "../../assets/AssetRegistry";
 import {
+  parseRealityAssetCalibration,
+  parseRealityAssetDescriptor,
+  type RealityAssetDescriptor,
+} from "../assets";
+import {
   ComponentRegistry,
   ComponentRegistryError,
   DEFAULT_COMPONENT_REGISTRY,
@@ -63,6 +68,8 @@ import { parseParametricPrimitive } from "../modeling/parametricGeometry";
 import {
   LEGACY_WORKSPACE_PROTOCOL_VERSION,
   LEGACY_WORKSPACE_SCHEMA_VERSION,
+  MODELING_WORKSPACE_PROTOCOL_VERSION,
+  MODELING_WORKSPACE_SCHEMA_VERSION,
   MAX_WORKSPACE_OPERATIONS,
   PREVIOUS_WORKSPACE_PROTOCOL_VERSION,
   PREVIOUS_WORKSPACE_SCHEMA_VERSION,
@@ -104,9 +111,11 @@ import {
   MAX_WORKSPACE_RECIPES,
   MAX_WORKSPACE_MODEL_DEFINITIONS,
   MAX_WORKSPACE_RESOURCES,
+  MAX_WORKSPACE_REALITY_ASSETS,
   MAX_WORKSPACE_SHARED_VIEWS,
   MAX_WORKSPACE_UNDO_ENTRIES,
 } from "./workspaceLimits";
+import { isPhysicalSpatialTypeId } from "../spatial/spatialComponentKinds";
 
 export class WorkspaceStoreError extends Error {
   constructor(message: string, readonly code: string) {
@@ -337,6 +346,8 @@ function operationPermission(operation: WorkspaceOperation): WorkspacePermission
     case "invoke_component_action": return "component:invoke";
     case "upsert_resource": return "connector:write";
     case "delete_resource": return "connector:delete";
+    case "register_reality_asset":
+    case "delete_reality_asset": return "asset:register";
     case "bind_resource":
     case "unbind_resource": return "connector:bind";
     case "connect_event":
@@ -409,6 +420,80 @@ function assertSpatialAssetProps(manifest: ComponentManifest, props: JSONObject)
       `Asset ${asset.assetId} has kind ${asset.kind}; spatial entity declares ${String(entityKind)}`,
       "asset_kind_mismatch",
     );
+  }
+}
+
+function realityAssetReference(
+  props: JSONObject,
+): { assetId: string; digest: string } | null | undefined {
+  const value = props.assetRef;
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return typeof record.assetId === "string" && typeof record.digest === "string"
+    ? { assetId: record.assetId, digest: record.digest }
+    : undefined;
+}
+
+function assertRealityAssetComponentProps(
+  state: WorkspaceState,
+  manifest: ComponentManifest,
+  componentId: string,
+  props: JSONObject,
+): void {
+  if (manifest.typeId !== "gaussian-splat") return;
+  const reference = realityAssetReference(props);
+  if (reference === undefined) {
+    throw new WorkspaceStoreError(
+      `Reality component ${componentId} has an invalid assetRef`,
+      "invalid_reality_asset_reference",
+    );
+  }
+  if (reference) {
+    const descriptor = state.realityAssets.get(reference.assetId);
+    if (!descriptor) {
+      throw new WorkspaceStoreError(
+        `Reality component ${componentId} references unknown asset ${reference.assetId}`,
+        "unknown_reality_asset",
+      );
+    }
+    if (descriptor.digest !== reference.digest) {
+      throw new WorkspaceStoreError(
+        `Reality component ${componentId} asset digest does not match ${reference.assetId}`,
+        "reality_asset_digest_mismatch",
+      );
+    }
+  }
+  try {
+    parseRealityAssetCalibration(props.calibration);
+  } catch (error) {
+    throw new WorkspaceStoreError(
+      error instanceof Error ? error.message : "Invalid Reality Asset calibration",
+      "invalid_reality_calibration",
+    );
+  }
+  const proxyIds = props.semanticProxyIds;
+  if (!Array.isArray(proxyIds) || proxyIds.some((id) => typeof id !== "string")) {
+    throw new WorkspaceStoreError(
+      `Reality component ${componentId} has invalid semanticProxyIds`,
+      "invalid_reality_proxy",
+    );
+  }
+  const validatedProxyIds = proxyIds as string[];
+  if (new Set(validatedProxyIds).size !== validatedProxyIds.length || validatedProxyIds.includes(componentId)) {
+    throw new WorkspaceStoreError(
+      `Reality component ${componentId} has duplicate or self-referential semantic proxies`,
+      "invalid_reality_proxy",
+    );
+  }
+  for (const proxyId of validatedProxyIds) {
+    const proxy = state.components.get(proxyId);
+    if (!proxy || (!isPhysicalSpatialTypeId(proxy.type.typeId) && proxy.type.typeId !== "model-assembly")) {
+      throw new WorkspaceStoreError(
+        `Reality component ${componentId} proxy ${proxyId} is not an authoritative physical component`,
+        "invalid_reality_proxy",
+      );
+    }
   }
 }
 
@@ -921,6 +1006,7 @@ export function migrateWorkspaceStateToCurrent(
   if (
     input.protocolVersion !== LEGACY_WORKSPACE_PROTOCOL_VERSION
     && input.protocolVersion !== PREVIOUS_WORKSPACE_PROTOCOL_VERSION
+    && input.protocolVersion !== MODELING_WORKSPACE_PROTOCOL_VERSION
     && input.protocolVersion !== WORKSPACE_PROTOCOL_VERSION
   ) {
     throw new WorkspaceStoreError(
@@ -931,6 +1017,7 @@ export function migrateWorkspaceStateToCurrent(
   if (
     input.workspaceSchemaVersion !== LEGACY_WORKSPACE_SCHEMA_VERSION
     && input.workspaceSchemaVersion !== PREVIOUS_WORKSPACE_SCHEMA_VERSION
+    && input.workspaceSchemaVersion !== MODELING_WORKSPACE_SCHEMA_VERSION
     && input.workspaceSchemaVersion !== WORKSPACE_SCHEMA_VERSION
   ) {
     throw new WorkspaceStoreError(
@@ -946,6 +1033,7 @@ export function migrateWorkspaceStateToCurrent(
   }
   const state = cloneWorkspaceState(input);
   state.modelDefinitions ??= new Map();
+  state.realityAssets ??= new Map();
   const registry = buildEffectiveRegistry(baseRegistry, state.recipes);
   for (const component of state.components.values()) {
     component.locks = { ...DEFAULT_COMPONENT_LOCKS, ...component.locks };
@@ -1037,7 +1125,7 @@ export class WorkspaceStore {
       const delta: WorkspaceDelta = {
         fromRevision: command.baseWorkspaceRevision,
         toRevision: command.resultingWorkspaceRevision,
-        added: [], updated: [], removed: [], resourcesChanged: [], connectionsChanged: [], viewsChanged: [], modelsChanged: [],
+        added: [], updated: [], removed: [], resourcesChanged: [], realityAssetsChanged: [], connectionsChanged: [], viewsChanged: [], modelsChanged: [],
         registryChanged: command.inputRegistryDigest !== command.resultingRegistryDigest,
       };
       this.committedRequests.set(command.requestId, {
@@ -1741,6 +1829,7 @@ export class WorkspaceStore {
         registry.assertProps(operation.component_type, props);
         normalizeWebPanelProps(manifest, props);
         assertSpatialAssetProps(manifest, props);
+        assertRealityAssetComponentProps(state, manifest, operation.id, props);
         registry.assertDurableState(operation.component_type, durableState);
         if (operation.parent_id && !state.components.has(operation.parent_id)) {
           throw new WorkspaceStoreError(`Unknown parent ${operation.parent_id}`, "unknown_component");
@@ -1803,6 +1892,7 @@ export class WorkspaceStore {
           registry.assertProps(component.type, props);
           normalizeWebPanelProps(manifest, props);
           assertSpatialAssetProps(manifest, props);
+          assertRealityAssetComponentProps(state, manifest, component.id, props);
           if (manifest.typeId === "web-panel" && operation.patch.props.sourceUrl !== undefined) {
             operation.patch.props.sourceUrl = props.sourceUrl;
           }
@@ -1904,6 +1994,7 @@ export class WorkspaceStore {
         registry.assertProps(operation.component_type, props);
         normalizeWebPanelProps(targetManifest, props);
         assertSpatialAssetProps(targetManifest, props);
+        assertRealityAssetComponentProps(state, targetManifest, component.id, props);
         registry.assertDurableState(operation.component_type, durableState);
 
         component.type = structuredClone(operation.component_type);
@@ -2174,6 +2265,47 @@ export class WorkspaceStore {
         });
         return;
       }
+      case "register_reality_asset": {
+        let descriptor: RealityAssetDescriptor;
+        try {
+          descriptor = parseRealityAssetDescriptor(operation.asset);
+        } catch (error) {
+          throw new WorkspaceStoreError(
+            error instanceof Error ? error.message : "Invalid Reality Asset descriptor",
+            "invalid_reality_asset",
+          );
+        }
+        const existing = state.realityAssets.get(descriptor.assetId);
+        if (existing && stableStringify(existing) !== stableStringify(descriptor)) {
+          throw new WorkspaceStoreError(
+            `Reality Asset ${descriptor.assetId} is already registered with different metadata`,
+            "reality_asset_conflict",
+          );
+        }
+        state.realityAssets.set(descriptor.assetId, structuredClone(descriptor));
+        operation.asset = structuredClone(descriptor);
+        return;
+      }
+      case "delete_reality_asset": {
+        if (!state.realityAssets.has(operation.asset_id)) {
+          throw new WorkspaceStoreError(
+            `Unknown Reality Asset ${operation.asset_id}`,
+            "unknown_reality_asset",
+          );
+        }
+        const referencing = [...state.components.values()]
+          .filter((component) => realityAssetReference(component.props)?.assetId === operation.asset_id)
+          .map((component) => component.id)
+          .sort((left, right) => left.localeCompare(right));
+        if (referencing.length) {
+          throw new WorkspaceStoreError(
+            `Reality Asset ${operation.asset_id} is referenced by ${referencing.join(", ")}`,
+            "reality_asset_referenced",
+          );
+        }
+        state.realityAssets.delete(operation.asset_id);
+        return;
+      }
       case "upsert_resource": {
         try {
           if (!replayingResolvedOperations && authorization.actor === "agent") {
@@ -2381,6 +2513,7 @@ export class WorkspaceStore {
         state.recipes.clear();
         state.modelDefinitions.clear();
         if (operation.include_resources) state.resources.clear();
+        if (operation.include_reality_assets) state.realityAssets.clear();
         state.registryDigest = this.effectiveRegistry(state).digest;
         return;
       }
@@ -2407,7 +2540,14 @@ export class WorkspaceStore {
         : connection.sourceComponentId === id || connection.targetComponentId === id,
     );
     const referencedByView = [...state.sharedViews.values()].some((view) => view.componentIds.includes(id));
-    if (policy === "reject_if_referenced" && (structuralDependents.length || connections.length || referencedByView)) {
+    const realityProxyDependents = [...state.components.values()].filter((item) =>
+      item.type.typeId === "gaussian-splat"
+      && Array.isArray(item.props.semanticProxyIds)
+      && item.props.semanticProxyIds.includes(id),
+    );
+    if (policy === "reject_if_referenced" && (
+      structuralDependents.length || connections.length || referencedByView || realityProxyDependents.length
+    )) {
       throw new WorkspaceStoreError(`Component ${id} is still referenced`, "component_referenced");
     }
     if (policy === "orphan" && (anchors.length || basisDependents.length)) {
@@ -2426,6 +2566,10 @@ export class WorkspaceStore {
       }
     }
     for (const connection of connections) this.removeConnection(state, connection.id);
+    for (const reality of realityProxyDependents) {
+      reality.props.semanticProxyIds = (reality.props.semanticProxyIds as string[])
+        .filter((proxyId) => proxyId !== id);
+    }
     for (const [alias, target] of state.aliases) if (target === id) state.aliases.delete(alias);
     for (const view of state.sharedViews.values()) view.componentIds = view.componentIds.filter((item) => item !== id);
     state.components.delete(id);
@@ -2443,7 +2587,7 @@ export class WorkspaceStore {
 
   private validateState(state: WorkspaceState): void {
     const spatialNodeCount = [...state.components.values()]
-      .filter((component) => component.type.typeId === "spatial-entity").length;
+      .filter((component) => isPhysicalSpatialTypeId(component.type.typeId)).length;
     if (spatialNodeCount > MAX_WORKSPACE_SPATIAL_NODES) {
       throw new WorkspaceStoreError(
         `Workspace exceeds the ${MAX_WORKSPACE_SPATIAL_NODES} spatial-body analysis limit`,
@@ -2453,6 +2597,7 @@ export class WorkspaceStore {
     const capacities = [
       ["components", state.components.size, MAX_WORKSPACE_COMPONENTS],
       ["resources", state.resources.size, MAX_WORKSPACE_RESOURCES],
+      ["reality assets", state.realityAssets.size, MAX_WORKSPACE_REALITY_ASSETS],
       ["connections", state.connections.size, MAX_WORKSPACE_CONNECTIONS],
       ["aliases", state.aliases.size, MAX_WORKSPACE_ALIASES],
       ["shared views", state.sharedViews.size, MAX_WORKSPACE_SHARED_VIEWS],
@@ -2496,6 +2641,23 @@ export class WorkspaceStore {
         throw new WorkspaceStoreError(`Model definition key ${key} does not match its payload`, "invalid_model_definition");
       }
     }
+    for (const [key, descriptorValue] of state.realityAssets) {
+      let descriptor: RealityAssetDescriptor;
+      try {
+        descriptor = parseRealityAssetDescriptor(descriptorValue);
+      } catch (error) {
+        throw new WorkspaceStoreError(
+          error instanceof Error ? error.message : `Invalid Reality Asset ${key}`,
+          "invalid_reality_asset",
+        );
+      }
+      if (key !== descriptor.assetId) {
+        throw new WorkspaceStoreError(
+          `Reality Asset key ${key} does not match ${descriptor.assetId}`,
+          "invalid_reality_asset_key",
+        );
+      }
+    }
     const registry = this.effectiveRegistry(state);
     if (registry.digest !== state.registryDigest) {
       throw new StaleRegistryDigestError(registry.digest, state.registryDigest);
@@ -2520,6 +2682,7 @@ export class WorkspaceStore {
       registry.assertProps(component.type, component.props);
       normalizeWebPanelProps(manifest, component.props);
       assertSpatialAssetProps(manifest, component.props);
+      assertRealityAssetComponentProps(state, manifest, component.id, component.props);
       if (component.type.typeId === "spatial-entity") {
         if (component.props.collision !== undefined && !spatialCollisionConfigFromProps(component.props)) {
           throw new WorkspaceStoreError(
