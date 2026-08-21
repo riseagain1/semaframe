@@ -31,8 +31,24 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
   <a href="https://github.com/riseagain1/semaframe/releases/tag/v0.2.0">Video, captions, and release notes</a>
 </p>
 
+## What's new in v0.3
+
+v0.3 moves SemaFrame beyond scene assembly into an Agent-native modeling and Reality workspace, while keeping the browser and one revisioned `WorkspaceStore` authoritative.
+
+| New capability | What it adds |
+| --- | --- |
+| **Parametric modeling** | Exact SI primitives, editable multipart assemblies, collision-aware placement, numeric human controls, and immutable reusable model definitions with ordinary editable instances |
+| **CAD and interchange** | Deterministic OpenUSD USDA, bounded Manifold STL/OBJ, and a real OpenCascade AP242 STEP subset running in lazy, cancellable Workers |
+| **Gaussian Splat Reality Layer** | Human or approved-Agent import of PLY, SPZ v4, and SOG v2 captures with explicit calibration, content-addressed browser storage, digest relinking, and editable semantic engineering proxies |
+| **Agent-native spatial workflow** | SSG 3.1 spatial understanding, 18 approval-gated MCP tools, secure streaming asset ingress, collision and bounded-physics evidence, undo/redo, save/reopen, live data bindings, and typed 2D-to-3D actions |
+
+Together, these capabilities support one inspectable workflow: import captured context, build exact semantic parts and proxies, check placement and feasibility, connect live controls, publish reusable models, preserve the result, and export standard formats—without taking editability away from the person using the workspace.
+
+[Read the complete v0.3.0 release notes](./docs/release-v0.3.0.md).
+
 ## Contents
 
+- [What's new in v0.3](#whats-new-in-v03)
 - [Why SemaFrame](#why-semaframe)
 - [A practical Jarvis-like workspace](#a-practical-jarvis-like-workspace)
 - [What it can do](#what-it-can-do)
