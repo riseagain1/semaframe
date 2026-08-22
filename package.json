@@ -108,22 +108,22 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
-    "@remotion/cli": "^4.0.512",
-    "@remotion/media": "^4.0.512",
-    "@remotion/transitions": "^4.0.512",
+    "@remotion/cli": "^4.0.513",
+    "@remotion/media": "^4.0.513",
+    "@remotion/transitions": "^4.0.513",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.4",
+    "@testing-library/user-event": "^14.6.5",
     "@types/node": "^26.2.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@types/three": "0.180.0",
-    "@vitejs/plugin-react": "^4.7.0",
-    "jsdom": "^26.1.0",
+    "@vitejs/plugin-react": "^6.0.5",
+    "jsdom": "^30.0.1",
     "remotion": "^4.0.512",
     "tsx": "^4.23.12",
-    "typescript": "^5.9.2",
-    "vite": "^7.1.2",
-    "vitest": "^3.2.4"
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.11"
   }
 }
