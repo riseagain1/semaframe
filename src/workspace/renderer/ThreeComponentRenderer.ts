@@ -25,6 +25,7 @@ import {
 } from "../modeling/parametricGeometry";
 import type { ParametricRenderMaterial } from "../../renderer/sceneRenderTypes";
 import { ThreeRenderer } from "../../renderer/ThreeRenderer";
+import type { RealityMeasurementEvent } from "../../renderer/reality";
 import {
   computeSceneDelta,
   createEnvironmentState,
@@ -55,6 +56,8 @@ export interface ThreeRendererPort {
   dispose(): void;
   getEntityObject?(entityId: string): THREE.Object3D | undefined;
   setSelectedEntity?(entityId: string | null, notify?: boolean): void;
+  startRealityMeasurement?(entityId: string): boolean;
+  cancelRealityMeasurement?(): void;
   getProjectionCameraState?(): CameraProjectionState | null;
   frameAll?(): void;
   resetView?(): void;
@@ -65,6 +68,7 @@ export type ThreeComponentRendererOptions = Readonly<{
   renderer?: ThreeRendererPort;
   onSelect?: (componentId: string | null) => void;
   onActivate?: (componentId: string) => void;
+  onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (request: AnimationCompletionRequest) => void;
   reducedMotion?: boolean;
   /** Reads immutable RealityAsset bytes from the host AssetVault. */
@@ -83,12 +87,15 @@ export class ThreeComponentRenderer {
   private lifecycleToken = 0;
   private renderQueue: Promise<void> = Promise.resolve();
   private animationCompletionHandler: ThreeComponentRendererOptions["onAnimationComplete"];
+  private realityMeasurementHandler: ThreeComponentRendererOptions["onRealityMeasurement"];
 
   constructor(options: ThreeComponentRendererOptions = {}) {
     this.animationCompletionHandler = options.onAnimationComplete;
+    this.realityMeasurementHandler = options.onRealityMeasurement;
     this.renderer = options.renderer ?? new ThreeRenderer({
       onSelectEntity: options.onSelect,
       onActivateEntity: options.onActivate,
+      onRealityMeasurement: (event) => this.realityMeasurementHandler?.(event),
       onAnimationComplete: (completion) => this.animationCompletionHandler?.({
         componentId: completion.entityId,
         clip: completion.clip,
@@ -103,6 +110,12 @@ export class ThreeComponentRenderer {
     handler: ThreeComponentRendererOptions["onAnimationComplete"],
   ): void {
     this.animationCompletionHandler = handler;
+  }
+
+  setRealityMeasurementHandler(
+    handler: ThreeComponentRendererOptions["onRealityMeasurement"],
+  ): void {
+    this.realityMeasurementHandler = handler;
   }
 
   async initialize(container: HTMLElement): Promise<void> {
@@ -166,6 +179,14 @@ export class ThreeComponentRenderer {
     this.renderer.setSelectedEntity?.(spatialId, false);
   }
 
+  startRealityMeasurement(componentId: string): boolean {
+    return this.renderer.startRealityMeasurement?.(componentId) ?? false;
+  }
+
+  cancelRealityMeasurement(): void {
+    this.renderer.cancelRealityMeasurement?.();
+  }
+
   getProjectionCameraState(): CameraProjectionState | null {
     const live = this.renderer.getProjectionCameraState?.();
     if (live) return live;
@@ -197,6 +218,7 @@ export class ThreeComponentRenderer {
   dispose(): void {
     this.lifecycleToken += 1;
     this.initialized = false;
+    this.realityMeasurementHandler = undefined;
     this.renderer.dispose();
     this.currentScene = null;
   }

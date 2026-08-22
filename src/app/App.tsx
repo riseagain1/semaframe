@@ -137,6 +137,7 @@ import {
   type RealityAssetCandidate,
   type RealityAssetDescriptor,
 } from "../workspace/assets";
+import type { RealityMeasurementEvent } from "../renderer/reality";
 
 const RECOVERY_KEY = "semaframe-workspace-recovery-v2";
 const AGENT_CONTROL_ENDPOINT = import.meta.env.VITE_AGENT_CONTROL_ENDPOINT?.trim() || "/api/agent";
@@ -255,6 +256,14 @@ export function isAgentWorkspaceUnlocked(
   status: AgentGatewayStatus,
 ): boolean {
   return sessionReady && (status === "connected" || status === "applying");
+}
+
+/** Ephemeral renderer measurements must never outlive the gated Workspace canvas. */
+export function shouldClearRealityMeasurementForWorkspaceGate(
+  workspaceActive: boolean,
+  measurement: RealityMeasurementEvent | undefined,
+): boolean {
+  return !workspaceActive && measurement !== undefined;
 }
 
 function initialProjectName(): string {
@@ -423,6 +432,7 @@ export default function App() {
   const [realityAssetAvailability, setRealityAssetAvailability] = useState<Record<string, RealityAssetAvailability>>({});
   const [realityImportStatus, setRealityImportStatus] = useState<string>();
   const [realityImportBusy, setRealityImportBusy] = useState(false);
+  const [realityMeasurement, setRealityMeasurement] = useState<RealityMeasurementEvent>();
   const [hostFeedRuntime, setHostFeedRuntime] = useState<Record<string, Readonly<{
     refreshing: boolean;
     error?: string;
@@ -441,6 +451,8 @@ export default function App() {
   const busy = busyCount > 0;
 
   const advanceWorkspaceGeneration = useCallback(() => {
+    hybridCanvasRef.current?.cancelRealityMeasurement();
+    setRealityMeasurement(undefined);
     for (const controller of hostFeedRefreshControllersRef.current.values()) controller.abort();
     for (const controller of hostFeedPreviewControllersRef.current) controller.abort();
     hostFeedRefreshControllersRef.current.clear();
@@ -485,6 +497,46 @@ export default function App() {
     setNotices((current) => [...current, item].slice(-3));
     window.setTimeout(() => setNotices((current) => current.filter((entry) => entry.id !== item.id)), 4_500);
   }, []);
+
+  const handleRealityMeasurement = useCallback((event: RealityMeasurementEvent) => {
+    setRealityMeasurement((current) => {
+      if (event.kind === "cancelled") {
+        return current?.componentId === event.componentId
+          && current.assetId === event.assetId
+          && current.assetDigest === event.assetDigest
+          && current.sessionId === event.sessionId
+          ? undefined
+          : current;
+      }
+      return event;
+    });
+  }, []);
+
+  const startRealityMeasurement = useCallback((componentId: string): boolean => {
+    const started = hybridCanvasRef.current?.startRealityMeasurement(componentId) ?? false;
+    if (!started) {
+      notice("The Gaussian surface is not ready for picking. Wait for it to render or relink the local capture bytes.", "warning");
+    }
+    return started;
+  }, [notice]);
+
+  const cancelRealityMeasurement = useCallback(() => {
+    hybridCanvasRef.current?.cancelRealityMeasurement();
+    setRealityMeasurement(undefined);
+  }, []);
+
+  useEffect(() => {
+    // Import/relink replaces the canvas key and therefore its ephemeral Three
+    // measurement helpers. Never leave an Inspector draft claiming that a
+    // session survived that renderer lifetime boundary.
+    cancelRealityMeasurement();
+  }, [cancelRealityMeasurement, realityRenderGeneration]);
+
+  useEffect(() => {
+    if (realityMeasurement && realityMeasurement.componentId !== selectedComponentId) {
+      cancelRealityMeasurement();
+    }
+  }, [cancelRealityMeasurement, realityMeasurement, selectedComponentId]);
 
   const realityAssetDescriptorSignature = useMemo(() => JSON.stringify(
     [...workspace.realityAssets.values()]
@@ -1676,8 +1728,10 @@ export default function App() {
           props: structuredClone(request.props),
         },
       }], `Updated ${request.label || request.componentId}`);
+      return true;
     } catch (error) {
       notice(friendlyError(error), "error");
+      return false;
     }
   }, [applyWorkspaceOperations, notice]);
 
@@ -2701,6 +2755,11 @@ export default function App() {
     connected: agentIsConnected,
   } : null;
   const externalControlActive = isAgentWorkspaceUnlocked(agentSessionReady, agentStatus);
+  useEffect(() => {
+    if (shouldClearRealityMeasurementForWorkspaceGate(externalControlActive, realityMeasurement)) {
+      cancelRealityMeasurement();
+    }
+  }, [cancelRealityMeasurement, externalControlActive, realityMeasurement]);
   const agentConnectionStatus: AgentConnectionStatus = agentBrowserOccupied
     ? "occupied"
     : !agentEnabled
@@ -3042,6 +3101,7 @@ export default function App() {
           selectedId={selectedComponentId}
           onSelect={setSelectedComponentId}
           onActivate={activateWorkspaceComponent}
+          onRealityMeasurement={handleRealityMeasurement}
           onAnimationComplete={completeWorkspaceAnimation}
           onAction={invokeWorkspaceAction}
           onCommitPlacement={commitWorkspacePlacement}
@@ -3077,6 +3137,9 @@ export default function App() {
           selectedWorldPlacement={selectedWorkspaceWorldPlacement}
           assemblyOptions={workspaceAssemblyOptions}
           realityProxyOptions={workspaceRealityProxyOptions}
+          realityMeasurement={realityMeasurement}
+          onStartRealityMeasurement={startRealityMeasurement}
+          onCancelRealityMeasurement={cancelRealityMeasurement}
           onTransform={transformWorkspaceComponent}
           onReparent={reparentWorkspaceComponent}
           onSelectComponent={setSelectedComponentId}

@@ -6,6 +6,7 @@ import {
   type HybridWorkspaceCanvasHandle,
 } from "../../app/components/workspace/HybridWorkspaceCanvas";
 import type { SceneDelta, SceneOperation, SceneState } from "../../renderer/sceneRenderTypes";
+import type { RealityMeasurementEvent } from "../../renderer/reality";
 import { ThreeComponentRenderer, type ThreeRendererPort } from "../../workspace/renderer/ThreeComponentRenderer";
 import type { WorkspaceRenderSnapshot } from "../../workspace/renderer/contracts";
 
@@ -15,6 +16,73 @@ afterEach(() => {
 });
 
 describe("HybridWorkspaceCanvas", () => {
+  it("bridges Reality measurement controls and events through the App canvas boundary", async () => {
+    const port = new FakePort();
+    port.startRealityMeasurement.mockReturnValue(true);
+    const three = new ThreeComponentRenderer({ renderer: port });
+    const installMeasurementHandler = vi.spyOn(three, "setRealityMeasurementHandler");
+    const ref = createRef<HybridWorkspaceCanvasHandle>();
+    const onRealityMeasurement = vi.fn();
+    const onRendererReady = vi.fn();
+
+    render(<HybridWorkspaceCanvas
+      ref={ref}
+      state={snapshot()}
+      rendererOptions={{ three }}
+      onRealityMeasurement={onRealityMeasurement}
+      onRendererReady={onRendererReady}
+    />);
+
+    await waitFor(() => expect(onRendererReady).toHaveBeenCalledOnce());
+    expect(installMeasurementHandler).toHaveBeenCalledOnce();
+    expect(ref.current?.startRealityMeasurement("reality-pole")).toBe(true);
+    expect(port.startRealityMeasurement).toHaveBeenCalledWith("reality-pole");
+
+    const event: RealityMeasurementEvent = {
+      kind: "started",
+      componentId: "reality-pole",
+      assetId: "ra_fixture",
+      assetDigest: `sha256:${"b".repeat(64)}`,
+      sessionId: 7,
+    };
+    installMeasurementHandler.mock.calls[0]?.[0]?.(event);
+    expect(onRealityMeasurement).toHaveBeenCalledWith(event);
+
+    ref.current?.cancelRealityMeasurement();
+    expect(port.cancelRealityMeasurement).toHaveBeenCalledOnce();
+  });
+
+  it("replaces a stale injected Reality measurement handler and clears it on disposal", async () => {
+    const port = new FakePort();
+    const staleHandler = vi.fn();
+    const three = new ThreeComponentRenderer({ renderer: port, onRealityMeasurement: staleHandler });
+    const installMeasurementHandler = vi.spyOn(three, "setRealityMeasurementHandler");
+    const onRendererReady = vi.fn();
+    const view = render(<HybridWorkspaceCanvas
+      state={snapshot()}
+      rendererOptions={{ three }}
+      onRendererReady={onRendererReady}
+    />);
+
+    await waitFor(() => expect(onRendererReady).toHaveBeenCalledOnce());
+    expect(installMeasurementHandler).toHaveBeenCalledOnce();
+    const replacement = installMeasurementHandler.mock.calls[0]?.[0];
+    expect(replacement).toEqual(expect.any(Function));
+    replacement?.({
+      kind: "started",
+      componentId: "reality-pole",
+      assetId: "ra_fixture",
+      assetDigest: `sha256:${"c".repeat(64)}`,
+      sessionId: 8,
+    });
+    expect(staleHandler).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(installMeasurementHandler).toHaveBeenLastCalledWith(undefined);
+    expect(installMeasurementHandler).toHaveBeenCalledTimes(2);
+    expect(staleHandler).not.toHaveBeenCalled();
+  });
+
   it("provides one App boundary for selection, preview, commit, and camera controls", async () => {
     const port = new FakePort();
     const ref = createRef<HybridWorkspaceCanvasHandle>();
@@ -372,6 +440,8 @@ class FakePort implements ThreeRendererPort {
   resetView = vi.fn();
   zoomBy = vi.fn();
   setSelectedEntity = vi.fn();
+  startRealityMeasurement = vi.fn((_entityId: string) => false);
+  cancelRealityMeasurement = vi.fn();
 }
 
 class ControlledMotionQuery {

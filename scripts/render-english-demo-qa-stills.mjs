@@ -38,6 +38,18 @@ const targets = [
     frames: [18, 72, 144, 252, 390, 522, 660, 786],
     thumbnailWidth: 270,
   },
+  {
+    id: "SemaFrameRealityTwinProofV1",
+    slug: "reality-twin-landscape",
+    frames: [24, 90, 165, 278, 390, 592, 802, 930],
+    thumbnailWidth: 480,
+  },
+  {
+    id: "SemaFrameRealityTwinProofV1Vertical",
+    slug: "reality-twin-vertical",
+    frames: [24, 90, 157, 255, 352, 525, 727, 862],
+    thumbnailWidth: 270,
+  },
 ];
 
 const run = (command, args, label) => {
@@ -90,4 +102,4 @@ for (const target of targets) {
 }
 
 await writeFile(resolve(outputRoot, "manifest.json"), `${JSON.stringify({targets}, null, 2)}\n`, "utf8");
-process.stdout.write(`Rendered ${targets.reduce((sum, target) => sum + target.frames.length, 0)} English QA stills and 5 contact sheets to ${outputRoot}.\n`);
+process.stdout.write(`Rendered ${targets.reduce((sum, target) => sum + target.frames.length, 0)} English QA stills and ${targets.length} contact sheets to ${outputRoot}.\n`);

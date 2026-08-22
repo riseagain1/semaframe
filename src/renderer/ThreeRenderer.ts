@@ -48,6 +48,8 @@ import {
 } from "./infiniteNavigation";
 import {
   RealitySplatRuntime,
+  type RealityMeasurementEvent,
+  type RealityMeasurementPoint,
   type RealitySplatInstanceDescriptor,
 } from "./reality";
 
@@ -55,6 +57,7 @@ export type ThreeRendererOptions = {
   getSceneState?: () => Readonly<SceneState>;
   onSelectEntity?: (entityId: EntityId | null) => void;
   onActivateEntity?: (entityId: EntityId) => void;
+  onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (completion: AnimationCompletion) => void;
   onStatus?: (status: RendererStatus) => void;
   pixelRatioCap?: number;
@@ -80,7 +83,16 @@ type ActiveTween = {
   cancel?: () => void;
 };
 
-type PointerOrigin = { x: number; y: number };
+type PointerOrigin = { x: number; y: number; pointerId: number };
+
+type RealityMeasurementSession = {
+  componentId: EntityId;
+  assetId: string;
+  assetDigest: string;
+  sessionId: number;
+  points: RealityMeasurementPoint[];
+  complete: boolean;
+};
 
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(7.5, 5.2, 8.5);
 const DEFAULT_CAMERA_TARGET = new THREE.Vector3(0, 0.8, 0);
@@ -120,6 +132,9 @@ export class ThreeRenderer implements RendererAdapter {
   private navigationBoundsRadius = 2;
   private realityRuntime: RealitySplatRuntime | null = null;
   private readonly realityLoads = new Map<EntityId, AbortController>();
+  private realityMeasurementSession: RealityMeasurementSession | null = null;
+  private realityMeasurementOverlay: THREE.Group | null = null;
+  private realityMeasurementSequence = 0;
 
   private readonly handleReducedMotionChange = (event: MediaQueryListEvent): void => {
     this.setReducedMotion(event.matches);
@@ -217,6 +232,8 @@ export class ThreeRenderer implements RendererAdapter {
       renderer.domElement.addEventListener("webglcontextrestored", this.handleContextRestored);
       renderer.domElement.addEventListener("pointerdown", this.handlePointerDown);
       renderer.domElement.addEventListener("pointerup", this.handlePointerUp);
+      renderer.domElement.addEventListener("pointercancel", this.handlePointerCancel);
+      renderer.domElement.addEventListener("lostpointercapture", this.handleLostPointerCapture);
       renderer.domElement.addEventListener("dblclick", this.handleDoubleClick);
       this.keyboardTarget.addEventListener("keydown", this.handleKeyDown);
       renderer.domElement.addEventListener("contextmenu", this.preventContextMenu);
@@ -255,6 +272,7 @@ export class ThreeRenderer implements RendererAdapter {
     isCurrent: () => boolean,
   ): Promise<void> {
     this.requireInitialized();
+    this.clearRealityMeasurement(false);
     this.cancelTweens();
     for (const [id, root] of this.entities) this.disposeManagedEntity(id, root);
     this.entities.clear();
@@ -298,6 +316,18 @@ export class ThreeRenderer implements RendererAdapter {
     }
     const previousState = this.currentState;
     this.currentState = nextState;
+    const measurement = this.realityMeasurementSession;
+    if (measurement) {
+      const changedSpatialIds = new Set<EntityId>([...delta.removed, ...delta.updated]);
+      let currentId: EntityId | undefined = measurement.componentId;
+      while (currentId) {
+        if (changedSpatialIds.has(currentId)) {
+          this.cancelRealityMeasurement();
+          break;
+        }
+        currentId = nextState.entities.get(currentId)?.parentId;
+      }
+    }
     if (delta.environmentChanged) {
       const timing = timingForEnvironment(operations, this.reducedMotion);
       if (previousState && timing) {
@@ -308,6 +338,7 @@ export class ThreeRenderer implements RendererAdapter {
     }
 
     for (const id of delta.removed) {
+      if (this.realityMeasurementSession?.componentId === id) this.cancelRealityMeasurement();
       this.cancelTweensForEntity(id);
       const root = this.entities.get(id);
       if (this.selectedEntityId === id) this.setSelectedEntity(null);
@@ -472,6 +503,9 @@ export class ThreeRenderer implements RendererAdapter {
   setSelectedEntity(entityId: EntityId | null, notify = true): void {
     if (entityId !== null && (!this.entities.has(entityId)
       || !isEntityVisuallyPresent(this.currentState?.entities.get(entityId)))) entityId = null;
+    if (this.realityMeasurementSession && this.realityMeasurementSession.componentId !== entityId) {
+      this.cancelRealityMeasurement();
+    }
     this.selectedEntityId = entityId;
     for (const id of this.realityRuntime?.snapshot().instanceIds ?? []) {
       this.realityRuntime?.setSelected(id, id === entityId);
@@ -480,9 +514,55 @@ export class ThreeRenderer implements RendererAdapter {
     if (notify) this.options.onSelectEntity?.(entityId);
   }
 
+  /** Begin an ephemeral two-point measurement against one loaded Reality layer. */
+  startRealityMeasurement(entityId: EntityId): boolean {
+    const entity = this.currentState?.entities.get(entityId);
+    if (!this.renderer || !this.scene || !entity
+      || !isEntityVisuallyPresent(entity)
+      || entity.renderGeometry?.kind !== "reality"
+      || !entity.renderGeometry.asset
+      || !this.realityRuntime?.getHandle(entityId)
+      || this.hasActiveTransformTween(entityId)) return false;
+
+    this.cancelRealityMeasurement();
+    const session: RealityMeasurementSession = {
+      componentId: entityId,
+      assetId: entity.renderGeometry.asset.assetId,
+      assetDigest: entity.renderGeometry.asset.digest,
+      sessionId: ++this.realityMeasurementSequence,
+      points: [],
+      complete: false,
+    };
+    this.realityMeasurementSession = session;
+    const overlay = new THREE.Group();
+    overlay.name = `reality-measurement:${entityId}`;
+    overlay.userData.ephemeral = true;
+    this.entityLayer.add(overlay);
+    this.realityMeasurementOverlay = overlay;
+    this.renderer.domElement.style.cursor = "crosshair";
+    this.renderer.domElement.dataset.realityMeasurement = "picking-point-a";
+    this.renderer.domElement.setAttribute(
+      "aria-description",
+      "Two-point Reality measurement. Click a visible surface, or aim it at the viewport center and press Enter. Press Escape to cancel.",
+    );
+    this.keyboardTarget?.focus({ preventScroll: true });
+    this.setSelectedEntity(entityId, false);
+    this.options.onRealityMeasurement?.({
+      kind: "started",
+      ...realityMeasurementSubject(session),
+    });
+    return true;
+  }
+
+  /** Cancel the active measurement and dispose every renderer-only helper. */
+  cancelRealityMeasurement(): void {
+    this.clearRealityMeasurement(true);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.clearRealityMeasurement(false);
     this.lifecycleToken += 1;
     this.cancelTweens();
     this.reducedMotionQuery?.removeEventListener?.("change", this.handleReducedMotionChange);
@@ -497,6 +577,8 @@ export class ThreeRenderer implements RendererAdapter {
       canvas.removeEventListener("webglcontextrestored", this.handleContextRestored);
       canvas.removeEventListener("pointerdown", this.handlePointerDown);
       canvas.removeEventListener("pointerup", this.handlePointerUp);
+      canvas.removeEventListener("pointercancel", this.handlePointerCancel);
+      canvas.removeEventListener("lostpointercapture", this.handleLostPointerCapture);
       canvas.removeEventListener("dblclick", this.handleDoubleClick);
       this.keyboardTarget?.removeEventListener("keydown", this.handleKeyDown);
       canvas.removeEventListener("contextmenu", this.preventContextMenu);
@@ -1185,6 +1267,18 @@ export class ThreeRenderer implements RendererAdapter {
     }
   }
 
+  private hasActiveTransformTween(entityId: EntityId): boolean {
+    const activeKeys = new Set([...this.tweens].flatMap((tween) => tween.key ? [tween.key] : []));
+    const visited = new Set<EntityId>();
+    let currentId: EntityId | undefined = entityId;
+    while (currentId && !visited.has(currentId)) {
+      if (activeKeys.has(entityTweenKey(currentId, "transform"))) return true;
+      visited.add(currentId);
+      currentId = this.currentState?.entities.get(currentId)?.parentId;
+    }
+    return false;
+  }
+
   private renderFrame = (time: number): void => {
     if (!this.renderer || !this.scene || !this.camera || !this.controls || this.disposed) return;
     for (const tween of [...this.tweens]) {
@@ -1293,24 +1387,56 @@ export class ThreeRenderer implements RendererAdapter {
 
   private handlePointerDown = (event: PointerEvent): void => {
     this.keyboardTarget?.focus({ preventScroll: true });
-    this.pointerOrigin = { x: event.clientX, y: event.clientY };
+    if (event.isPrimary === false) {
+      this.pointerOrigin = null;
+      return;
+    }
+    this.pointerOrigin = {
+      x: event.clientX,
+      y: event.clientY,
+      pointerId: event.pointerId ?? 0,
+    };
   };
 
   private handlePointerUp = (event: PointerEvent): void => {
     if (!this.pointerOrigin) return;
-    const distance = Math.hypot(event.clientX - this.pointerOrigin.x, event.clientY - this.pointerOrigin.y);
+    const origin = this.pointerOrigin;
     this.pointerOrigin = null;
+    if (origin.pointerId !== (event.pointerId ?? 0)) return;
+    const distance = Math.hypot(event.clientX - origin.x, event.clientY - origin.y);
     if (distance > 5 || event.button !== 0) return;
+    if (this.realityMeasurementSession && !this.realityMeasurementSession.complete) {
+      this.pickRealityMeasurementPoint(event);
+      return;
+    }
     this.setSelectedEntity(this.entityIdAtPointer(event) ?? null);
+  };
+
+  private handlePointerCancel = (event: PointerEvent): void => {
+    if (this.pointerOrigin?.pointerId === (event.pointerId ?? 0)) this.pointerOrigin = null;
+  };
+
+  private handleLostPointerCapture = (event: PointerEvent): void => {
+    const origin = this.pointerOrigin;
+    if (!origin || origin.pointerId !== (event.pointerId ?? 0)) return;
+    // OrbitControls releases pointer capture from its pointerup listener, which
+    // may dispatch lostpointercapture before our pointerup listener runs. Defer
+    // the fail-closed reset one microtask so a matching, already-dispatched up
+    // can complete, while a genuinely lost capture cannot leak into a later
+    // measurement session.
+    queueMicrotask(() => {
+      if (this.pointerOrigin === origin) this.pointerOrigin = null;
+    });
   };
 
   private handleDoubleClick = (event: MouseEvent): void => {
     if (event.button !== 0) return;
+    if (this.realityMeasurementSession) return;
     const id = this.entityIdAtPointer(event);
     if (id) this.options.onActivateEntity?.(id);
   };
 
-  private entityIdAtPointer(event: MouseEvent | PointerEvent): EntityId | undefined {
+  private raycasterAtPointer(event: MouseEvent | PointerEvent): THREE.Raycaster | undefined {
     if (!this.renderer || !this.camera) return undefined;
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return undefined;
@@ -1320,6 +1446,12 @@ export class ThreeRenderer implements RendererAdapter {
     );
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointer, this.camera);
+    return raycaster;
+  }
+
+  private entityIdAtPointer(event: MouseEvent | PointerEvent): EntityId | undefined {
+    const raycaster = this.raycasterAtPointer(event);
+    if (!raycaster) return undefined;
     const interactiveRoots = [...this.entities].flatMap(([id, root]) => root.visible
       && isEntityVisuallyPresent(this.currentState?.entities.get(id))
       ? [root]
@@ -1330,7 +1462,183 @@ export class ThreeRenderer implements RendererAdapter {
     return id;
   }
 
+  private pickRealityMeasurementPoint(event: MouseEvent | PointerEvent): void {
+    const raycaster = this.raycasterAtPointer(event);
+    if (raycaster) this.pickRealityMeasurementWithRaycaster(raycaster);
+  }
+
+  private pickRealityMeasurementAtViewportCenter(): void {
+    if (!this.camera) return;
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    this.pickRealityMeasurementWithRaycaster(raycaster);
+  }
+
+  private pickRealityMeasurementWithRaycaster(raycaster: THREE.Raycaster): void {
+    const session = this.realityMeasurementSession;
+    if (!session || session.complete || !this.realityRuntime) return;
+    let hit;
+    try {
+      hit = this.realityRuntime.raycastSurface(session.componentId, raycaster);
+    } catch {
+      this.options.onRealityMeasurement?.({
+        kind: "miss",
+        ...realityMeasurementSubject(session),
+        pickedPoints: session.points.length === 0 ? 0 : 1,
+        message: "The Gaussian surface could not be sampled. Try again or reload the capture.",
+      });
+      return;
+    }
+    if (!hit) {
+      this.options.onRealityMeasurement?.({
+        kind: "miss",
+        ...realityMeasurementSubject(session),
+        pickedPoints: session.points.length === 0 ? 0 : 1,
+        message: "No Gaussian surface was found there. Click a visible part of the capture.",
+      });
+      return;
+    }
+
+    const semanticWorldPoint = new THREE.Vector3(
+      hit.worldPoint.x,
+      hit.worldPoint.y,
+      hit.worldPoint.z,
+    ).add(this.renderOrigin);
+    const point: RealityMeasurementPoint = Object.freeze({
+      sourcePoint: Object.freeze({ ...hit.sourcePoint }),
+      worldPoint: Object.freeze({
+        x: semanticWorldPoint.x,
+        y: semanticWorldPoint.y,
+        z: semanticWorldPoint.z,
+      }),
+      cameraDistance: hit.cameraDistance,
+      fidelity: hit.fidelity,
+    });
+    const first = session.points[0];
+    if (first && vectorDistance(first.sourcePoint, point.sourcePoint) <= 1e-12) {
+      this.options.onRealityMeasurement?.({
+        kind: "miss",
+        ...realityMeasurementSubject(session),
+        pickedPoints: 1,
+        message: "The two points overlap. Choose a different second point.",
+      });
+      return;
+    }
+
+    session.points.push(point);
+    const pointIndex = session.points.length as 1 | 2;
+    this.addRealityMeasurementMarker(point, pointIndex);
+    this.options.onRealityMeasurement?.({
+      kind: "point",
+      ...realityMeasurementSubject(session),
+      pointIndex,
+      point,
+    });
+    if (pointIndex === 1) {
+      if (this.renderer) this.renderer.domElement.dataset.realityMeasurement = "picking-point-b";
+      return;
+    }
+
+    const points = Object.freeze([
+      session.points[0]!,
+      session.points[1]!,
+    ]) as readonly [RealityMeasurementPoint, RealityMeasurementPoint];
+    const sourceDistance = vectorDistance(points[0].sourcePoint, points[1].sourcePoint);
+    const displayedDistance = vectorDistance(points[0].worldPoint, points[1].worldPoint);
+    this.addRealityMeasurementLine(points);
+    session.complete = true;
+    if (this.renderer) {
+      this.renderer.domElement.style.cursor = "";
+      this.renderer.domElement.dataset.realityMeasurement = "complete";
+      this.renderer.domElement.setAttribute(
+        "aria-description",
+        "Two-point Reality measurement complete. Markers A and B show the sampled span. Press Escape to clear them.",
+      );
+    }
+    this.options.onRealityMeasurement?.({
+      kind: "complete",
+      ...realityMeasurementSubject(session),
+      points,
+      sourceDistance,
+      displayedDistance,
+      fidelity: "gaussian-lod",
+    });
+  }
+
+  private addRealityMeasurementMarker(point: RealityMeasurementPoint, pointIndex: 1 | 2): void {
+    const overlay = this.realityMeasurementOverlay;
+    if (!overlay) return;
+    const radius = THREE.MathUtils.clamp(point.cameraDistance * 0.009, 0.008, 0.35);
+    const geometry = new THREE.SphereGeometry(radius, 18, 12);
+    const material = new THREE.MeshBasicMaterial({
+      color: pointIndex === 1 ? 0x55e6ff : 0xffc568,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const marker = new THREE.Mesh(geometry, material);
+    marker.name = `reality-measurement-point-${pointIndex === 1 ? "a" : "b"}`;
+    marker.position.set(point.worldPoint.x, point.worldPoint.y, point.worldPoint.z);
+    marker.renderOrder = 10_000;
+    marker.raycast = () => undefined;
+    overlay.add(marker);
+  }
+
+  private addRealityMeasurementLine(
+    points: readonly [RealityMeasurementPoint, RealityMeasurementPoint],
+  ): void {
+    const overlay = this.realityMeasurementOverlay;
+    if (!overlay) return;
+    const geometry = new THREE.BufferGeometry().setFromPoints(points.map((point) => new THREE.Vector3(
+      point.worldPoint.x,
+      point.worldPoint.y,
+      point.worldPoint.z,
+    )));
+    const material = new THREE.LineBasicMaterial({
+      color: 0x75eaff,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const line = new THREE.Line(geometry, material);
+    line.name = "reality-measurement-line";
+    line.renderOrder = 9_999;
+    line.raycast = () => undefined;
+    overlay.add(line);
+  }
+
+  private clearRealityMeasurement(notify: boolean): void {
+    const session = this.realityMeasurementSession;
+    this.realityMeasurementSession = null;
+    this.pointerOrigin = null;
+    if (this.realityMeasurementOverlay) disposeObject(this.realityMeasurementOverlay);
+    this.realityMeasurementOverlay = null;
+    if (this.renderer) {
+      this.renderer.domElement.style.cursor = "";
+      delete this.renderer.domElement.dataset.realityMeasurement;
+      this.renderer.domElement.removeAttribute("aria-description");
+    }
+    if (notify && session) {
+      this.options.onRealityMeasurement?.({
+        kind: "cancelled",
+        ...realityMeasurementSubject(session),
+      });
+    }
+  }
+
   private handleKeyDown = (event: KeyboardEvent): void => {
+    if (this.realityMeasurementSession) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.cancelRealityMeasurement();
+        return;
+      }
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        if (!this.realityMeasurementSession.complete) this.pickRealityMeasurementAtViewportCenter();
+        return;
+      }
+    }
     if (!this.camera || !this.controls) return;
     const key = event.key.toLowerCase();
     if ((key === "enter" || key === " ") && this.selectedEntityId) {
@@ -1381,6 +1689,7 @@ export class ThreeRenderer implements RendererAdapter {
 
   private handleContextLost = (event: Event): void => {
     event.preventDefault();
+    this.cancelRealityMeasurement();
     this.realityRuntime?.handleContextLost(event);
     // Runtime disposal removes these roots from the scene immediately. Removing
     // the stale map entries makes every state update during recovery fail closed
@@ -1523,6 +1832,19 @@ function hasReplacedAncestor(
 
 function vector(value: Vec3): THREE.Vector3 {
   return new THREE.Vector3(value.x, value.y, value.z);
+}
+
+function vectorDistance(left: Vec3, right: Vec3): number {
+  return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
+}
+
+function realityMeasurementSubject(session: RealityMeasurementSession) {
+  return {
+    componentId: session.componentId,
+    assetId: session.assetId,
+    assetDigest: session.assetDigest,
+    sessionId: session.sessionId,
+  } as const;
 }
 
 export function reparentPreservingWorldTransform(

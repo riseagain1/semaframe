@@ -4,6 +4,7 @@ import type { WorkspaceRenderComponent } from "../../../workspace/renderer";
 import type { ComponentResizePolicy } from "../../../workspace/components";
 import type { World3DPlacement } from "../../../workspace/components";
 import type { ComponentActionRequest } from "../../../workspace/renderer/contracts";
+import type { RealityMeasurementEvent } from "../../../renderer/reality";
 import type { PhysicsBodyReport } from "../../../workspace/physics";
 import {
   WorkspaceComponentLibrary,
@@ -12,6 +13,7 @@ import {
 } from "./WorkspaceComponentLibrary";
 import {
   WorkspaceInspector,
+  realityMeasurementStatus,
   type WorkspaceAssemblyOption,
   type WorkspaceComponentManifestUpgrade,
   type WorkspaceComponentHierarchyRequest,
@@ -56,7 +58,7 @@ export type WorkspaceChromeProps = Readonly<{
   disabled?: boolean;
   onCreate: (typeId: string, options?: ComponentCreationOptions) => void;
   onAction: (request: ComponentActionRequest) => void;
-  onUpdate: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate: (request: WorkspaceComponentUpdateRequest) => boolean | void;
   resizePolicy?: ComponentResizePolicy;
   onResize?: (request: WorkspaceComponentResizeRequest) => void;
   onVisualEffects?: (request: WorkspaceComponentVisualEffectsRequest) => void;
@@ -66,6 +68,9 @@ export type WorkspaceChromeProps = Readonly<{
   selectedWorldPlacement?: World3DPlacement;
   assemblyOptions?: readonly WorkspaceAssemblyOption[];
   realityProxyOptions?: readonly WorkspaceAssemblyOption[];
+  realityMeasurement?: RealityMeasurementEvent;
+  onStartRealityMeasurement?: (componentId: string) => boolean;
+  onCancelRealityMeasurement?: () => void;
   onTransform?: (request: WorkspaceComponentTransformRequest) => void;
   onReparent?: (request: WorkspaceComponentHierarchyRequest) => boolean | void;
   onSelectComponent?: (componentId: string) => void;
@@ -116,6 +121,9 @@ export function WorkspaceChrome({
   selectedWorldPlacement,
   assemblyOptions,
   realityProxyOptions,
+  realityMeasurement,
+  onStartRealityMeasurement,
+  onCancelRealityMeasurement,
   onTransform,
   onReparent,
   onSelectComponent,
@@ -147,18 +155,35 @@ export function WorkspaceChrome({
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (disabled) setPanel(null);
-  }, [disabled]);
+    if (!disabled) return;
+    setPanel(null);
+    onCancelRealityMeasurement?.();
+  }, [disabled, onCancelRealityMeasurement]);
   useEffect(() => {
-    if (sourcesOnly && panel && panel !== "sources") setPanel(null);
-  }, [panel, sourcesOnly]);
+    if (!sourcesOnly) return;
+    if (panel && panel !== "sources") setPanel(null);
+    onCancelRealityMeasurement?.();
+  }, [onCancelRealityMeasurement, panel, sourcesOnly]);
   useEffect(() => {
     if (!panelRef.current) return;
     panelRef.current.scrollTop = 0;
     panelRef.current.scrollLeft = 0;
   }, [panel]);
+  useEffect(() => {
+    if (!disabled && !sourcesOnly
+      && (realityMeasurement?.kind === "complete" || realityMeasurement?.kind === "miss")) {
+      setPanel("inspector");
+    }
+  }, [disabled, realityMeasurement, sourcesOnly]);
 
   const toggle = (next: Exclude<WorkspacePanel, null>) => setPanel((current) => current === next ? null : next);
+  const startRealityMeasurement = onStartRealityMeasurement
+    ? (componentId: string) => {
+        const started = onStartRealityMeasurement(componentId);
+        if (started) setPanel(null);
+        return started;
+      }
+    : undefined;
   const createFromLibrary = (typeId: string, options?: ComponentCreationOptions) => {
     onCreate(typeId, options);
     if (catalog.find((item) => item.typeId === typeId)?.configureOnCreate) setPanel("inspector");
@@ -185,6 +210,9 @@ export function WorkspaceChrome({
           <TimerReset size={17} /><span>Mixed demo</span>
         </button>}
       </nav>
+      {realityMeasurement && panel !== "inspector" && <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {realityMeasurementStatus(realityMeasurement)}
+      </p>}
       {panel && (
         <div id="workspace-tool-panel" className="workspace-tool-panel" role="region" aria-label={`${panel} panel`}>
           <header className="workspace-tool-panel__header">
@@ -216,6 +244,9 @@ export function WorkspaceChrome({
                 worldPlacement={selectedWorldPlacement}
                 assemblyOptions={assemblyOptions}
                 realityProxyOptions={realityProxyOptions}
+                realityMeasurement={realityMeasurement}
+                onStartRealityMeasurement={startRealityMeasurement}
+                onCancelRealityMeasurement={onCancelRealityMeasurement}
                 onTransform={onTransform}
                 onReparent={onReparent}
                 onSelectComponent={onSelectComponent}

@@ -11,7 +11,8 @@ function invariant(condition, message) {
 
 const contract = JSON.parse(readFileSync(contractPath, "utf8"));
 const deliveries = contract.deliveries.filter((delivery) => delivery.readmePosterPath != null);
-invariant(deliveries.length === 3, "Expected exactly three README poster deliveries.");
+invariant(deliveries.length === 3, "Expected exactly three published README gallery posters.");
+invariant(deliveries.every((delivery) => delivery.variant === "landscape"), "README gallery posters must use landscape deliveries.");
 
 for (const delivery of deliveries) {
   const input = resolve(root, delivery.posterPath);

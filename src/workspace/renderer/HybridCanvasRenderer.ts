@@ -23,6 +23,7 @@ import {
 import { Overlay2DRenderer } from "./Overlay2DRenderer";
 import { ProjectionBridge } from "./ProjectionBridge";
 import { ThreeComponentRenderer, type ThreeComponentRendererOptions } from "./ThreeComponentRenderer";
+import type { RealityMeasurementEvent } from "../../renderer/reality";
 
 export type HybridCanvasRendererOptions = Readonly<{
   three?: ThreeComponentRenderer;
@@ -32,6 +33,7 @@ export type HybridCanvasRendererOptions = Readonly<{
   now?: () => number;
   onSelect?: (componentId: string | null) => void;
   onActivate?: (request: ComponentActivationRequest) => void | Promise<void>;
+  onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (request: AnimationCompletionRequest) => void | Promise<void>;
   onAction?: (request: ComponentActionRequest) => void | Promise<void>;
   reducedMotion?: boolean;
@@ -142,6 +144,7 @@ export class HybridCanvasRenderer {
           message: error instanceof Error ? error.message : "Component activation failed.",
         }));
       },
+      onRealityMeasurement: (event) => options.onRealityMeasurement?.(event),
       onAnimationComplete: (request) => {
         Promise.resolve(options.onAnimationComplete?.(request)).catch((error) => options.onStatus?.({
           kind: "three-error",
@@ -157,6 +160,9 @@ export class HybridCanvasRenderer {
         }));
       });
     }
+    this.three.setRealityMeasurementHandler(options.onRealityMeasurement
+      ? (event) => options.onRealityMeasurement?.(event)
+      : undefined);
     this.overlay = new Overlay2DRenderer({
       now: options.now,
       onSelect: (id) => this.selection.select(id, "canvas"),
@@ -358,6 +364,14 @@ export class HybridCanvasRenderer {
     this.selection.select(componentId, "programmatic");
   }
 
+  startRealityMeasurement(componentId: string): boolean {
+    return this.threeReady && this.three.startRealityMeasurement(componentId);
+  }
+
+  cancelRealityMeasurement(): void {
+    this.three.cancelRealityMeasurement();
+  }
+
   setCanvasView(view: CanvasViewTransform): void {
     this.projection.setCanvasView(view);
     this.renderOverlay();
@@ -408,7 +422,10 @@ export class HybridCanvasRenderer {
   }
 
   dispose(): void {
-    if (!this.initialized) return;
+    if (!this.initialized) {
+      this.three.setRealityMeasurementHandler(undefined);
+      return;
+    }
     this.lifecycleToken += 1;
     this.initialized = false;
     const view = this.container?.ownerDocument.defaultView;
@@ -426,6 +443,7 @@ export class HybridCanvasRenderer {
     this.container?.removeEventListener("pointerup", this.handleTouchPointerEnd, true);
     this.container?.removeEventListener("pointercancel", this.handleTouchPointerEnd, true);
     this.overlay.dispose();
+    this.three.setRealityMeasurementHandler(undefined);
     this.three.dispose();
     this.threeReady = false;
     this.threeHost?.remove();

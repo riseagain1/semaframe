@@ -26,6 +26,7 @@ import {
   type WorkspaceStateLike,
 } from "../../../workspace/renderer/contracts";
 import "./workspace.css";
+import type { RealityMeasurementEvent } from "../../../renderer/reality";
 
 export type HybridWorkspaceCanvasHandle = Readonly<{
   getContainer: () => HTMLDivElement | null;
@@ -35,6 +36,8 @@ export type HybridWorkspaceCanvasHandle = Readonly<{
   resetView: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  startRealityMeasurement: (componentId: string) => boolean;
+  cancelRealityMeasurement: () => void;
 }>;
 
 export type HybridWorkspaceCanvasProps = Readonly<{
@@ -45,11 +48,12 @@ export type HybridWorkspaceCanvasProps = Readonly<{
   ariaLabel?: string;
   rendererOptions?: Omit<
     HybridCanvasRendererOptions,
-    "onSelect" | "onActivate" | "onAnimationComplete" | "onAction" | "onPreviewPlacement" | "onCancelPreview" | "onCommitPlacement"
+    "onSelect" | "onActivate" | "onRealityMeasurement" | "onAnimationComplete" | "onAction" | "onPreviewPlacement" | "onCancelPreview" | "onCommitPlacement"
       | "getResizePolicy" | "onPreviewResize" | "onCancelResize" | "onCommitResize" | "onStatus"
   >;
   onSelect?: (componentId: string | null) => void;
   onActivate?: (request: ComponentActivationRequest) => void | Promise<void>;
+  onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (request: AnimationCompletionRequest) => void | Promise<void>;
   onAction?: (request: ComponentActionRequest) => void | Promise<void>;
   onPreviewPlacement?: (preview: PlacementPreview) => void;
@@ -77,6 +81,7 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
     rendererOptions,
     onSelect,
     onActivate,
+    onRealityMeasurement,
     onAnimationComplete,
     onAction,
     onPreviewPlacement,
@@ -95,6 +100,7 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
     const callbacks = useRef({
       onSelect,
       onActivate,
+      onRealityMeasurement,
       onAnimationComplete,
       onAction,
       onPreviewPlacement,
@@ -110,6 +116,7 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
     callbacks.current = {
       onSelect,
       onActivate,
+      onRealityMeasurement,
       onAnimationComplete,
       onAction,
       onPreviewPlacement,
@@ -134,6 +141,8 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
       resetView: () => rendererRef.current?.resetView(),
       zoomIn: () => rendererRef.current?.zoomBy(1.2),
       zoomOut: () => rendererRef.current?.zoomBy(1 / 1.2),
+      startRealityMeasurement: (componentId) => rendererRef.current?.startRealityMeasurement(componentId) ?? false,
+      cancelRealityMeasurement: () => rendererRef.current?.cancelRealityMeasurement(),
     }), []);
 
     useLayoutEffect(() => {
@@ -144,6 +153,7 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
         ...rendererOptions,
         onSelect: (id) => callbacks.current.onSelect?.(id),
         onActivate: (request) => callbacks.current.onActivate?.(request),
+        onRealityMeasurement: (event) => callbacks.current.onRealityMeasurement?.(event),
         onAnimationComplete: (request) => callbacks.current.onAnimationComplete?.(request),
         onAction: (request) => callbacks.current.onAction?.(request),
         onPreviewPlacement: (preview) => callbacks.current.onPreviewPlacement?.(preview),

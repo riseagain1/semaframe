@@ -1,10 +1,12 @@
-import {createHash} from "node:crypto";
+import {createHash, randomUUID} from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import {basename, dirname, relative, resolve} from "node:path";
@@ -27,16 +29,45 @@ const SAMPLE_SHORT_EDGE = 90;
 const CJK_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 
+export function invalidateEnglishGalleryVerificationReceipt(root = process.cwd()) {
+  const receiptPath = resolve(root, RECEIPT_PATH);
+  if (existsSync(receiptPath)) unlinkSync(receiptPath);
+}
+
+export function writeEnglishGalleryVerificationReceiptAtomic(
+  root,
+  report,
+  options = {},
+) {
+  const receiptPath = resolve(root, RECEIPT_PATH);
+  const receiptDirectory = dirname(receiptPath);
+  const temporaryPath = resolve(
+    receiptDirectory,
+    `.${basename(receiptPath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  const rename = options.rename ?? renameSync;
+  mkdirSync(receiptDirectory, {recursive: true});
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(report, null, 2)}\n`, {flag: "wx"});
+    rename(temporaryPath, receiptPath);
+  } finally {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+  }
+  return receiptPath;
+}
+
 const EXPECTED_SOURCES = Object.freeze({
   realityOps: "video/src/RealityOpsProofV2.tsx",
   livingRoom: "video/src/LivingRoomPublicDemo.tsx",
   emergencyCity: "video/src/EmergencyCityProofV3.tsx",
   emergencyCitySemanticLens: "video/src/EmergencyCitySemanticLens.tsx",
+  realityTwin: "video/src/RealityTwinProofV1.tsx",
 });
 
 const EXPECTED_SUPPORTING_CONTRACTS = Object.freeze([
   "video/living-room-public-demo-en.visual-contract.json",
   "video/emergency-city-v4-english.visual-contract.json",
+  "video/reality-twin-v1.visual-contract.json",
 ]);
 
 const EXPECTED_CLAIM_BOUNDARIES = Object.freeze({
@@ -70,6 +101,18 @@ const EXPECTED_CLAIM_BOUNDARIES = Object.freeze({
       "This is not a pre-rendered change",
     ]),
   }),
+  realityTwin: Object.freeze({
+    captureSource: "smithsonian_museum_glb_scan_converted_offline_to_gaussian_ply_not_native_gaussian_capture",
+    measurementScope: "automated_inspector_pointer_selection_on_current_gaussian_lod_visual_scale_estimate_not_human_claim_not_survey_or_cad_measurement",
+    agentVisionScope: "deterministic_authorized_mcp_client_reads_descriptor_calibration_metric_bounds_and_proxy_relations_not_generative_planner_not_raw_splats_pixels_or_source_glb",
+    engineeringAuthority: "gaussian_visual_evidence_only_parametric_proxy_owns_collision_physics_dimensions_and_engineering_meaning",
+    exportScope: "published_parametric_protective_case_usda_only_not_semantic_proxy_gaussian_representation_or_complete_workspace",
+    requiredVisibleCopy: Object.freeze([
+      "SMITHSONIAN MUSEUM SCAN · PREPARED OFFLINE",
+      "SCAN = VISUAL ONLY · PROXY = EXACT GEOMETRY · NOT SURVEY OR CAD MEASUREMENT",
+      "PARAMETRIC CASE MODEL · CAPTURE EXCLUDED",
+    ]),
+  }),
 });
 
 const EXPECTED_DELIVERIES = Object.freeze({
@@ -88,9 +131,14 @@ const EXPECTED_DELIVERIES = Object.freeze({
     durationFrames: 1080,
     captionPath: "video/captions/semaframe-realityops-v2.en-US.srt",
     captionCueCount: 12,
+    maxCaptionLineCharacters: 42,
     videoPath: "artifacts/semaframe-realityops-v2-en.mp4",
     posterPath: "artifacts/semaframe-realityops-v2-en-poster.png",
     readmePosterPath: "docs/media/semaframe-realityops-v2-en-poster.jpg",
+    readmeLink: Object.freeze({
+      kind: "published-release-asset",
+      href: "https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en.mp4",
+    }),
   }),
   "pump-vertical": Object.freeze({
     demo: "pump",
@@ -107,6 +155,7 @@ const EXPECTED_DELIVERIES = Object.freeze({
     durationFrames: 960,
     captionPath: "video/captions/semaframe-realityops-v2-vertical.en-US.srt",
     captionCueCount: 12,
+    maxCaptionLineCharacters: 42,
     videoPath: "artifacts/semaframe-realityops-v2-en-vertical.mp4",
     posterPath: "artifacts/semaframe-realityops-v2-en-vertical-poster.png",
   }),
@@ -125,9 +174,14 @@ const EXPECTED_DELIVERIES = Object.freeze({
     durationFrames: 1200,
     captionPath: "video/captions/semaframe-living-room-public-demo.en-US.srt",
     captionCueCount: 14,
+    maxCaptionLineCharacters: 42,
     videoPath: "artifacts/semaframe-living-room-public-demo-en.mp4",
     posterPath: "artifacts/semaframe-living-room-public-demo-en-poster.png",
     readmePosterPath: "docs/media/semaframe-living-room-public-demo-en-poster.jpg",
+    readmeLink: Object.freeze({
+      kind: "published-release-asset",
+      href: "https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo-en.mp4",
+    }),
   }),
   "traffic-landscape": Object.freeze({
     demo: "traffic",
@@ -144,9 +198,14 @@ const EXPECTED_DELIVERIES = Object.freeze({
     durationFrames: 960,
     captionPath: "video/captions/semaframe-emergency-city-v4.en-US.srt",
     captionCueCount: 13,
+    maxCaptionLineCharacters: 42,
     videoPath: "artifacts/semaframe-emergency-city-v4-en.mp4",
     posterPath: "artifacts/semaframe-emergency-city-v4-en-poster.png",
     readmePosterPath: "docs/media/semaframe-emergency-city-v4-en-poster.jpg",
+    readmeLink: Object.freeze({
+      kind: "published-release-asset",
+      href: "https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en.mp4",
+    }),
   }),
   "traffic-vertical": Object.freeze({
     demo: "traffic",
@@ -163,8 +222,47 @@ const EXPECTED_DELIVERIES = Object.freeze({
     durationFrames: 840,
     captionPath: "video/captions/semaframe-emergency-city-v4-vertical.en-US.srt",
     captionCueCount: 13,
+    maxCaptionLineCharacters: 42,
     videoPath: "artifacts/semaframe-emergency-city-v4-en-vertical.mp4",
     posterPath: "artifacts/semaframe-emergency-city-v4-en-vertical-poster.png",
+  }),
+  "reality-twin-landscape": Object.freeze({
+    demo: "realityTwin",
+    variant: "landscape",
+    sourceRefs: Object.freeze(["realityTwin"]),
+    componentExport: "SemaFrameRealityTwinProofV1",
+    compositionId: "SemaFrameRealityTwinProofV1",
+    posterComponentExport: "SemaFrameRealityTwinProofV1Poster",
+    posterCompositionId: "SemaFrameRealityTwinProofV1Poster",
+    durationExpression: "REALITY_TWIN_PROOF_V1_LANDSCAPE_DURATION",
+    width: 1920,
+    height: 1080,
+    fps: 30,
+    durationFrames: 960,
+    captionPath: "video/captions/semaframe-reality-twin-v1.en-US.srt",
+    captionCueCount: 11,
+    maxCaptionLineCharacters: 52,
+    videoPath: "artifacts/semaframe-reality-twin-v1-en.mp4",
+    posterPath: "artifacts/semaframe-reality-twin-v1-en-poster.png",
+  }),
+  "reality-twin-vertical": Object.freeze({
+    demo: "realityTwin",
+    variant: "vertical",
+    sourceRefs: Object.freeze(["realityTwin"]),
+    componentExport: "SemaFrameRealityTwinProofV1Vertical",
+    compositionId: "SemaFrameRealityTwinProofV1Vertical",
+    posterComponentExport: "SemaFrameRealityTwinProofV1VerticalPoster",
+    posterCompositionId: "SemaFrameRealityTwinProofV1VerticalPoster",
+    durationExpression: "REALITY_TWIN_PROOF_V1_VERTICAL_DURATION",
+    width: 1080,
+    height: 1920,
+    fps: 30,
+    durationFrames: 900,
+    captionPath: "video/captions/semaframe-reality-twin-v1-vertical.en-US.srt",
+    captionCueCount: 11,
+    maxCaptionLineCharacters: 52,
+    videoPath: "artifacts/semaframe-reality-twin-v1-en-vertical.mp4",
+    posterPath: "artifacts/semaframe-reality-twin-v1-en-vertical-poster.png",
   }),
 });
 
@@ -184,6 +282,14 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+export function assertNoUnpublishedReleaseReference(readme, delivery) {
+  const releaseAssetPattern = new RegExp(
+    `https://github\\.com/riseagain1/semaframe/releases/download/[^\\s"'<>]+/${escapeRegExp(basename(delivery.videoPath))}`,
+    "u",
+  );
+  invariant(!releaseAssetPattern.test(readme), `${README_PATH} fabricates an unpublished release asset for ${delivery.id}.`);
+}
+
 export function assertNoCjk(value, label = "English copy") {
   invariant(typeof value === "string", `${label} must be text.`);
   invariant(!CJK_PATTERN.test(value), `${label} contains CJK text.`);
@@ -199,6 +305,13 @@ export function assertTruthfulEnglishCopy(value, label = "English copy") {
     /\b(?:continuous(?:ly)?|full[- ]path)\s+(?:collision[- ]free|collision checking)\b/iu,
     /\bautonomously\s+(?:designed|engineered|certified)\b/iu,
     /\b(?:real|scanned)\s+(?:home|factory|city)\s+(?:scan|capture)\b/iu,
+    /\bSemaFrame\s+(?:captured|converted|reconstructed|trained)\s+(?:the\s+)?(?:Gaussian|museum scan|3D scan|photos?|video)\b/iu,
+    /\b(?:is|was|provides?)\s+(?:a\s+)?(?:native|direct)\s+Gaussian\s+capture\b/iu,
+    /\bphotos?\s+(?:to|into)\s+(?:CAD|Gaussian|3D)\b/iu,
+    /\b(?:survey|metrology|manufacturing|engineering)[- ](?:accurate|grade|certified)\b/iu,
+    /\b(?:complete|whole|entire)\s+(?:scene|workspace)\b[^.\n]{0,80}\bOpenUSD\b/iu,
+    /\bGaussian(?:\s+representation)?\s+(?:owns|provides|drives)\s+(?:collision|physics|dimensions?|engineering)\b/iu,
+    /\bAgent\s+(?:sees|reads|receives)\s+(?:the\s+)?(?:raw\s+)?(?:pixels|splats|source\s+GLB)\b/iu,
   ];
   for (const pattern of forbidden) {
     invariant(!pattern.test(value), `${label} contains an unsupported claim: ${pattern}.`);
@@ -211,7 +324,7 @@ function assertExact(actual, expected, label) {
 
 export function validateGalleryContract(contract, options = {}) {
   invariant(contract?.format === "semaframe-english-demo-gallery-visual-contract", "English gallery contract format is invalid.");
-  invariant(contract.version === 1, "English gallery contract version must be 1.");
+  invariant(contract.version === 2, "English gallery contract version must be 2.");
   invariant(contract.locale === "en-US", "English gallery locale must be en-US.");
   invariant(contract.silentFirst === true, "English gallery must be silent-first.");
   invariant(contract.audioRequiredForComprehension === false, "English gallery audio must be optional for comprehension.");
@@ -240,14 +353,15 @@ export function validateGalleryContract(contract, options = {}) {
     boundary.requiredVisibleCopy.forEach((copy) => assertTruthfulEnglishCopy(copy, `${demo} visible boundary copy`));
   }
 
-  invariant(Array.isArray(contract.deliveries) && contract.deliveries.length === 5, "English gallery must declare exactly five deliveries.");
-  invariant(new Set(contract.deliveries.map((delivery) => delivery.id)).size === 5, "English gallery delivery IDs must be unique.");
-  invariant(new Set(contract.deliveries.map((delivery) => delivery.compositionId)).size === 5, "English gallery composition IDs must be unique.");
-  invariant(new Set(contract.deliveries.map((delivery) => delivery.posterCompositionId)).size === 5, "English gallery poster IDs must be unique.");
-  invariant(new Set(contract.deliveries.map((delivery) => delivery.videoPath)).size === 5, "English gallery output video paths must be unique.");
-  invariant(new Set(contract.deliveries.map((delivery) => delivery.posterPath)).size === 5, "English gallery output poster paths must be unique.");
+  const expectedDeliveryCount = Object.keys(EXPECTED_DELIVERIES).length;
+  invariant(Array.isArray(contract.deliveries) && contract.deliveries.length === expectedDeliveryCount, `English gallery must declare exactly ${expectedDeliveryCount} deliveries.`);
+  invariant(new Set(contract.deliveries.map((delivery) => delivery.id)).size === expectedDeliveryCount, "English gallery delivery IDs must be unique.");
+  invariant(new Set(contract.deliveries.map((delivery) => delivery.compositionId)).size === expectedDeliveryCount, "English gallery composition IDs must be unique.");
+  invariant(new Set(contract.deliveries.map((delivery) => delivery.posterCompositionId)).size === expectedDeliveryCount, "English gallery poster IDs must be unique.");
+  invariant(new Set(contract.deliveries.map((delivery) => delivery.videoPath)).size === expectedDeliveryCount, "English gallery output video paths must be unique.");
+  invariant(new Set(contract.deliveries.map((delivery) => delivery.posterPath)).size === expectedDeliveryCount, "English gallery output poster paths must be unique.");
   const readmeDeliveries = contract.deliveries.filter((delivery) => delivery.readmePosterPath != null);
-  invariant(readmeDeliveries.length === 3, "English gallery must declare exactly three README posters.");
+  invariant(readmeDeliveries.length === 3, "English gallery must declare exactly three published README posters.");
   invariant(new Set(readmeDeliveries.map((delivery) => delivery.readmePosterPath)).size === 3, "English gallery README poster paths must be unique.");
 
   for (const delivery of contract.deliveries) {
@@ -259,12 +373,24 @@ export function validateGalleryContract(contract, options = {}) {
     invariant(SHA256_PATTERN.test(delivery.captionSha256), `${delivery.id} caption hash must be a concrete SHA-256 value.`);
     invariant(Number.isFinite(delivery.maxCaptionCps) && delivery.maxCaptionCps > 0, `${delivery.id} maxCaptionCps is invalid.`);
     invariant(Number.isFinite(delivery.maxCaptionGapSeconds) && delivery.maxCaptionGapSeconds >= 0, `${delivery.id} maxCaptionGapSeconds is invalid.`);
+    invariant(Number.isSafeInteger(delivery.maxCaptionLineCharacters) && delivery.maxCaptionLineCharacters >= 20 && delivery.maxCaptionLineCharacters <= 70, `${delivery.id} maxCaptionLineCharacters is invalid.`);
     invariant(delivery.videoPath.endsWith(".mp4"), `${delivery.id} video output must be MP4.`);
     invariant(delivery.posterPath.endsWith(".png"), `${delivery.id} poster output must be PNG.`);
-    if (delivery.variant === "landscape") {
+    if (delivery.variant === "landscape" && delivery.demo !== "realityTwin") {
       invariant(delivery.readmePosterPath?.endsWith(".jpg"), `${delivery.id} must declare a JPEG README poster.`);
+      invariant(delivery.readmeLink && typeof delivery.readmeLink === "object", `${delivery.id} must declare a README link.`);
+      invariant(["published-release-asset", "local-documentation"].includes(delivery.readmeLink.kind), `${delivery.id} README link kind is invalid.`);
+      invariant(typeof delivery.readmeLink.href === "string" && delivery.readmeLink.href.length > 0, `${delivery.id} README link href is missing.`);
+      const expectedReleaseHref = `${RELEASE_DOWNLOAD_BASE}/${basename(delivery.videoPath)}`;
+      if (delivery.readmeLink.kind === "published-release-asset") {
+        invariant(delivery.readmeLink.href === expectedReleaseHref, `${delivery.id} published README link does not match its release asset.`);
+      } else {
+        invariant(/^\.\/video\/README\.md#[a-z0-9-]+$/u.test(delivery.readmeLink.href), `${delivery.id} local README link must target an in-repository video documentation anchor.`);
+        invariant(delivery.readmeLink.href !== expectedReleaseHref, `${delivery.id} local-only README link must not claim a published release asset.`);
+      }
     } else {
-      invariant(delivery.readmePosterPath == null, `${delivery.id} must not declare a vertical README poster.`);
+      invariant(delivery.readmePosterPath == null, `${delivery.id} must not declare a README poster.`);
+      invariant(delivery.readmeLink == null, `${delivery.id} must not declare a README link.`);
     }
     invariant(contract.claimBoundaries[delivery.demo], `${delivery.id} has no claim boundary.`);
     for (const sourceRef of delivery.sourceRefs) invariant(contract.sources[sourceRef], `${delivery.id} references unknown source ${sourceRef}.`);
@@ -312,7 +438,7 @@ export function validateEnglishSrt(contents, delivery) {
     for (const line of copyLines) {
       assertNoCjk(line, `${delivery.id} cue ${index + 1}`);
       longestLine = Math.max(longestLine, Array.from(line).length);
-      invariant(Array.from(line).length <= 42, `${delivery.id} cue ${index + 1} has a line longer than 42 characters.`);
+      invariant(Array.from(line).length <= delivery.maxCaptionLineCharacters, `${delivery.id} cue ${index + 1} has a line longer than ${delivery.maxCaptionLineCharacters} characters.`);
     }
     const cueText = copyLines.join(" ");
     const cps = Array.from(cueText.replace(/\s/gu, "")).length / (end - start);
@@ -347,9 +473,31 @@ function assertJsxExpression(tag, attribute, expected, label) {
   invariant(pattern.test(tag), `${label} must set ${attribute}={${expected}}.`);
 }
 
+function rootFolderSource(rootSource, folderName) {
+  const marker = `<Folder name="${folderName}">`;
+  const first = rootSource.indexOf(marker);
+  invariant(first >= 0, `Root is missing the ${folderName} folder.`);
+  invariant(rootSource.indexOf(marker, first + marker.length) < 0, `Root registers the ${folderName} folder more than once.`);
+  const bodyStart = first + marker.length;
+  const end = rootSource.indexOf("</Folder>", bodyStart);
+  invariant(end >= 0, `${folderName} folder is not closed.`);
+  const body = rootSource.slice(bodyStart, end);
+  invariant(!/<Folder\b/u.test(body), `${folderName} must not contain nested folders.`);
+  return body;
+}
+
+function registeredFolderIds(folderSource, kind) {
+  const pattern = new RegExp(`<${kind}\\b[^>]*\\bid\\s*=\\s*["']([^"']+)["'][^>]*/>`, "gu");
+  return [...folderSource.matchAll(pattern)].map((match) => match[1]);
+}
+
 export function validateRootRegistrations(contract, rootSource, sourceTexts) {
-  invariant(rootSource.includes(`<Folder name="${contract.rootFolderName}">`), `Root is missing the ${contract.rootFolderName} folder.`);
   invariant(/export const FPS\s*=\s*30\s*;/u.test(rootSource), "Root FPS must remain 30.");
+  const folderSource = rootFolderSource(rootSource, contract.rootFolderName);
+  const expectedCompositionIds = contract.deliveries.map((delivery) => delivery.compositionId).sort();
+  const expectedPosterIds = contract.deliveries.map((delivery) => delivery.posterCompositionId).sort();
+  assertExact(registeredFolderIds(folderSource, "Composition").sort(), expectedCompositionIds, `${contract.rootFolderName} composition IDs`);
+  assertExact(registeredFolderIds(folderSource, "Still").sort(), expectedPosterIds, `${contract.rootFolderName} poster IDs`);
 
   for (const delivery of contract.deliveries) {
     const sourceText = delivery.sourceRefs.map((sourceRef) => sourceTexts[sourceRef]).join("\n");
@@ -357,14 +505,14 @@ export function validateRootRegistrations(contract, rootSource, sourceTexts) {
     invariant(new RegExp(`export const ${escapeRegExp(delivery.posterComponentExport)}\\b`, "u").test(sourceText), `${delivery.posterComponentExport} is not exported by its bound source.`);
     invariant(new RegExp(`export const ${escapeRegExp(delivery.durationExpression)}\\b`, "u").test(sourceText), `${delivery.durationExpression} is not exported by its bound source.`);
 
-    const composition = registrationTag(rootSource, "Composition", delivery.compositionId);
+    const composition = registrationTag(folderSource, "Composition", delivery.compositionId);
     assertJsxExpression(composition, "component", delivery.componentExport, delivery.compositionId);
     assertJsxExpression(composition, "width", delivery.width, delivery.compositionId);
     assertJsxExpression(composition, "height", delivery.height, delivery.compositionId);
     assertJsxExpression(composition, "fps", "FPS", delivery.compositionId);
     assertJsxExpression(composition, "durationInFrames", delivery.durationExpression, delivery.compositionId);
 
-    const poster = registrationTag(rootSource, "Still", delivery.posterCompositionId);
+    const poster = registrationTag(folderSource, "Still", delivery.posterCompositionId);
     assertJsxExpression(poster, "component", delivery.posterComponentExport, delivery.posterCompositionId);
     assertJsxExpression(poster, "width", delivery.width, delivery.posterCompositionId);
     assertJsxExpression(poster, "height", delivery.height, delivery.posterCompositionId);
@@ -439,18 +587,48 @@ export function verifyStaticBindings(contract, root = process.cwd()) {
   invariant(existsSync(readmePath), `Missing ${README_PATH}.`);
   const readme = readFileSync(readmePath, "utf8");
   const readmeDeliveries = contract.deliveries.filter((delivery) => delivery.readmePosterPath != null);
+  let publishedVideoCount = 0;
+  let localPreviewCount = 0;
   for (const delivery of readmeDeliveries) {
     const posterReference = `src="./${delivery.readmePosterPath}"`;
+    const linkReference = `href="${delivery.readmeLink.href}"`;
     const releaseReference = `${RELEASE_DOWNLOAD_BASE}/${basename(delivery.videoPath)}`;
     invariant(readme.includes(posterReference), `${README_PATH} does not show ${delivery.readmePosterPath}.`);
-    invariant(readme.includes(releaseReference), `${README_PATH} does not link ${delivery.id} to its stable release asset.`);
+    invariant(readme.includes(linkReference), `${README_PATH} does not link ${delivery.id} through ${delivery.readmeLink.href}.`);
+    if (delivery.readmeLink.kind === "published-release-asset") {
+      invariant(delivery.readmeLink.href === releaseReference, `${delivery.id} published README link does not match its stable release asset.`);
+      publishedVideoCount += 1;
+      continue;
+    }
+    invariant(delivery.readmeLink.kind === "local-documentation", `${delivery.id} README link kind is unsupported.`);
+    assertNoUnpublishedReleaseReference(readme, delivery);
+    const [localPath, anchor] = delivery.readmeLink.href.slice(2).split("#");
+    invariant(localPath && anchor, `${delivery.id} local README link must include a documentation path and anchor.`);
+    const documentationPath = resolve(root, localPath);
+    invariant(existsSync(documentationPath), `${delivery.id} local documentation target ${localPath} is missing.`);
+    const headings = readFileSync(documentationPath, "utf8")
+      .split(/\r?\n/gu)
+      .filter((line) => /^#{1,6}\s+/u.test(line))
+      .map((line) => line.replace(/^#{1,6}\s+/u, "").trim().toLowerCase()
+        .replace(/[`*_~]/gu, "")
+        .replace(/[^a-z0-9\s-]/gu, "")
+        .replace(/\s+/gu, "-")
+        .replace(/-+/gu, "-"));
+    invariant(headings.includes(anchor), `${delivery.id} local documentation anchor #${anchor} is missing from ${localPath}.`);
+    localPreviewCount += 1;
   }
   return {
     sourceHashes,
     supportingContracts,
     captions,
     registrations,
-    readmeGallery: {path: README_PATH, posterCount: readmeDeliveries.length, releaseTag: "demo-gallery-v1"},
+    readmeGallery: {
+      path: README_PATH,
+      posterCount: readmeDeliveries.length,
+      publishedVideoCount,
+      localPreviewCount,
+      releaseTags: ["demo-gallery-v1"],
+    },
   };
 }
 
@@ -695,7 +873,7 @@ export function verifyEnglishDemoGallery(root = process.cwd(), options = {}) {
         ])),
       };
   return {
-    verificationVersion: 1,
+    verificationVersion: 2,
     result: "passed",
     mode: staticOnly ? "static-only" : "full",
     verifiedAt: new Date().toISOString(),
@@ -706,14 +884,16 @@ export function verifyEnglishDemoGallery(root = process.cwd(), options = {}) {
 }
 
 export function main(argv = process.argv.slice(2), root = process.cwd()) {
+  // A new CLI attempt invalidates the prior full receipt before argument,
+  // dependency, or media validation. Failure must never leave an earlier
+  // "passed" result looking current.
+  invalidateEnglishGalleryVerificationReceipt(root);
   const allowed = new Set(["--static-only"]);
   for (const argument of argv) invariant(allowed.has(argument), `Unknown argument ${argument}. Use --static-only or no arguments.`);
   const staticOnly = argv.includes("--static-only");
   const report = verifyEnglishDemoGallery(root, {staticOnly});
   if (!staticOnly) {
-    const receiptPath = resolve(root, RECEIPT_PATH);
-    mkdirSync(dirname(receiptPath), {recursive: true});
-    writeFileSync(receiptPath, `${JSON.stringify(report, null, 2)}\n`);
+    writeEnglishGalleryVerificationReceiptAtomic(root, report);
   }
   console.log(`English demo gallery verification passed (${report.mode}; ${report.contract.deliveryCount} deliveries).`);
   if (!staticOnly) console.log(`Receipt: ${relative(root, resolve(root, RECEIPT_PATH))}`);

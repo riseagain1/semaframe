@@ -13,6 +13,7 @@ import {
   isAgentWorkspaceUnlocked,
   replaceAgentOfferAndRestoreBridge,
   restoreAgentBrowserBridge,
+  shouldClearRealityMeasurementForWorkspaceGate,
 } from "../../app/App";
 
 afterEach(() => {
@@ -40,6 +41,20 @@ describe("Agent connection offer lifecycle", () => {
     expect(isAgentWorkspaceUnlocked(true, "disconnected")).toBe(false);
     expect(isAgentWorkspaceUnlocked(true, "connected")).toBe(true);
     expect(isAgentWorkspaceUnlocked(true, "applying")).toBe(true);
+  });
+
+  it("clears stale ephemeral measurement state whenever the Workspace gate closes", () => {
+    const measurement = {
+      kind: "started" as const,
+      componentId: "CMP_REALITY",
+      assetId: "ra_fixture",
+      assetDigest: `sha256:${"a".repeat(64)}`,
+      sessionId: 9,
+    };
+
+    expect(shouldClearRealityMeasurementForWorkspaceGate(true, measurement)).toBe(false);
+    expect(shouldClearRealityMeasurementForWorkspaceGate(false, undefined)).toBe(false);
+    expect(shouldClearRealityMeasurementForWorkspaceGate(false, measurement)).toBe(true);
   });
 
   const replacementConfig: AgentGatewayConfig = {
