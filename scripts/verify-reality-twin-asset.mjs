@@ -23,12 +23,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import sharp from "sharp";
+import {
+  REALITY_TWIN_MAX_ASSET_BYTES,
+  REALITY_TWIN_MAX_SPLAT_COUNT,
+} from "./reality-twin-import-limits.mjs";
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
 const QA_ROOT = resolve(REPOSITORY_ROOT, "artifacts/reality-twin/qa");
 const PREVIEW_PATH = resolve(QA_ROOT, "spark-render.png");
-const MAXIMUM_ASSET_BYTES = 256 * 1024 * 1024;
-const MAXIMUM_SPLATS = 4_000_000;
 
 const delay = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
 
@@ -485,8 +487,8 @@ export async function verifyRealityTwinAsset(options = {}) {
     assert(existsSync(assetPath), `Prepared asset is missing: ${assetPath}`);
     assert(statSync(assetPath).size === evidence.output.bytes, "Prepared asset byte length changed");
     assert(sha256File(assetPath) === evidence.output.sha256, "Prepared asset digest changed");
-    assert(evidence.output.bytes < MAXIMUM_ASSET_BYTES, "Prepared asset exceeds Semaframe byte limit");
-    assert(evidence.conversion.splat_count < MAXIMUM_SPLATS, "Prepared asset exceeds Semaframe splat limit");
+    assert(evidence.output.bytes <= REALITY_TWIN_MAX_ASSET_BYTES, "Prepared asset exceeds Semaframe byte limit");
+    assert(evidence.conversion.splat_count <= REALITY_TWIN_MAX_SPLAT_COUNT, "Prepared asset exceeds Semaframe splat limit");
 
     options.log?.("[1/2] Running current Semaframe untrusted-PLY preflight...");
     const preflightRunner = options.preflightRunner ?? runCurrentPreflight;
@@ -542,7 +544,7 @@ export async function verifyRealityTwinAsset(options = {}) {
         "Current host preflight accepted the exact 84 MB binary PLY and recomputed its pinned SHA-256.",
         "Current host preflight classified 1.5M records as gaussian-3d with SH degree 0 and visual_only authority.",
         "Spark decoded all 1.5M splats in Chromium and produced a non-blank WebGL render.",
-        "The output remains below Semaframe's 256 MiB and 4M-splat host limits.",
+        "The output remains within Semaframe's inclusive 256 MiB and 4M-splat host limits.",
       ],
     };
     if (checkOnly) {

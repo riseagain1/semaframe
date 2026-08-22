@@ -180,6 +180,7 @@ test("release pipeline rebuilds Reality once from a clean clone and gates QA sti
   for (const command of [
     "demo:test:audio",
     "demo:test:reality-twin:metadata",
+    "demo:test:reality-twin:limits",
     "demo:test:reality-twin-capture",
     "demo:test:reality-twin:asset-verifier",
     "demo:test:reality-twin:v1-verifier",
@@ -194,6 +195,10 @@ test("release pipeline rebuilds Reality once from a clean clone and gates QA sti
   assert.equal(
     scripts["demo:test:reality-twin:metadata"],
     "node --test scripts/reality-twin-metadata-text.test.mjs",
+  );
+  assert.equal(
+    scripts["demo:test:reality-twin:limits"],
+    "node --test scripts/reality-twin-import-limits.test.mjs",
   );
   assert.equal(
     scripts["demo:test:reality-twin:asset-verifier"],
