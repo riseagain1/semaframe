@@ -19,17 +19,29 @@ describe("universal component registry", () => {
       [...BUILTIN_COMPONENT_TYPE_IDS].sort(),
     );
     // Existing types retain 1.0/1.1 compatibility refs; button starts at 1.2,
-    // while spatial-entity alone adds collision-aware 1.3, physics-aware 1.4,
-    // and master-switch 1.5 contracts.
-    expect(rebuilt.list()).toHaveLength(52);
+    // while spatial-entity adds collision-aware 1.3, physics-aware 1.4,
+    // master-switch 1.5, and movable 1.6 contracts. Exact primitives and
+    // model assemblies gain move_to in pinned 1.1 contracts.
+    expect(rebuilt.list()).toHaveLength(55);
     for (const typeId of BUILTIN_COMPONENT_TYPE_IDS) {
       const expectedVersion = typeId === "spatial-entity"
-        ? "1.5.0"
-        : ["spatial-primitive", "model-assembly", "gaussian-splat"].includes(typeId)
+        ? "1.6.0"
+        : ["spatial-primitive", "model-assembly"].includes(typeId)
+          ? "1.1.0"
+          : typeId === "gaussian-splat"
           ? "1.0.0"
           : "1.2.0";
       expect(rebuilt.require(typeId).version).toBe(expectedVersion);
     }
+    for (const typeId of ["spatial-entity", "spatial-primitive", "model-assembly"]) {
+      expect(rebuilt.require(typeId).actions.move_to).toMatchObject({
+        effectClass: "semantic",
+        requiredPermissions: ["component:update"],
+      });
+    }
+    expect(rebuilt.require("spatial-entity", "1.5.0").actions).not.toHaveProperty("move_to");
+    expect(rebuilt.require("spatial-primitive", "1.0.0").actions).not.toHaveProperty("move_to");
+    expect(rebuilt.require("model-assembly", "1.0.0").actions).not.toHaveProperty("move_to");
     expect(rebuilt.require("image", "1.0.0").resizePolicy.viewport).toMatchObject({
       kind: "box2d",
       mode: "free",

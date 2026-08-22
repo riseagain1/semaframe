@@ -378,6 +378,21 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
       },
     };
   }
+  if (pathname === "/v1/workspace/resources/snapshot/read" && method === "POST") {
+    const body = exactObject(value, ["session_token", "instruction_digest", "resource_id"]);
+    const resourceId = boundedString(body.resource_id, "resource_id", 1, 256);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/u.test(resourceId)) {
+      throw new InvalidRequestError("resource_id must be a valid Workspace identifier.");
+    }
+    return {
+      name: "read_workspace_resource_snapshot",
+      input: {
+        session_token: boundedString(body.session_token, "session_token", 8, 256),
+        instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
+        resource_id: resourceId,
+      },
+    };
+  }
   if (pathname === "/v1/workspace/assets/inspect" && method === "POST") {
     const body = exactObject(value, ["session_token", "instruction_digest", "asset_id"]);
     const assetId = boundedString(body.asset_id, "asset_id", 67, 67);

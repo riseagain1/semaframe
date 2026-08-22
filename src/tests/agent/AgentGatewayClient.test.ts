@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AGENT_GATEWAY_COMMAND_NAMES,
   AgentGatewayClient,
   AgentGatewayCommandError,
   AgentGatewayError,
@@ -98,6 +99,11 @@ afterEach(() => {
 });
 
 describe("AgentGatewayClient", () => {
+  it("accepts the complete nineteen-command browser dispatch surface", () => {
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(19);
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("read_workspace_resource_snapshot");
+  });
+
   it("binds the browser-owned Fetch implementation before storing it", async () => {
     const receiverAwareFetch = vi.fn(function (this: unknown) {
       if (this !== globalThis) throw new TypeError("Illegal invocation");

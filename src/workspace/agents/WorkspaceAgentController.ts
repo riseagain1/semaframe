@@ -3,6 +3,8 @@ import {
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
   WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WORKSPACE_PROTOCOL_VERSION,
+  WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
+  WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
   type JSONValue,
   type WorkspaceAgentError,
   type WorkspaceAgentPrincipal,
@@ -18,6 +20,7 @@ import {
   type WorkspacePreparedEnvelope,
   type WorkspacePreparedUpdate,
   type WorkspaceRealityAssetView,
+  type WorkspaceResourceSnapshotView,
   type WorkspaceStateView,
   isWorkspaceAgentToolName,
   isWorkspacePermissionScope,
@@ -126,6 +129,37 @@ export type InspectWorkspaceComponentData = Readonly<{
   omitted_tag_count: number;
   omitted_redacted_field_count: number;
   manifest_truncated: false;
+}>;
+
+export type ReadWorkspaceResourceSnapshotData = Readonly<{
+  client_id: string;
+  client_name?: string;
+  workspace_id: string;
+  workspace_revision: number;
+  registry_digest: string;
+  resource_id: string;
+  label: string;
+  connector_type: string;
+  connector_version: string;
+  output_schema: JSONValue;
+  status: "unconfigured" | "ready" | "stale" | "error";
+  snapshot_authority: "host_normalized";
+  snapshot: Readonly<{
+    data: JSONValue;
+    content_hash: string;
+    retrieved_at: string;
+    stale: boolean;
+    provenance: readonly Readonly<{
+      title?: string;
+      uri?: string;
+      publisher?: string;
+      retrieved_at: string;
+      citation?: string;
+    }>[];
+  }>;
+  complete: true;
+  response_limit_bytes: typeof WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES;
+  untrusted_data_notice: typeof WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE;
 }>;
 
 export type InspectWorkspaceModelData = Readonly<{
@@ -627,6 +661,67 @@ export class WorkspaceAgentController {
         throw new WorkspaceEngineError(
           "engine_contract_violation",
           "Public component inspection exceeded its maximum encoded size",
+        );
+      }
+      return result;
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
+  async readWorkspaceResourceSnapshot(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<ReadWorkspaceResourceSnapshotData>> {
+    try {
+      const body = exactRecord(
+        input,
+        ["session_token", "instruction_digest", "resource_id"],
+        [],
+      );
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["workspace:read", "effect:data_read"]);
+      const resourceId = requiredString(body.resource_id, "resource_id", 1, 256);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/u.test(resourceId)) {
+        throw new WorkspaceEngineError(
+          "invalid_request",
+          "resource_id must be a valid Workspace identifier",
+          { retryable: true },
+        );
+      }
+      const view = await this.consistentResourceSnapshotState(resourceId, principal(session));
+      const result = ok({
+        ...publicIdentity(session),
+        workspace_id: view.workspaceId,
+        workspace_revision: view.revision,
+        registry_digest: view.registryDigest,
+        resource_id: view.resourceId,
+        label: view.label,
+        connector_type: view.connectorType,
+        connector_version: view.connectorVersion,
+        output_schema: structuredClone(view.outputSchema),
+        status: view.status,
+        snapshot_authority: view.snapshotAuthority,
+        snapshot: {
+          data: structuredClone(view.data),
+          content_hash: view.contentHash,
+          retrieved_at: view.retrievedAt,
+          stale: view.stale,
+          provenance: view.provenance.map((entry) => ({
+            ...(entry.title === undefined ? {} : { title: entry.title }),
+            ...(entry.uri === undefined ? {} : { uri: entry.uri }),
+            ...(entry.publisher === undefined ? {} : { publisher: entry.publisher }),
+            retrieved_at: entry.retrievedAt,
+            ...(entry.citation === undefined ? {} : { citation: entry.citation }),
+          })),
+        },
+        complete: true as const,
+        response_limit_bytes: WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES as typeof WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
+        untrusted_data_notice: WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
+      });
+      if (encodedBytes(result) > WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES) {
+        throw new WorkspaceEngineError(
+          "engine_contract_violation",
+          "Public resource snapshot read exceeded its maximum encoded size",
         );
       }
       return result;
@@ -1137,6 +1232,8 @@ export class WorkspaceAgentController {
         return this.inspectWorkspace(input);
       case "inspect_workspace_component":
         return this.inspectWorkspaceComponent(input);
+      case "read_workspace_resource_snapshot":
+        return this.readWorkspaceResourceSnapshot(input);
       case "inspect_workspace_asset":
         return this.inspectWorkspaceAsset(input);
       case "inspect_workspace_model":
@@ -1353,6 +1450,25 @@ export class WorkspaceAgentController {
       "workspace_busy",
       "Workspace changed during component inspection; retry the targeted inspection",
       { retryable: true, requiredAction: "inspect_workspace_component" },
+    );
+  }
+
+  private async consistentResourceSnapshotState(
+    resourceId: string,
+    actor: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceResourceSnapshotView> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const snapshot = await this.engine.readResourceSnapshot(resourceId, actor);
+      const revision = await this.engine.getRevision();
+      const registryDigest = await this.engine.getRegistryDigest();
+      if (snapshot.revision === revision && snapshot.registryDigest === registryDigest) {
+        return snapshot;
+      }
+    }
+    throw new WorkspaceEngineError(
+      "workspace_busy",
+      "Workspace changed during resource snapshot read; retry the exact read",
+      { retryable: true, requiredAction: "read_workspace_resource_snapshot" },
     );
   }
 

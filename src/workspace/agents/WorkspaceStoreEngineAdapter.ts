@@ -56,6 +56,8 @@ import {
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
   WORKSPACE_COMPONENT_INSPECTION_WRAPPER_RESERVE_BYTES,
+  WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
+  WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES,
   type JSONValue,
   type WorkspaceAgentPrincipal,
   type WorkspaceCommitReceipt,
@@ -69,6 +71,7 @@ import {
   type WorkspacePermissionScope,
   type WorkspacePreparedUpdate,
   type WorkspaceRealityAssetView,
+  type WorkspaceResourceSnapshotView,
   type WorkspaceSpatialPlacementView,
   type WorkspaceSpatialStateView,
   type WorkspacePhysicsPlacementView,
@@ -135,6 +138,7 @@ export type WorkspaceStoreEngineAdapterOptions = Readonly<{
   maxSummaryBytes?: number;
   maxCapabilityBytes?: number;
   maxComponentInspectionBytes?: number;
+  maxResourceSnapshotBytes?: number;
 }>;
 
 type StoredPreparation = {
@@ -1041,6 +1045,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
   private readonly maxSummaryBytes: number;
   private readonly maxCapabilityBytes: number;
   private readonly maxComponentInspectionBytes: number;
+  private readonly maxResourceSnapshotBytes: number;
 
   constructor(
     readonly store: WorkspaceStore,
@@ -1053,18 +1058,26 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     this.maxCapabilityBytes = options.maxCapabilityBytes ?? MAX_CAPABILITY_BYTES;
     this.maxComponentInspectionBytes = options.maxComponentInspectionBytes
       ?? WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES;
+    this.maxResourceSnapshotBytes = options.maxResourceSnapshotBytes
+      ?? WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES;
     for (const [name, value] of [
       ["maxSummaryComponents", this.maxSummaryComponents],
       ["maxSummaryResources", this.maxSummaryResources],
       ["maxSummaryBytes", this.maxSummaryBytes],
       ["maxCapabilityBytes", this.maxCapabilityBytes],
       ["maxComponentInspectionBytes", this.maxComponentInspectionBytes],
+      ["maxResourceSnapshotBytes", this.maxResourceSnapshotBytes],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive integer`);
     }
     if (this.maxComponentInspectionBytes <= WORKSPACE_COMPONENT_INSPECTION_WRAPPER_RESERVE_BYTES) {
       throw new RangeError(
         `maxComponentInspectionBytes must exceed the ${WORKSPACE_COMPONENT_INSPECTION_WRAPPER_RESERVE_BYTES}-byte public wrapper reserve`,
+      );
+    }
+    if (this.maxResourceSnapshotBytes <= WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES) {
+      throw new RangeError(
+        `maxResourceSnapshotBytes must exceed the ${WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES}-byte public wrapper reserve`,
       );
     }
     const historyInputRevision = store.getCommandHistory().reduce(
@@ -1372,6 +1385,84 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         );
       }
       return structuredClone(inspection);
+    });
+  }
+
+  readResourceSnapshot(
+    resourceId: string,
+    principal: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceResourceSnapshotView> {
+    return this.runSerialized(() => {
+      // This reads only the last persisted observation. It deliberately has no
+      // connector execution, refresh, network, or revision-producing path.
+      requireAgentScope(principal, "workspace:read");
+      requireAgentScope(principal, "effect:data_read");
+      const state = this.store.getState();
+      const resource = state.resources.get(resourceId);
+      if (!resource) {
+        throw new WorkspaceEngineError(
+          "resource_not_found",
+          `Workspace resource ${resourceId} does not exist`,
+          { retryable: true, requiredAction: "inspect_workspace" },
+        );
+      }
+      const canonical = isCanonicalInlineSnapshotResource(resource)
+        || isCanonicalHostFeedResource(resource);
+      if (!canonical) {
+        throw new WorkspaceEngineError(
+          "resource_snapshot_not_readable",
+          `Workspace resource ${resourceId} is not a canonical host-normalized snapshot`,
+          {
+            retryable: false,
+            details: {
+              resource_id: resourceId,
+              readable_connector_types: ["inline.snapshot@1.0.0", "http.feed@1.0.0"],
+            },
+          },
+        );
+      }
+      // Both canonical resource forms require a validated current snapshot.
+      const snapshot = resource.snapshot!;
+      const view: WorkspaceResourceSnapshotView = {
+        workspaceId: state.workspaceId,
+        revision: state.revision,
+        registryDigest: state.registryDigest,
+        resourceId: resource.id,
+        label: resource.label,
+        connectorType: resource.connectorType,
+        connectorVersion: resource.connectorVersion,
+        outputSchema: asJSON(resource.outputSchema),
+        status: resource.status,
+        snapshotAuthority: "host_normalized",
+        data: asJSON(snapshot.data),
+        contentHash: snapshot.contentHash,
+        retrievedAt: snapshot.retrievedAt,
+        stale: snapshot.stale,
+        provenance: structuredClone(snapshot.provenance),
+      };
+      const responseLimit = Math.min(
+        this.maxResourceSnapshotBytes,
+        WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
+      );
+      const payloadLimit = responseLimit - WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES;
+      const payloadBytes = encodedBytes(view);
+      if (payloadBytes > payloadLimit) {
+        throw new WorkspaceEngineError(
+          "resource_snapshot_too_large",
+          `Workspace resource ${resourceId} snapshot exceeds the exact-read response limit`,
+          {
+            retryable: false,
+            details: {
+              resource_id: resourceId,
+              encoded_view_bytes: payloadBytes,
+              max_response_bytes: responseLimit,
+              wrapper_reserve_bytes: WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES,
+              truncation_performed: false,
+            },
+          },
+        );
+      }
+      return structuredClone(view);
     });
   }
 

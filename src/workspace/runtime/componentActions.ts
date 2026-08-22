@@ -4,6 +4,7 @@ import type {
   ComponentManifest,
   ComponentVisibility,
   JSONObject,
+  World3DPlacement,
 } from "../components/componentTypes";
 
 export class ComponentActionError extends Error {
@@ -23,6 +24,8 @@ export type ComponentActionResolution = {
   durableState: JSONObject;
   /** Optional host-owned top-level presentation effect. */
   visibility?: ComponentVisibility;
+  /** Transient canonical world3d placement; replay derives it from the stored moved event. */
+  placement?: World3DPlacement;
   events: ActionEventDraft[];
 };
 
@@ -427,6 +430,39 @@ function resolveSpatialAnimationAction(
   };
 }
 
+const MOVABLE_SPATIAL_TYPE_IDS = new Set([
+  "spatial-entity",
+  "spatial-primitive",
+  "model-assembly",
+]);
+
+function resolveSpatialMoveAction(
+  component: ComponentInstance,
+  input: JSONObject,
+): ComponentActionResolution {
+  if (component.placement.space !== "world3d") {
+    throw new ComponentActionError(
+      `Movable spatial component ${component.id} is not in world3d`,
+      "invalid_spatial_placement",
+    );
+  }
+  const target = input.target as unknown as Pick<World3DPlacement, "space" | "position" | "rotation">;
+  const placement: World3DPlacement = {
+    space: "world3d",
+    position: structuredClone(target.position),
+    rotation: structuredClone(target.rotation),
+    scale: structuredClone(component.placement.scale),
+  };
+  return {
+    durableState: structuredClone(component.durableState),
+    placement,
+    events: [{
+      event: "moved",
+      payload: { placement: structuredClone(placement) as unknown as JSONObject },
+    }],
+  };
+}
+
 function resolveBuiltInSelectionAction(
   component: ComponentInstance,
   actionName: string,
@@ -502,6 +538,9 @@ export function resolveComponentAction(
   if (component.type.typeId === "spatial-entity"
     && (actionName === "play_animation" || actionName === "stop_animation" || actionName === "complete_animation")) {
     return resolveSpatialAnimationAction(component, actionName, input);
+  }
+  if (MOVABLE_SPATIAL_TYPE_IDS.has(component.type.typeId) && actionName === "move_to") {
+    return resolveSpatialMoveAction(component, input);
   }
   if (component.type.typeId === "spatial-entity" && actionName === "activate") {
     return {

@@ -65,7 +65,7 @@ const parametric = (
 });
 
 describe("Workspace deterministic physics validation", () => {
-  it("publishes 1.5 switchable rigid-body intent in the SemaFrame Spatial Graph and reports stable support", () => {
+  it("publishes current switchable rigid-body intent in the SemaFrame Spatial Graph and reports stable support", () => {
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "stable_stack", [
       stage(),
@@ -74,7 +74,7 @@ describe("Workspace deterministic physics validation", () => {
     ]));
 
     const manifest = DEFAULT_COMPONENT_REGISTRY.get("spatial-entity")!;
-    expect(manifest.version).toBe("1.5.0");
+    expect(manifest.version).toBe("1.6.0");
     const spatialGraph = buildSemaFrameSpatialGraph(store.getState());
     expect(spatialGraph.nodes.find((node) => node.id === "TOP")).toMatchObject({
       physics: { enabled: true, bodyType: "dynamic", massKg: 10, stabilityMode: "enforce" },

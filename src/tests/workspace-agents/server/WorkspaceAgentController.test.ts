@@ -23,6 +23,7 @@ import type {
   WorkspacePermissionScope,
   WorkspacePreparedUpdate,
   WorkspaceRealityAssetView,
+  WorkspaceResourceSnapshotView,
   WorkspaceSpatialPlacementView,
   WorkspaceSpatialStateView,
   WorkspacePhysicsPlacementView,
@@ -48,6 +49,7 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
   redoCalls: Array<{ expected: number; principal: WorkspaceAgentPrincipal }> = [];
   readCalls: Array<{ cursor?: string; limit: number }> = [];
   componentInspectionCalls: Array<{ componentId: string; principal: WorkspaceAgentPrincipal }> = [];
+  resourceSnapshotCalls: Array<{ resourceId: string; principal: WorkspaceAgentPrincipal }> = [];
   submitError?: WorkspaceEngineError;
   submitBarrier?: Promise<void>;
 
@@ -141,6 +143,39 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
       omittedTagCount: 0,
       omittedRedactedFieldCount: 0,
       manifestTruncated: false,
+    };
+  }
+
+  readResourceSnapshot(
+    resourceId: string,
+    principal: WorkspaceAgentPrincipal,
+  ): WorkspaceResourceSnapshotView {
+    this.resourceSnapshotCalls.push({ resourceId, principal });
+    if (resourceId === "missing") {
+      throw new WorkspaceEngineError("resource_not_found", "Resource does not exist", {
+        retryable: true,
+        requiredAction: "inspect_workspace",
+      });
+    }
+    return {
+      workspaceId: "workspace_main",
+      revision: this.revision,
+      registryDigest: this.registryDigest,
+      resourceId,
+      label: "Traffic feed",
+      connectorType: "inline.snapshot",
+      connectorVersion: "1.0.0",
+      outputSchema: { type: "object" },
+      status: "ready",
+      snapshotAuthority: "host_normalized",
+      data: { congestion: 0.72 },
+      contentHash: "sha256:canonical-snapshot",
+      retrievedAt: "2026-08-21T08:00:00.000Z",
+      stale: false,
+      provenance: [{
+        publisher: "SemaFrame inline snapshot",
+        retrievedAt: "2026-08-21T08:00:00.000Z",
+      }],
     };
   }
 
@@ -368,7 +403,7 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("2.6");
+    expect(instructions.guide.guide_version).toBe("2.7");
     expect(instructions.guide.protocol_version).toBe("1.3");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),

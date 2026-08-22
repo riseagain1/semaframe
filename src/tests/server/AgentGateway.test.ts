@@ -90,7 +90,7 @@ describe("Agent Gateway browser boundary", () => {
       enabled: false,
       connected: false,
       engineConnected: false,
-      instructionVersion: "2.6",
+      instructionVersion: "2.7",
       csrfToken: expect.any(String),
     }));
     expect(JSON.stringify(payload)).not.toMatch(/pairing|bearer|mcpServers/u);
@@ -304,10 +304,19 @@ describe("Agent Gateway browser boundary", () => {
     expect(await json(external)).toEqual(coreResult);
   });
 
-  it("bridges exact Reality Asset and model inspection through the public REST surface", async () => {
+  it("bridges exact resource snapshot, Reality Asset, and model reads through the public REST surface", async () => {
     const { handle } = setup();
     const browser = await browserSetup(handle);
     const cases = [
+      {
+        path: "/v1/workspace/resources/snapshot/read",
+        body: {
+          session_token: "workspace_session_example",
+          instruction_digest: "workspace_guide_digest",
+          resource_id: "RES_traffic_feed",
+        },
+        name: "read_workspace_resource_snapshot",
+      },
       {
         path: "/v1/workspace/assets/inspect",
         body: {
@@ -350,6 +359,40 @@ describe("Agent Gateway browser boundary", () => {
       expect(external.status).toBe(200);
       expect(await json(external)).toEqual(coreResult);
     }
+  });
+
+  it("preserves structured resource-read domain errors inside the public REST 200 envelope", async () => {
+    const { handle } = setup();
+    const browser = await browserSetup(handle);
+    const pollPromise = browserPost(handle, browser.csrfToken, "/api/agent/browser/poll", {
+      browserConnectionId: browser.browserConnectionId,
+    });
+    const externalPromise = handle(jsonRequest("/v1/workspace/resources/snapshot/read", {
+      session_token: "workspace_session_example",
+      instruction_digest: "workspace_guide_digest",
+      resource_id: "RES_missing",
+    }, {
+      authorization: `Bearer ${browser.bearer}`,
+    }));
+    const poll = await json(await pollPromise);
+    const command = poll.command as Record<string, unknown>;
+    const coreResult = {
+      ok: false,
+      error: {
+        code: "resource_not_found",
+        message: "The resource does not exist.",
+        retryable: true,
+      },
+    };
+    await browserPost(handle, browser.csrfToken, "/api/agent/browser/result", {
+      browserConnectionId: browser.browserConnectionId,
+      commandId: command.id,
+      ok: true,
+      result: coreResult,
+    });
+    const external = await externalPromise;
+    expect(external.status).toBe(200);
+    expect(await json(external)).toEqual(coreResult);
   });
 
   it("requires explicit session and instruction tokens in closed update inputs", async () => {
@@ -590,6 +633,10 @@ describe("Agent Gateway browser boundary", () => {
     const response = await handle(new Request(`${PUBLIC_URL}/openapi.json`));
     const payload = await json(response);
     expect(payload.openapi).toBe("3.1.0");
+    expect(payload.info).toEqual(expect.objectContaining({
+      title: "SemaFrame Agent Gateway",
+      version: "1.1.0",
+    }));
     const serialized = JSON.stringify(payload);
     expect(serialized).toContain("session_token");
     expect(serialized).toContain("instruction_digest");
@@ -598,6 +645,10 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("get_workspace_instructions");
     expect(serialized).toContain("inspect_workspace_component");
     expect(serialized).toContain("inspect_workspace_asset");
+    expect(serialized).toContain("read_workspace_resource_snapshot");
+    expect(serialized).toContain("/workspace/resources/snapshot/read");
+    expect(serialized).toContain("snapshot_authority");
+    expect(serialized).toContain("resource_snapshot_too_large");
     expect(serialized).toContain("/workspace/components/inspect");
     expect(serialized).toContain("component_metadata_truncated");
     expect(serialized).toContain("omitted_binding_count");
@@ -607,7 +658,7 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("AgentResult");
     expect(serialized).toContain("inspect_workspace_model");
     expect(serialized).toContain("/workspace/models/inspect");
-    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(19);
+    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(20);
     expect(payload.paths).toEqual(expect.objectContaining({
       "/assets/imports/begin": expect.any(Object),
       "/assets/imports/cancel": expect.any(Object),
@@ -625,6 +676,21 @@ describe("Agent Gateway browser boundary", () => {
       responses?: { "200"?: { content?: { "application/json"?: { schema?: unknown } } } };
     } | undefined)?.responses?.["200"]?.content?.["application/json"]?.schema;
     expect(beginResponse).toEqual({ $ref: "#/components/schemas/AgentAssetImportResult" });
+    const schemas = (payload.components as {
+      schemas: Record<string, { properties?: Record<string, unknown>; additionalProperties?: unknown }>;
+    }).schemas;
+    const snapshotReadSchema = schemas.ReadWorkspaceResourceSnapshotData!;
+    expect(snapshotReadSchema.additionalProperties).toBe(false);
+    expect(snapshotReadSchema.properties).not.toHaveProperty("config");
+    expect(snapshotReadSchema.properties).not.toHaveProperty("secretRef");
+    expect(snapshotReadSchema.properties).not.toHaveProperty("secret_ref");
+    expect(snapshotReadSchema.properties).not.toHaveProperty("last_error");
+    expect(snapshotReadSchema.properties).toEqual(expect.objectContaining({
+      output_schema: expect.any(Object),
+      status: expect.any(Object),
+      snapshot_authority: { const: "host_normalized" },
+      snapshot: expect.any(Object),
+    }));
     expect(serialized).not.toMatch(/get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u);
     expect(serialized).not.toContain("pairingBearer");
   });

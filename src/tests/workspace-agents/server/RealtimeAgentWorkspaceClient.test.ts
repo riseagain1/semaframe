@@ -239,20 +239,33 @@ describe("RealtimeAgentWorkspaceClient", () => {
       ok: false,
       error: { code: "instructions_required" },
     });
+    expect(await client.readResourceSnapshot("RES_traffic_feed")).toMatchObject({
+      ok: false,
+      error: { code: "instructions_required" },
+    });
     configureConnect(transport);
     await client.connect();
     transport.handler = async (name, input) => ({ ok: true, data: { name, input } });
 
     await client.inspectComponent("CMP_TARGET_061");
+    await client.readResourceSnapshot("RES_traffic_feed");
     await client.readEvents("cursor-4", 20);
     await client.undo(7);
-    expect(transport.calls.slice(-3)).toEqual([
+    expect(transport.calls.slice(-4)).toEqual([
       {
         name: "inspect_workspace_component",
         input: {
           session_token: INSTRUCTIONS.session_token,
           instruction_digest: INSTRUCTIONS.guide_digest,
           component_id: "CMP_TARGET_061",
+        },
+      },
+      {
+        name: "read_workspace_resource_snapshot",
+        input: {
+          session_token: INSTRUCTIONS.session_token,
+          instruction_digest: INSTRUCTIONS.guide_digest,
+          resource_id: "RES_traffic_feed",
         },
       },
       {

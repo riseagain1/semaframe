@@ -192,6 +192,7 @@ describe("Workspace MCP connection offer", () => {
       "query_spatial_placement",
       "query_stable_placement",
       "read_workspace_events",
+      "read_workspace_resource_snapshot",
       "redo_workspace_batch",
       "simulate_workspace_physics",
       "submit_workspace_batch",
