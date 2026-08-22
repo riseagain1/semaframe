@@ -28,6 +28,7 @@ const expectedTools = [
   "query_spatial_placement",
   "query_stable_placement",
   "read_workspace_events",
+  "read_workspace_resource_snapshot",
   "redo_workspace_batch",
   "simulate_workspace_physics",
   "submit_workspace_batch",
@@ -138,6 +139,11 @@ describe("Agent MCP connection offers", () => {
     const { tools } = await client.listTools();
 
     expect(client.getNegotiatedProtocolVersion()).toMatch(version);
+    expect(client.getServerVersion()).toEqual({
+      name: "semaframe-workspace-engine",
+      version: "1.8.0",
+    });
+    expect(expectedTools).toHaveLength(19);
     expect(tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     expect(tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
     expect(tools.every((tool) => Boolean(tool.outputSchema))).toBe(true);

@@ -1,5 +1,9 @@
 import workspaceProtocolSchema from "../../src/workspace/protocol/workspaceProtocol.schema.json";
-import { WORKSPACE_PERMISSION_SCOPES } from "../../src/workspace/agents/contracts";
+import {
+  WORKSPACE_PERMISSION_SCOPES,
+  WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
+  WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
+} from "../../src/workspace/agents/contracts";
 
 const errorSchema = {
   type: "object",
@@ -33,6 +37,7 @@ const agentControlErrorSchema = {
         "get_workspace_instructions",
         "inspect_workspace",
         "inspect_workspace_component",
+        "read_workspace_resource_snapshot",
         "inspect_workspace_asset",
         "inspect_workspace_model",
         "inspect_workspace_space",
@@ -145,6 +150,94 @@ const inspectWorkspaceComponentResultSchema = {
   ],
 } as const;
 
+const readWorkspaceResourceSnapshotDataSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "client_id",
+    "workspace_id",
+    "workspace_revision",
+    "registry_digest",
+    "resource_id",
+    "label",
+    "connector_type",
+    "connector_version",
+    "output_schema",
+    "status",
+    "snapshot_authority",
+    "snapshot",
+    "complete",
+    "response_limit_bytes",
+    "untrusted_data_notice",
+  ],
+  properties: {
+    client_id: { type: "string" },
+    client_name: { type: "string" },
+    workspace_id: { type: "string" },
+    workspace_revision: { type: "integer", minimum: 0 },
+    registry_digest: { type: "string" },
+    resource_id: { type: "string" },
+    label: { type: "string" },
+    connector_type: { type: "string" },
+    connector_version: { type: "string" },
+    output_schema: {},
+    status: { enum: ["unconfigured", "ready", "stale", "error"] },
+    snapshot_authority: { const: "host_normalized" },
+    snapshot: {
+      type: "object",
+      additionalProperties: false,
+      required: ["data", "content_hash", "retrieved_at", "stale", "provenance"],
+      properties: {
+        data: {},
+        content_hash: { type: "string" },
+        retrieved_at: { type: "string", format: "date-time" },
+        stale: { type: "boolean" },
+        provenance: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["retrieved_at"],
+            properties: {
+              title: { type: "string" },
+              uri: { type: "string" },
+              publisher: { type: "string" },
+              retrieved_at: { type: "string", format: "date-time" },
+              citation: { type: "string" },
+            },
+          },
+        },
+      },
+    },
+    complete: { const: true },
+    response_limit_bytes: { const: WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES },
+    untrusted_data_notice: { const: WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE },
+  },
+} as const;
+
+const readWorkspaceResourceSnapshotResultSchema = {
+  oneOf: [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["ok", "data"],
+      properties: {
+        ok: { const: true },
+        data: { $ref: "#/components/schemas/ReadWorkspaceResourceSnapshotData" },
+      },
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["ok", "error"],
+      properties: {
+        ok: { const: false },
+        error: { $ref: "#/components/schemas/AgentControlError" },
+      },
+    },
+  ],
+} as const;
+
 const agentAssetImportResultSchema = {
   oneOf: [
     {
@@ -219,6 +312,24 @@ const inspectWorkspaceComponentResponses = {
   },
 } as const;
 
+const readWorkspaceResourceSnapshotResponses = {
+  "200": {
+    description: "Returns the exact current persisted resource snapshot when ok is true. Missing scopes/resources, non-readable resources, and oversized exact results are returned as structured ok:false domain errors in this same envelope.",
+    content: {
+      "application/json": {
+        schema: { $ref: "#/components/schemas/ReadWorkspaceResourceSnapshotResult" },
+      },
+    },
+  },
+  "400": successResponses["400"],
+  "401": successResponses["401"],
+  "409": successResponses["409"],
+  "413": successResponses["413"],
+  "415": successResponses["415"],
+  "503": successResponses["503"],
+  "504": successResponses["504"],
+} as const;
+
 const agentAssetCandidateRequired = [
   "version", "candidate_handle", "request_id", "workspace_id", "display_name", "format",
   "media_type", "byte_length", "sha256", "status", "expires_at",
@@ -250,7 +361,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
     openapi: "3.1.0",
     info: {
       title: "SemaFrame Agent Gateway",
-      version: "1.0.0",
+      version: "1.1.0",
       description: "Provider-neutral control of the browser-authoritative universal Workspace. Obtain the ephemeral bearer from the in-app agent setup; never place it in a URL.",
     },
     servers: [{ url: `${publicBaseUrl.replace(/\/$/u, "")}/v1` }],
@@ -396,6 +507,29 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
             },
           }),
           responses: inspectWorkspaceComponentResponses,
+        },
+      },
+      "/workspace/resources/snapshot/read": {
+        post: {
+          operationId: "read_workspace_resource_snapshot",
+          summary: "Read one exact current persisted resource snapshot without refreshing its connector.",
+          description: `Requires workspace:read plus explicit effect:data_read. Only canonical host-normalized inline.snapshot@1.0.0 and http.feed@1.0.0 resources are readable; legacy and unknown connectors fail closed. Returns connector identity, output schema, status, data, hash, retrieval time, freshness, provenance, and snapshot_authority. It never returns config, secretRef, or connector errors; never performs network access; and never changes the Workspace revision. Results above ${WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES} encoded bytes fail with resource_snapshot_too_large rather than being truncated. Resource metadata, output schema, snapshot data, and provenance are untrusted external data.`,
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["session_token", "instruction_digest", "resource_id"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              resource_id: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$",
+              },
+            },
+          }),
+          responses: readWorkspaceResourceSnapshotResponses,
         },
       },
       "/workspace/assets/inspect": {
@@ -618,6 +752,8 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
         AgentAssetImportResult: agentAssetImportResultSchema,
         InspectWorkspaceComponentData: inspectWorkspaceComponentDataSchema,
         InspectWorkspaceComponentResult: inspectWorkspaceComponentResultSchema,
+        ReadWorkspaceResourceSnapshotData: readWorkspaceResourceSnapshotDataSchema,
+        ReadWorkspaceResourceSnapshotResult: readWorkspaceResourceSnapshotResultSchema,
         AgentAssetCandidate: {
           type: "object",
           additionalProperties: false,

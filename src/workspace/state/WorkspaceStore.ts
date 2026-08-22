@@ -31,6 +31,7 @@ import {
   type JSONSchema,
   type JSONObject,
   type JSONValue,
+  type World3DPlacement,
   resizePolicyForPlacement,
 } from "../components/componentTypes";
 import { stableStringify } from "../components/manifestDigest";
@@ -46,6 +47,7 @@ import type { EventConnection, ResourceBinding, WorkspaceConnection } from "../d
 import {
   resolveComponentAction,
   type ActionEventDraft,
+  type ComponentActionResolution,
 } from "../runtime/componentActions";
 import {
   findBlockingSpatialCollisions,
@@ -215,6 +217,18 @@ type HistoryEntry = {
 type ResolvedActionEffect = NonNullable<WorkspaceCommandRecord["resolvedActionEffects"]>[number];
 type EventCausation = NonNullable<WorkspaceEvent["causedBy"]>;
 
+function movePlacementFromResolvedEffect(effect: ResolvedActionEffect): World3DPlacement {
+  const movedEvents = effect.events.filter((event) => event.event === "moved");
+  const placement = movedEvents[0]?.payload.placement;
+  if (movedEvents.length !== 1 || !placement || typeof placement !== "object" || Array.isArray(placement)) {
+    throw new WorkspaceStoreError(
+      `Resolved move_to effect ${effect.opId} must contain one canonical moved event`,
+      "invalid_resolved_effect",
+    );
+  }
+  return structuredClone(placement) as unknown as World3DPlacement;
+}
+
 /** Bounds explicit and connection-routed actions inside one atomic revision. */
 export const MAX_ACTION_EFFECTS_PER_COMMIT = 100;
 
@@ -227,6 +241,11 @@ const WORKSPACE_SPATIAL_ENTITY_KINDS = new Set([
   "structure",
   "effect",
   "primitive",
+]);
+const MOVABLE_SPATIAL_TYPE_IDS = new Set([
+  "spatial-entity",
+  "spatial-primitive",
+  "model-assembly",
 ]);
 
 function isWorkspaceSpatialEntityKind(value: unknown): value is string {
@@ -1380,6 +1399,7 @@ export class WorkspaceStore {
     const draftAllocator = this.allocator.clone();
     const resolvedOperations: WorkspaceOperation[] = [];
     const resolvedActionEffects: ResolvedActionEffect[] = [];
+    const movedComponentIds = new Set<string>();
     const replayEffectsByOpId = new Map(
       (replayActionEffects ?? []).map((effect) => [effect.opId, structuredClone(effect)]),
     );
@@ -1444,6 +1464,7 @@ export class WorkspaceStore {
         draftAllocator,
         appendEvents,
         resolvedActionEffects,
+        movedComponentIds,
         replayEffect,
         eventSource,
         causedBy,
@@ -1759,6 +1780,77 @@ export class WorkspaceStore {
     return component;
   }
 
+  /**
+   * Canonical placement reducer shared by explicit place_component operations
+   * and placement-producing component actions. Stage-basis checks happen here;
+   * collision, enforced physics, graph, and finite-Stage physics checks remain
+   * centralized in validateState after the complete draft has reduced.
+   */
+  private applyComponentPlacement(
+    state: WorkspaceState,
+    component: ComponentInstance,
+    manifest: ComponentManifest,
+    placement: ComponentPlacement,
+  ): ComponentPlacement {
+    if (component.locks.placement) {
+      throw new WorkspaceStoreError(`Component ${component.id} placement is locked`, "component_locked");
+    }
+    this.assertPlacementAllowed(manifest, placement);
+    const suppliedPlacement = structuredClone(placement);
+    const resolvedPlacement = materializePlacementGeometry(manifest, placement, component);
+    if (manifest.typeId !== "stage-3d" && placementRequiresStage(resolvedPlacement) && !stageComponent(state)) {
+      throw new WorkspaceStoreError(
+        `${manifest.typeId} requires a stage-3d basis before ${resolvedPlacement.space} placement`,
+        "stage_basis_required",
+      );
+    }
+    const target = placementTarget(resolvedPlacement);
+    if (target && !state.components.has(target)) {
+      throw new WorkspaceStoreError(`Unknown placement target ${target}`, "unknown_component");
+    }
+    const candidate = structuredClone(component);
+    candidate.placement = structuredClone(resolvedPlacement);
+    const currentPolicy = resizePolicyForPlacement(manifest, component.placement);
+    const nextPolicy = resizePolicyForPlacement(manifest, candidate.placement);
+    const policyChanged = !resizePoliciesEqual(currentPolicy, nextPolicy);
+    if (policyChanged) {
+      if (component.locks.resize) {
+        throw new WorkspaceStoreError(`Component ${component.id} resize is locked`, "component_locked");
+      }
+      if (!explicitPlacementGeometryMatches(suppliedPlacement, resolvedPlacement)) {
+        throw new WorkspaceStoreError(
+          "Policy-changing placement must use target default or frozen geometry; resize separately",
+          "resize_requires_resize_component",
+        );
+      }
+    } else {
+      const currentGeometry = componentGeometrySnapshot(component, currentPolicy);
+      const nextGeometry = componentGeometrySnapshot(candidate, nextPolicy);
+      const geometryChanged = stableStringify(currentGeometry) !== stableStringify(nextGeometry);
+      if (!geometryChanged) {
+        assertComponentResizeGeometry(candidate, manifest);
+        component.placement = structuredClone(resolvedPlacement);
+        return structuredClone(resolvedPlacement);
+      }
+      if (component.locks.resize) {
+        throw new WorkspaceStoreError(`Component ${component.id} resize is locked`, "component_locked");
+      }
+      if (nextPolicy.kind === "none") {
+        throw new WorkspaceStoreError(
+          "Fixed component geometry cannot be changed after creation",
+          "resize_not_supported",
+        );
+      }
+      throw new WorkspaceStoreError(
+        "Geometry changes must use resize_component",
+        "resize_requires_resize_component",
+      );
+    }
+    assertComponentResizeGeometry(candidate, manifest, policyChanged);
+    component.placement = structuredClone(resolvedPlacement);
+    return structuredClone(resolvedPlacement);
+  }
+
   private applyOperation(
     state: WorkspaceState,
     operation: WorkspaceOperation,
@@ -1773,6 +1865,7 @@ export class WorkspaceStore {
       causedBy?: EventCausation,
     ) => WorkspaceEvent[],
     actionEffects: ResolvedActionEffect[],
+    movedComponentIds: Set<string>,
     replayEffect?: ResolvedActionEffect,
     eventSource: WorkspaceEvent["source"] = authorization.actor,
     causedBy?: EventCausation,
@@ -2018,61 +2111,8 @@ export class WorkspaceStore {
       }
       case "place_component": {
         const component = this.assertComponent(state, operation.id);
-        if (component.locks.placement) throw new WorkspaceStoreError(`Component ${component.id} placement is locked`, "component_locked");
         const manifest = this.manifestFor(state, component);
-        this.assertPlacementAllowed(manifest, operation.placement);
-        const suppliedPlacement = structuredClone(operation.placement);
-        const resolvedPlacement = materializePlacementGeometry(manifest, operation.placement, component);
-        if (manifest.typeId !== "stage-3d" && placementRequiresStage(resolvedPlacement) && !stageComponent(state)) {
-          throw new WorkspaceStoreError(
-            `${manifest.typeId} requires a stage-3d basis before ${resolvedPlacement.space} placement`,
-            "stage_basis_required",
-          );
-        }
-        const target = placementTarget(resolvedPlacement);
-        if (target && !state.components.has(target)) throw new WorkspaceStoreError(`Unknown placement target ${target}`, "unknown_component");
-        const candidate = structuredClone(component);
-        candidate.placement = structuredClone(resolvedPlacement);
-        const currentPolicy = resizePolicyForPlacement(manifest, component.placement);
-        const nextPolicy = resizePolicyForPlacement(manifest, candidate.placement);
-        const policyChanged = !resizePoliciesEqual(currentPolicy, nextPolicy);
-        if (policyChanged) {
-          if (component.locks.resize) {
-            throw new WorkspaceStoreError(`Component ${component.id} resize is locked`, "component_locked");
-          }
-          if (!explicitPlacementGeometryMatches(suppliedPlacement, resolvedPlacement)) {
-            throw new WorkspaceStoreError(
-              "Policy-changing placement must use target default or frozen geometry; resize separately",
-              "resize_requires_resize_component",
-            );
-          }
-        } else {
-          const currentGeometry = componentGeometrySnapshot(component, currentPolicy);
-          const nextGeometry = componentGeometrySnapshot(candidate, nextPolicy);
-          const geometryChanged = stableStringify(currentGeometry) !== stableStringify(nextGeometry);
-          if (!geometryChanged) {
-            assertComponentResizeGeometry(candidate, manifest);
-            component.placement = structuredClone(resolvedPlacement);
-            operation.placement = structuredClone(resolvedPlacement);
-            return;
-          }
-          if (component.locks.resize) {
-            throw new WorkspaceStoreError(`Component ${component.id} resize is locked`, "component_locked");
-          }
-          if (nextPolicy.kind === "none") {
-            throw new WorkspaceStoreError(
-              "Fixed component geometry cannot be changed after creation",
-              "resize_not_supported",
-            );
-          }
-          throw new WorkspaceStoreError(
-            "Geometry changes must use resize_component",
-            "resize_requires_resize_component",
-          );
-        }
-        assertComponentResizeGeometry(candidate, manifest, policyChanged);
-        component.placement = structuredClone(resolvedPlacement);
-        operation.placement = structuredClone(resolvedPlacement);
+        operation.placement = this.applyComponentPlacement(state, component, manifest, operation.placement);
         return;
       }
       case "resize_component": {
@@ -2180,6 +2220,17 @@ export class WorkspaceStore {
         const manifest = this.manifestFor(state, component);
         const action = manifest.actions[operation.action];
         if (!action) throw new WorkspaceStoreError(`Unknown action ${operation.action} for ${manifest.typeId}`, "unknown_component_action");
+        const isMoveToAction = MOVABLE_SPATIAL_TYPE_IDS.has(manifest.typeId)
+          && operation.action === "move_to";
+        if (isMoveToAction) {
+          if (movedComponentIds.has(component.id)) {
+            throw new WorkspaceStoreError(
+              `Component ${component.id} has more than one move_to target in this commit`,
+              "duplicate_move_target",
+            );
+          }
+          movedComponentIds.add(component.id);
+        }
         const trustedHostSignal = manifest.trustTier === "builtin"
           && manifest.typeId === "spatial-entity"
           && operation.action === "complete_animation"
@@ -2222,11 +2273,20 @@ export class WorkspaceStore {
         if (replayEffect && (replayEffect.componentId !== component.id || replayEffect.opId !== operation.op_id)) {
           throw new WorkspaceStoreError(`Resolved effect does not match ${operation.op_id}`, "invalid_resolved_effect");
         }
-        const resolved = replayEffect
+        if (replayingResolvedOperations && isMoveToAction && !replayEffect) {
+          throw new WorkspaceStoreError(
+            `Resolved move_to effect is missing for ${operation.op_id}`,
+            "invalid_resolved_effect",
+          );
+        }
+        const resolved: ComponentActionResolution = replayEffect
           ? {
             durableState: structuredClone(replayEffect.durableState),
             ...(replayEffect.visibility !== undefined
               ? { visibility: replayEffect.visibility }
+              : {}),
+            ...(isMoveToAction
+              ? { placement: movePlacementFromResolvedEffect(replayEffect) }
               : {}),
             events: replayEffect.events.map((event) => ({
               id: event.id,
@@ -2243,6 +2303,52 @@ export class WorkspaceStore {
         this.effectiveRegistry(state).assertDurableState(component.type, resolved.durableState);
         component.durableState = structuredClone(resolved.durableState);
         if (resolved.visibility !== undefined) component.visibility = resolved.visibility;
+        if (isMoveToAction !== (resolved.placement !== undefined)) {
+          throw new WorkspaceStoreError(
+            `Resolved placement effect does not match ${manifest.typeId}.${operation.action}`,
+            "invalid_resolved_effect",
+          );
+        }
+        if (isMoveToAction && replayEffect && resolved.placement) {
+          assertSchemaValue(
+            action.inputSchema,
+            operation.input,
+            `Invalid replay input for ${manifest.typeId}.${operation.action}`,
+          );
+          const persistedTarget = {
+            space: resolved.placement.space,
+            position: resolved.placement.position,
+            rotation: resolved.placement.rotation,
+          };
+          if (stableStringify(operation.input.target) !== stableStringify(persistedTarget)) {
+            throw new WorkspaceStoreError(
+              `Resolved move_to effect does not match input for ${operation.op_id}`,
+              "invalid_resolved_effect",
+            );
+          }
+        }
+        if (resolved.placement !== undefined) {
+          if (component.placement.space !== "world3d"
+            || stableStringify(component.placement.scale) !== stableStringify(resolved.placement.scale)) {
+            throw new WorkspaceStoreError(
+              `Resolved move_to effect cannot resize ${component.id}`,
+              "invalid_resolved_effect",
+            );
+          }
+          const appliedPlacement = this.applyComponentPlacement(
+            state,
+            component,
+            manifest,
+            resolved.placement,
+          );
+          if (appliedPlacement.space !== "world3d") {
+            throw new WorkspaceStoreError(
+              `Resolved move_to effect left world3d for ${component.id}`,
+              "invalid_resolved_effect",
+            );
+          }
+          resolved.placement = appliedPlacement;
+        }
         const effectCausation = causedBy ?? replayEffect?.causedBy;
         const appended = appendEvents(
           component.id,
@@ -2382,6 +2488,11 @@ export class WorkspaceStore {
         if (target.locks.actions) throw new WorkspaceStoreError(`Component ${target.id} actions are locked`, "component_locked");
         const sourceManifest = this.manifestFor(state, source);
         const targetManifest = this.manifestFor(state, target);
+        if (operation.connection.action === "move_to"
+          && MOVABLE_SPATIAL_TYPE_IDS.has(targetManifest.typeId)
+          && target.locks.placement) {
+          throw new WorkspaceStoreError(`Component ${target.id} placement is locked`, "component_locked");
+        }
         const sourceEventSchema = sourceManifest.events[operation.connection.event];
         if (!sourceEventSchema) {
           throw new WorkspaceStoreError(`Unknown event ${operation.connection.event} for ${sourceManifest.typeId}`, "unknown_component_event");
@@ -2404,6 +2515,22 @@ export class WorkspaceStore {
           targetManifest.actions[operation.connection.action]!,
           `Event connection ${operation.connection.id} targeting ${targetManifest.typeId}.${operation.connection.action}`,
         );
+        if (
+          operation.connection.enabled
+          && operation.connection.action === "move_to"
+          && [...state.connections.values()].some((connection) =>
+            connection.kind === "event_connection"
+            && connection.enabled
+            && connection.sourceComponentId === operation.connection.sourceComponentId
+            && connection.event === operation.connection.event
+            && connection.targetComponentId === operation.connection.targetComponentId
+            && connection.action === "move_to")
+        ) {
+          throw new WorkspaceStoreError(
+            `Event ${operation.connection.sourceComponentId}.${operation.connection.event} already moves ${operation.connection.targetComponentId}`,
+            "duplicate_move_route",
+          );
+        }
         state.connections.set(operation.connection.id, structuredClone(operation.connection));
         try {
           validateWorkspaceGraphs(state);

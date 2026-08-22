@@ -4,6 +4,21 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
+### Added
+
+- `read_workspace_resource_snapshot`, an exact, revision-preserving read of canonical host-normalized inline or HTTP-feed snapshots behind explicit `workspace:read` plus non-default `effect:data_read` approval.
+- A typed, event-routable `move_to` action for current spatial entities, parametric primitives, and model assemblies, with scale preservation, endpoint collision and enforced-physics validation, atomic fan-out, renderer transitions, and deterministic `moved` event replay.
+
+### Changed
+
+- The current public Agent surface advances to 19 MCP tools, Agent Guide 2.7, MCP server 1.8.0, and Agent Gateway OpenAPI 1.1.0.
+- Current-project loading now rebases registry-derived command and history digests through verified replay when append-only built-in manifests change, preserving pre-change Workspace 1.3 projects without weakening history validation.
+
+### Security and reliability
+
+- Resource readback fails closed for legacy or unknown connectors, never refreshes or accesses the network, omits connector configuration, secret references, and connector errors, and returns an exact bounded result or an explicit oversize error without truncation.
+- One component may receive at most one `move_to` endpoint per revision, preventing an intermediate collision from being hidden by a later target in the same atomic commit.
+
 ## [0.3.0] - 2026-08-21
 
 ### Added

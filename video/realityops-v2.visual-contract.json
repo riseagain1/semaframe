@@ -1,0 +1,143 @@
+{
+  "format": "semaframe-realityops-proof-visual-contract",
+  "version": 2,
+  "product": "SemaFrame RealityOps Proof V2",
+  "silentFirst": true,
+  "audioRequiredForComprehension": false,
+  "source": {
+    "composition": "video/src/RealityOpsProofV2.tsx",
+    "captureScript": "scripts/realityops-demo-capture.mjs",
+    "evidence": "video/public/realityops/evidence.json",
+    "assetRoot": "video/public/realityops",
+    "captureFolders": [
+      "immersive-room-frames",
+      "immersive-build-frames",
+      "immersive-collision-frames",
+      "immersive-correction-frames",
+      "immersive-control-frames",
+      "immersive-undo-redo-frames",
+      "immersive-final-frames"
+    ],
+    "stills": [
+      "04-collision-preflight.png",
+      "07-history.png",
+      "08-reopened.png",
+      "09-model-exports.png"
+    ],
+    "frameCountPerFolder": 48,
+    "captureDimensions": {"width": 1600, "height": 900},
+    "compositionSourceSha256": "sha256:d781190e77aaf53d07902a2680ab209beff7d41d31e14f1ca4f1af922c9c984f",
+    "captureScriptSha256": "sha256:56ff3920a43bb4aeca51420c8f03597c2aa525510a503b50f8e069296bb052dc",
+    "evidenceSha256": "sha256:b2880cd7ba508a96a481fe882fa0959fcb35a01adde1031e7a91ecdd1830617c",
+    "captureAssetManifestSha256": "sha256:8ad6a07b39aa2de78b890f0cd87729dbab297032abab641417d9481411fb7552"
+  },
+  "claimBoundary": {
+    "scenario": "synthetic procedural pump room; no source photo, scan, or field measurement",
+    "agent": "authorized deterministic Agent execution; no claim that an LLM autonomously designed the retrofit from one sentence",
+    "telemetry": "deterministic manual inline snapshot; not live plant telemetry",
+    "collision": "bounded geometric endpoint preflight; not continuous-path or safety certification",
+    "physics": "bounded quasi-static rigid-support preflight; not FEA, CFD, vibration, flow, or motor simulation",
+    "action": "button.pressed toggles the 3D beacon visibility; it does not simulate or start a physical pump",
+    "exports": "validated files for the published pump model only; not the complete pump room or manufacturing certification"
+  },
+  "requiredBeats": [
+    "need",
+    "product_definition",
+    "request",
+    "build",
+    "space_read",
+    "collision",
+    "atomic_rejection",
+    "correction",
+    "operate",
+    "persistence",
+    "export",
+    "identity"
+  ],
+  "delivery": {
+    "landscape": {
+      "composition": "SemaFrameRealityOpsProofV2",
+      "posterComposition": "SemaFrameRealityOpsProofV2Poster",
+      "video": "artifacts/semaframe-realityops-v2.mp4",
+      "poster": "artifacts/semaframe-realityops-v2-poster.png",
+      "captions": {
+        "zh-CN": "video/captions/semaframe-realityops-v2.zh-CN.srt",
+        "en-US": "video/captions/semaframe-realityops-v2.en-US.srt"
+      },
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationFrames": 1080,
+      "productComprehensionDeadlineFrame": 135,
+      "safeArea": {"top": 54, "left": 72, "right": 72, "bottom": 54},
+      "titleBounds": {"x": 96, "y": 82, "width": 1010, "height": 210},
+      "proofBounds": {"x": 96, "y": 918, "width": 1120, "height": 76},
+      "boundaryNoteBounds": {"x": 1104, "y": 1000, "width": 720, "height": 22},
+      "beats": [
+        {"id": "need", "from": 0, "duration": 60, "source": "immersive-final-frames:0..15", "title": "工厂要加一台备用泵"},
+        {"id": "product_definition", "from": 60, "duration": 75, "source": "immersive-final-frames:5..24", "title": "这是 SEMAFRAME"},
+        {"id": "request", "from": 135, "duration": 75, "source": "immersive-room-frames:28..47", "title": "我把任务交给 Agent\n“加一台泵，别挡住通道”"},
+        {"id": "build", "from": 210, "duration": 105, "source": "immersive-build-frames:0..47", "title": "Agent 用 7 个部件组成泵组"},
+        {"id": "space_read", "from": 315, "duration": 90, "source": "immersive-collision-frames:0..20", "title": "再读懂房间里的每个对象"},
+        {"id": "collision", "from": 405, "duration": 90, "source": "immersive-collision-frames:17..47", "title": "第一个位置会堵住通道"},
+        {"id": "atomic_rejection", "from": 495, "duration": 75, "source": "04-collision-preflight.png", "title": "所以这次变更\n根本没有发生"},
+        {"id": "correction", "from": 570, "duration": 105, "source": "immersive-correction-frames:0..47", "title": "Agent 换一个位置，重新检查"},
+        {"id": "operate", "from": 675, "duration": 120, "source": "immersive-control-frames:0..47", "title": "数据和按钮\n也能接进这个世界"},
+        {"id": "persistence", "from": 795, "duration": 105, "source": "immersive-undo-redo-frames:0..47 + 07-history.png + 08-reopened.png", "title": "人随时能撤销\n保存后还能继续"},
+        {"id": "export", "from": 900, "duration": 75, "source": "09-model-exports.png", "title": "泵组还能交给其他 3D 工具"},
+        {"id": "identity", "from": 975, "duration": 105, "source": "immersive-final-frames:0..47", "title": "不是生成动画\n而是在修改可编辑的 3D 世界"}
+      ],
+      "overlayBounds": [
+        {"id": "product-anchors", "x": 492, "y": 180, "width": 1248, "height": 590},
+        {"id": "assembly-callouts", "x": 564, "y": 570, "width": 620, "height": 130},
+        {"id": "space-labels", "x": 504, "y": 190, "width": 1236, "height": 550},
+        {"id": "collision-mark", "x": 770, "y": 476, "width": 450, "height": 390},
+        {"id": "correction-receipt", "x": 1240, "y": 780, "width": 200, "height": 100},
+        {"id": "data-action-links", "x": 930, "y": 185, "width": 820, "height": 800},
+        {"id": "history-states", "x": 96, "y": 750, "width": 510, "height": 58}
+      ]
+    },
+    "vertical": {
+      "composition": "SemaFrameRealityOpsProofV2Vertical",
+      "posterComposition": "SemaFrameRealityOpsProofV2VerticalPoster",
+      "video": "artifacts/semaframe-realityops-v2-vertical.mp4",
+      "poster": "artifacts/semaframe-realityops-v2-vertical-poster.png",
+      "captions": {
+        "zh-CN": "video/captions/semaframe-realityops-v2-vertical.zh-CN.srt",
+        "en-US": "video/captions/semaframe-realityops-v2-vertical.en-US.srt"
+      },
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "durationFrames": 960,
+      "productComprehensionDeadlineFrame": 105,
+      "safeArea": {"top": 120, "left": 60, "right": 60, "bottom": 180},
+      "titleBounds": {"x": 60, "y": 140, "width": 960, "height": 210},
+      "proofBounds": {"x": 60, "y": 1580, "width": 960, "height": 92},
+      "boundaryNoteBounds": {"x": 60, "y": 1695, "width": 960, "height": 30},
+      "beats": [
+        {"id": "need", "from": 0, "duration": 45, "source": "immersive-final-frames:0..15", "title": "工厂要加一台备用泵"},
+        {"id": "product_definition", "from": 45, "duration": 60, "source": "immersive-final-frames:5..24", "title": "这是 SEMAFRAME"},
+        {"id": "request", "from": 105, "duration": 60, "source": "immersive-room-frames:28..47", "title": "我把任务交给 Agent\n“加一台泵，别挡住通道”"},
+        {"id": "build", "from": 165, "duration": 90, "source": "immersive-build-frames:0..47", "title": "Agent 用 7 个部件组成泵组"},
+        {"id": "space_read", "from": 255, "duration": 75, "source": "immersive-collision-frames:0..20", "title": "再读懂房间里的每个对象"},
+        {"id": "collision", "from": 330, "duration": 75, "source": "immersive-collision-frames:17..47", "title": "第一个位置会堵住通道"},
+        {"id": "atomic_rejection", "from": 405, "duration": 60, "source": "04-collision-preflight.png", "title": "所以这次变更\n根本没有发生"},
+        {"id": "correction", "from": 465, "duration": 90, "source": "immersive-correction-frames:0..47", "title": "Agent 换一个位置，重新检查"},
+        {"id": "operate", "from": 555, "duration": 105, "source": "immersive-control-frames:0..47", "title": "数据和按钮\n也能接进这个世界"},
+        {"id": "persistence", "from": 660, "duration": 90, "source": "immersive-undo-redo-frames:0..47 + 07-history.png + 08-reopened.png", "title": "人随时能撤销\n保存后还能继续"},
+        {"id": "export", "from": 750, "duration": 75, "source": "09-model-exports.png", "title": "泵组还能交给其他 3D 工具"},
+        {"id": "identity", "from": 825, "duration": 135, "source": "immersive-final-frames:0..47", "title": "不是生成动画\n而是在修改可编辑的 3D 世界"}
+      ],
+      "overlayBounds": [
+        {"id": "product-anchors", "x": 306, "y": 480, "width": 630, "height": 310},
+        {"id": "assembly-callouts", "x": 342, "y": 680, "width": 330, "height": 90},
+        {"id": "space-labels", "x": 312, "y": 480, "width": 624, "height": 300},
+        {"id": "collision-mark", "x": 438, "y": 620, "width": 234, "height": 210},
+        {"id": "correction-receipt", "x": 642, "y": 770, "width": 170, "height": 90},
+        {"id": "data-action-links", "x": 510, "y": 480, "width": 430, "height": 420},
+        {"id": "history-states", "x": 60, "y": 1495, "width": 550, "height": 58}
+      ]
+    }
+  }
+}

@@ -9,6 +9,7 @@ export const AGENT_GATEWAY_COMMAND_NAMES = [
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_component",
+  "read_workspace_resource_snapshot",
   "inspect_workspace_asset",
   "inspect_workspace_model",
   "inspect_workspace_space",

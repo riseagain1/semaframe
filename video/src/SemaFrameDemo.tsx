@@ -179,7 +179,7 @@ const SSGScene = ({ duration }: { duration: number }) => {
       <AbsoluteFill style={{ padding: "92px 110px" }}>
         <div style={{ width: 720 }}>
           <Kicker>05 · Understand space</Kicker>
-          <Title style={{ fontSize: 82, marginTop: 20 }}>SemaFrame Spatial Graph 3.0</Title>
+          <Title style={{ fontSize: 82, marginTop: 20 }}>SemaFrame Spatial Graph 3.1</Title>
           <Body style={{ marginTop: 32 }}>Revision-bound identity, transforms, world bounds, colliders and spatial relations—not a screenshot guess.</Body>
           <div style={{ display: "flex", gap: 12, marginTop: 40 }}>
             <Badge tone="ink">REVISION 2</Badge>

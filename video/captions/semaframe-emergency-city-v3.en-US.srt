@@ -1,0 +1,53 @@
+1
+00:00:00,000 --> 00:00:03,000
+Ambulance: 28 seconds.
+Only route blocked.
+
+2
+00:00:03,000 --> 00:00:05,500
+Open the emergency route.
+Avoid every collision.
+
+3
+00:00:05,500 --> 00:00:08,500
+AI reads data and space.
+Snapshot read; scene unchanged.
+
+4
+00:00:08,500 --> 00:00:12,000
+Tree collision predicted.
+Preflight rejects; revision unchanged.
+
+5
+00:00:12,000 --> 00:00:15,000
+Five safe endpoints found.
+Host preflight: 5/5 passed.
+
+6
+00:00:15,000 --> 00:00:17,000
+Human confirms once.
+Real button.
+
+7
+00:00:17,000 --> 00:00:20,000
+One click coordinates the city.
+11 actions · 1 atomic commit.
+
+8
+00:00:20,000 --> 00:00:22,500
+Vehicles move; signals switch.
+
+9
+00:00:22,500 --> 00:00:25,000
+Ambulance reaches hospital.
+0 collisions; route open.
+
+10
+00:00:25,000 --> 00:00:29,000
+Undo, redo, save, and reopen.
+All checks pass.
+
+11
+00:00:29,000 --> 00:00:32,000
+AI operates the world.
+SEMAFRAME · OPEN SOURCE ON GITHUB

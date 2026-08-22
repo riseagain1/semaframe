@@ -1,0 +1,59 @@
+1
+00:00:00,000 --> 00:00:01,500
+Add a backup pump.
+Keep the aisle clear.
+
+2
+00:00:01,500 --> 00:00:03,500
+This is SemaFrame:
+an AI-operable 2D + 3D workspace.
+
+3
+00:00:03,500 --> 00:00:05,500
+One Agent task:
+“Add a pump. Keep the aisle clear.”
+
+4
+00:00:05,500 --> 00:00:08,500
+Seven editable parts become
+one reusable pump model.
+
+5
+00:00:08,500 --> 00:00:11,000
+It reads positions, colliders,
+and the protected aisle.
+
+6
+00:00:11,000 --> 00:00:13,500
+First candidate:
+one aisle conflict.
+
+7
+00:00:13,500 --> 00:00:15,500
+Rejected.
+Revision 10 stays unchanged.
+
+8
+00:00:15,500 --> 00:00:18,500
+New position: zero conflicts.
+Bounded physics is feasible.
+
+9
+00:00:18,500 --> 00:00:22,000
+A data snapshot fills the 2D chart.
+The button toggles the 3D beacon.
+
+10
+00:00:22,000 --> 00:00:25,000
+Undo. Redo. Save. Reopen.
+The world remains editable.
+
+11
+00:00:25,000 --> 00:00:27,500
+Published pump only:
+validated OpenUSD + STEP.
+
+12
+00:00:27,500 --> 00:00:32,000
+Not a generated animation.
+An Agent is editing a saveable 3D world.

@@ -7,6 +7,7 @@ export const WORKSPACE_REST_PATHS = Object.freeze({
   get_workspace_instructions: "/v1/workspace/instructions",
   inspect_workspace: "/v1/workspace/inspect",
   inspect_workspace_component: "/v1/workspace/components/inspect",
+  read_workspace_resource_snapshot: "/v1/workspace/resources/snapshot/read",
   inspect_workspace_asset: "/v1/workspace/assets/inspect",
   inspect_workspace_model: "/v1/workspace/models/inspect",
   inspect_workspace_space: "/v1/workspace/space/inspect",
@@ -98,7 +99,11 @@ function statusForResult(result: WorkspaceAgentResult<unknown>): number {
   const { code } = result.error;
   if (code === "instructions_required" || code === "session_expired") return 401;
   if (code === "instruction_digest_mismatch" || code === "permission_denied" || code === "destructive_permission_required") return 403;
+  if (code === "resource_not_found") return 404;
+  if (code === "resource_snapshot_unavailable") return 409;
+  if (code === "resource_snapshot_not_readable") return 422;
   if (/stale|transaction|retry_mismatch|envelope_mismatch|session_mismatch/u.test(code)) return 409;
+  if (code === "resource_snapshot_too_large") return 413;
   if (/invalid|validation|unsupported/u.test(code)) return 422;
   return 500;
 }

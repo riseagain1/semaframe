@@ -118,6 +118,39 @@ describe("Workspace Agent host-feed handoff", () => {
         name: "inspect_workspace",
         arguments: session,
       }));
+      const dataReadInstructions = data(await client.callTool({
+        name: "get_workspace_instructions",
+        arguments: {
+          client_id: "host-feed-data-reader",
+          requested_scopes: ["workspace:read", "effect:data_read"],
+        },
+      }));
+      const exactFeed = data(await client.callTool({
+        name: "read_workspace_resource_snapshot",
+        arguments: {
+          session_token: String(dataReadInstructions.session_token),
+          instruction_digest: String(dataReadInstructions.guide_digest),
+          resource_id: hostFeed.id,
+        },
+      }));
+      expect(exactFeed).toMatchObject({
+        resource_id: hostFeed.id,
+        connector_type: "http.feed",
+        snapshot_authority: "host_normalized",
+        snapshot: {
+          data: { items: [{ symbol: "ACME", price: 188.4 }] },
+          content_hash: hostFeed.snapshot!.contentHash,
+          retrieved_at: hostFeed.snapshot!.retrievedAt,
+          stale: false,
+          provenance: [{
+            publisher: "feeds.example.org",
+            retrieved_at: hostFeed.snapshot!.retrievedAt,
+          }],
+        },
+        complete: true,
+      });
+      expect(exactFeed).not.toHaveProperty("config");
+      expect(exactFeed).not.toHaveProperty("secretRef");
       expect(inspected.workspace_summary).toMatchObject({
         resource_count: 1,
         resources: [expect.objectContaining({

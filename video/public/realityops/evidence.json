@@ -1,0 +1,169 @@
+{
+  "format": "semaframe-realityops-demo-evidence",
+  "version": 1,
+  "syntheticBaseline": true,
+  "sourcePhotosOrScansUsed": false,
+  "claimBoundary": {
+    "telemetry": "deterministic inline snapshot replay",
+    "physics": "bounded quasi-static preflight, not certification",
+    "exports": "published pump model only"
+  },
+  "collisionPreflight": {
+    "valid": false,
+    "candidateId": "__SPATIAL_CANDIDATE__",
+    "conflicts": [
+      {
+        "component_id": "__SPATIAL_CANDIDATE__",
+        "conflicts_with": "CMP_000006",
+        "overlap": {
+          "x": 1.6,
+          "y": 0.06,
+          "z": 1.54
+        }
+      }
+    ],
+    "suggestedPlacements": [
+      {
+        "space": "world3d",
+        "position": {
+          "x": -2.04,
+          "y": 0.875,
+          "z": 0
+        },
+        "rotation": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      {
+        "space": "world3d",
+        "position": {
+          "x": 2.04,
+          "y": 0.875,
+          "z": 0
+        },
+        "rotation": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    ],
+    "rejectedBatchCode": "spatial_collision",
+    "revisionBeforeRejection": 10,
+    "revisionAfterRejection": 10,
+    "atomic": true
+  },
+  "correctedWorkspace": {
+    "revision": 15,
+    "ssgFormat": "semaframe-spatial-graph",
+    "ssgVersion": "3.1",
+    "collisionConflictCount": 0,
+    "physicsVersion": "2.0",
+    "physicsModel": "quasi_static_rigid_support_v2",
+    "physicsFeasible": true,
+    "physicsIssueCodes": []
+  },
+  "model": {
+    "modelId": "com.semaframe.realityops.pump-skid",
+    "version": "1.0.0",
+    "digest": "fnv1a32:3877c8c8",
+    "nodeCount": 8,
+    "sourceRootId": "CMP_000043",
+    "instanceRootId": "CMP_000110",
+    "editableSourceAndInstance": true
+  },
+  "dataAndAction": {
+    "resourceId": "RES_p102_vibration",
+    "resourceMode": "manual",
+    "bindingIds": [
+      "BIND_p102_labels",
+      "BIND_p102_series"
+    ],
+    "eventConnectionId": "EVENT_start_p102",
+    "action": "button.pressed -> beacon.toggle_visibility"
+  },
+  "persistence": {
+    "projectSha256": "sha256:b00c44a515f2db99969c9d55df66b5c0d487130dd708c1e8a4bb79692b6e27fc",
+    "savedRevision": 15,
+    "reopenedRevision": 15,
+    "savedComponentCount": 37,
+    "reopenedComponentCount": 37,
+    "preserved": true
+  },
+  "exports": {
+    "usda": {
+      "filename": "com.semaframe.realityops.pump-skid-1.0.0.usda",
+      "byteLength": 12302,
+      "sha256": "sha256:d02cc67f903a8a3014b044838b9de0ee5b375c47e3ad1493ee3d2458a21a90bf",
+      "valid": true
+    },
+    "step": {
+      "filename": "com.semaframe.realityops.pump-skid-1.0.0.step",
+      "byteLength": 101663,
+      "sha256": "sha256:9e6559deea2f5d853b25da3bf24ea58558274f5603369475f5f72a23b5733adc",
+      "valid": true
+    }
+  },
+  "captures": {
+    "viewport": {
+      "width": 1600,
+      "height": 900
+    },
+    "frameCountPerSequence": 48,
+    "sequences": [
+      "build-frames",
+      "correction-frames",
+      "control-frames",
+      "undo-redo-frames"
+    ],
+    "frameCounts": {
+      "build-frames": 48,
+      "correction-frames": 48,
+      "control-frames": 48,
+      "undo-redo-frames": 48
+    },
+    "immersive": {
+      "fullscreen": true,
+      "frameCountPerSequence": 48,
+      "sequences": [
+        "immersive-room-frames",
+        "immersive-build-frames",
+        "immersive-collision-frames",
+        "immersive-correction-frames",
+        "immersive-control-frames",
+        "immersive-undo-redo-frames",
+        "immersive-final-frames"
+      ],
+      "frameCounts": {
+        "immersive-room-frames": 48,
+        "immersive-build-frames": 48,
+        "immersive-collision-frames": 48,
+        "immersive-correction-frames": 48,
+        "immersive-control-frames": 48,
+        "immersive-undo-redo-frames": 48,
+        "immersive-final-frames": 48
+      },
+      "stagedVisibleStateCounts": {
+        "immersive-room-frames": 5,
+        "immersive-build-frames": 5,
+        "immersive-collision-frames": 3,
+        "immersive-correction-frames": 3,
+        "immersive-control-frames": 3,
+        "immersive-undo-redo-frames": 3
+      },
+      "finalOrbitFrameCount": 48
+    }
+  }
+}

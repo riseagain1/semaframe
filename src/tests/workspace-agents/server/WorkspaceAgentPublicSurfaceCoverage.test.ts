@@ -105,6 +105,7 @@ describe("public Workspace Agent surface", () => {
 
     try {
       const listed = await client.listTools();
+      expect(WORKSPACE_AGENT_TOOL_NAMES).toHaveLength(19);
       expect(listed.tools.map(({ name }) => name).sort()).toEqual(
         [...WORKSPACE_AGENT_TOOL_NAMES].sort(),
       );
@@ -356,6 +357,25 @@ describe("public Workspace Agent surface", () => {
           componentIds: [firstTimerId, secondTimerId],
         },
       }]);
+
+      const exactResourceSnapshot = data(await client.callTool({
+        name: "read_workspace_resource_snapshot",
+        arguments: { ...session, resource_id: "resource_feed" },
+      }));
+      expect(exactResourceSnapshot).toMatchObject({
+        workspace_revision: 3,
+        resource_id: "resource_feed",
+        connector_type: "inline.snapshot",
+        snapshot_authority: "host_normalized",
+        snapshot: {
+          data: "Public feed",
+          stale: false,
+          provenance: [expect.objectContaining({
+            publisher: "SemaFrame inline snapshot",
+          })],
+        },
+        complete: true,
+      });
 
       const events = data(await client.callTool({
         name: "read_workspace_events",

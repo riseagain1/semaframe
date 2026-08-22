@@ -1,0 +1,253 @@
+{
+  "blockers": [
+    {
+      "component_id": "CMP_000097",
+      "reason": "Blue sedan is visible in the emergency avenue exclusion band centered at z=-0.9."
+    },
+    {
+      "component_id": "CMP_000104",
+      "reason": "Yellow taxi is visible in the emergency avenue exclusion band centered at z=-0.9."
+    },
+    {
+      "component_id": "CMP_000111",
+      "reason": "City bus is visible in the emergency avenue exclusion band centered at z=-0.9."
+    },
+    {
+      "component_id": "CMP_000118",
+      "reason": "Red compact is visible in the emergency avenue exclusion band centered at z=-0.9."
+    }
+  ],
+  "claim_boundaries": [
+    "This plan uses only the supplied authoritative planner context and component action permissions.",
+    "All move_to endpoints are proposals, not approvals; the host must reject the plan unless every endpoint passes query_spatial_placement at workspace revision 10.",
+    "Collision and physics are not disabled or bypassed.",
+    "No claim is made that proposed endpoints are collision-free until host preflight validates them."
+  ],
+  "control": {
+    "actions": [
+      {
+        "action": "move_to",
+        "action_id": "move_blue_sedan_to_safe_bay",
+        "input": {
+          "target": {
+            "position": {
+              "x": 4.4,
+              "y": 0.24,
+              "z": 3.65
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "space": "world3d"
+          }
+        },
+        "rationale": "Assigns the blue sedan to a distinct northern safe bay while preserving rotation, scale, and ground-contact height.",
+        "requires_spatial_preflight": true,
+        "target_component_id": "CMP_000097"
+      },
+      {
+        "action": "move_to",
+        "action_id": "move_taxi_to_safe_bay",
+        "input": {
+          "target": {
+            "position": {
+              "x": 1.1,
+              "y": 0.24,
+              "z": -3.65
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "space": "world3d"
+          }
+        },
+        "rationale": "Assigns the taxi to a distinct southern safe bay outside the avenue exclusion band.",
+        "requires_spatial_preflight": true,
+        "target_component_id": "CMP_000104"
+      },
+      {
+        "action": "move_to",
+        "action_id": "move_bus_to_safe_bay",
+        "input": {
+          "target": {
+            "position": {
+              "x": -3.1,
+              "y": 0.24,
+              "z": 3.65
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "space": "world3d"
+          }
+        },
+        "rationale": "Assigns the larger bus to the distinct wider safe bay and preserves its observed placement height.",
+        "requires_spatial_preflight": true,
+        "target_component_id": "CMP_000111"
+      },
+      {
+        "action": "move_to",
+        "action_id": "move_red_compact_to_safe_bay",
+        "input": {
+          "target": {
+            "position": {
+              "x": -6.3,
+              "y": 0.24,
+              "z": -3.65
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "space": "world3d"
+          }
+        },
+        "rationale": "Assigns the red compact to the remaining distinct safe bay outside the avenue exclusion band.",
+        "requires_spatial_preflight": true,
+        "target_component_id": "CMP_000118"
+      },
+      {
+        "action": "move_to",
+        "action_id": "move_ambulance_to_hospital_arrival",
+        "input": {
+          "target": {
+            "position": {
+              "x": -9.45,
+              "y": 0.24,
+              "z": -0.85
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "space": "world3d"
+          }
+        },
+        "rationale": "Places AMB-07 at the hospital arrival pad center while preserving observed rotation, scale, and ground-contact height.",
+        "requires_spatial_preflight": true,
+        "target_component_id": "CMP_000082"
+      },
+      {
+        "action": "hide",
+        "action_id": "hide_blocked_route_visual",
+        "input": {
+          "target": null
+        },
+        "rationale": "Removes the blocked-route visual once the corridor is proposed clear.",
+        "requires_spatial_preflight": false,
+        "target_component_id": "CMP_000005"
+      },
+      {
+        "action": "show",
+        "action_id": "show_open_route_visual",
+        "input": {
+          "target": null
+        },
+        "rationale": "Shows the open-route visual for the proposed cleared corridor.",
+        "requires_spatial_preflight": false,
+        "target_component_id": "CMP_000006"
+      },
+      {
+        "action": "hide",
+        "action_id": "hide_red_signal_1",
+        "input": {
+          "target": null
+        },
+        "rationale": "Turns off the first red emergency stop signal.",
+        "requires_spatial_preflight": false,
+        "target_component_id": "CMP_000078"
+      },
+      {
+        "action": "hide",
+        "action_id": "hide_red_signal_2",
+        "input": {
+          "target": null
+        },
+        "rationale": "Turns off the second red emergency stop signal.",
+        "requires_spatial_preflight": false,
+        "target_component_id": "CMP_000079"
+      },
+      {
+        "action": "show",
+        "action_id": "show_green_signal_1",
+        "input": {
+          "target": null
+        },
+        "rationale": "Turns on the first green emergency go signal.",
+        "requires_spatial_preflight": false,
+        "target_component_id": "CMP_000080"
+      },
+      {
+        "action": "show",
+        "action_id": "show_green_signal_2",
+        "input": {
+          "target": null
+        },
+        "rationale": "Turns on the second green emergency go signal.",
+        "requires_spatial_preflight": false,
+        "target_component_id": "CMP_000081"
+      }
+    ],
+    "source_component_id": "CMP_000129",
+    "source_event": "pressed"
+  },
+  "execution_policy": {
+    "collision_policy": "preserve",
+    "commit_mode": "validate_then_atomic",
+    "endpoint_validation": "query_spatial_placement_required"
+  },
+  "objective_summary": "Clear all civilian vehicles from the central emergency avenue, move AMB-07 into the hospital arrival zone, and switch route and signal visuals through the pressed control.",
+  "observed_constraints": {
+    "current_clearance_m": 1.6,
+    "eta_seconds": 28,
+    "required_clearance_m": 3.2,
+    "route_status": "blocked"
+  },
+  "plan_version": "1.0",
+  "source": {
+    "dispatch_snapshot_hash": "fnv1a32:7f082125",
+    "registry_digest": "fnv1a32:8a4109fb",
+    "workspace_id": "workspace_main",
+    "workspace_revision": 10
+  },
+  "success_criteria": [
+    "Every civilian blocker endpoint passes host query_spatial_placement at workspace revision 10.",
+    "Each civilian blocker is assigned to a different listed safe-bay component and remains wholly outside the emergency avenue exclusion band.",
+    "AMB-07 endpoint passes host query_spatial_placement and fits wholly inside the hospital arrival zone.",
+    "Blocked-route and red-signal visuals are hidden, and open-route and green-signal visuals are shown.",
+    "All approved actions commit atomically from CMP_000129 pressed while preserving collision."
+  ]
+}

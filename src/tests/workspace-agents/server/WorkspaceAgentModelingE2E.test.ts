@@ -192,7 +192,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
       const primitiveManifest = advertised.component_types.find(({ typeId }) => typeId === "spatial-primitive");
       expect(stageManifest).toMatchObject({ version: expect.any(String), digest: expect.any(String) });
       expect(assemblyManifest).toMatchObject({
-        version: "1.0.0",
+        version: "1.1.0",
         allowedPlacements: ["world3d"],
         defaultProps: { description: "", collisionPolicy: "external_only" },
         propsSchema: {
@@ -204,7 +204,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
         },
       });
       expect(primitiveManifest).toMatchObject({
-        version: "1.0.0",
+        version: "1.1.0",
         allowedPlacements: ["world3d"],
         propsSchema: {
           additionalProperties: false,

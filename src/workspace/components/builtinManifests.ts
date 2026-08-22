@@ -131,6 +131,21 @@ function spatialVectorSchema(positive = false): JSONSchema {
   }, ["x", "y", "z"]);
 }
 
+const moveToTargetSchema = objectSchema({
+  space: { const: "world3d" },
+  position: spatialVectorSchema(),
+  rotation: spatialVectorSchema(),
+}, ["space", "position", "rotation"]);
+
+const moveToInputSchema = objectSchema({ target: moveToTargetSchema }, ["target"]);
+
+const movedEventSchema = objectSchema({
+  placement: objectSchema({
+    ...(moveToTargetSchema.properties as Record<string, unknown>),
+    scale: spatialVectorSchema(true),
+  }, ["space", "position", "rotation", "scale"]),
+}, ["placement"]);
+
 function currentSpatialCollisionSchema(): JSONSchema {
   const vectorSchema = spatialVectorSchema();
   const positiveVectorSchema = spatialVectorSchema(true);
@@ -1199,6 +1214,39 @@ const SWITCHABLE_PHYSICS_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest
   switchablePhysicsSpatialManifest(PHYSICS_AWARE_BUILTIN_COMPONENT_MANIFESTS[0]!),
 ]);
 
+/**
+ * Current spatial contracts expose one bounded, event-routable movement
+ * action. The input deliberately omits scale so a route cannot resize a
+ * component as a side effect; the Store records the complete placement in the
+ * declared moved event.
+ */
+function movableSpatialManifest(previous: ComponentManifest, version: string): ComponentManifest {
+  const { digest: _previousDigest, ...previousContent } = previous;
+  const content: Omit<ComponentManifest, "digest"> = {
+    ...structuredClone(previousContent),
+    version,
+    actions: {
+      ...structuredClone(previous.actions),
+      move_to: {
+        inputSchema: structuredClone(moveToInputSchema),
+        effectClass: "semantic",
+        requiredPermissions: ["component:update"],
+      },
+    },
+    events: {
+      ...structuredClone(previous.events),
+      moved: structuredClone(movedEventSchema),
+    },
+  };
+  return Object.freeze({ ...content, digest: deterministicDigest(content) });
+}
+
+const MOVABLE_SPATIAL_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.freeze([
+  movableSpatialManifest(SWITCHABLE_PHYSICS_BUILTIN_COMPONENT_MANIFESTS[0]!, "1.6.0"),
+  movableSpatialManifest(spatialPrimitive, "1.1.0"),
+  movableSpatialManifest(modelAssembly, "1.1.0"),
+]);
+
 function legacyCompatibilityPolicy(policy: ComponentResizePolicy): ComponentResizePolicy {
   if (policy.kind === "none") return { kind: "none", mode: "none" };
   if (policy.kind === "box2d") {
@@ -1271,6 +1319,7 @@ export const BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.
   ...COLLISION_AWARE_BUILTIN_COMPONENT_MANIFESTS,
   ...PHYSICS_AWARE_BUILTIN_COMPONENT_MANIFESTS,
   ...SWITCHABLE_PHYSICS_BUILTIN_COMPONENT_MANIFESTS,
+  ...MOVABLE_SPATIAL_BUILTIN_COMPONENT_MANIFESTS,
   ...MODELING_BUILTIN_COMPONENT_MANIFESTS,
 ]);
 

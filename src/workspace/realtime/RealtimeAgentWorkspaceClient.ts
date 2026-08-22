@@ -2,6 +2,7 @@ import type {
   BeginWorkspaceUpdateData,
   InspectWorkspaceComponentData,
   InspectWorkspaceData,
+  ReadWorkspaceResourceSnapshotData,
   InspectWorkspaceSpaceData,
   QuerySpatialPlacementData,
   InspectWorkspacePhysicsData,
@@ -175,6 +176,17 @@ export class RealtimeAgentWorkspaceClient {
     return this.transport.call<InspectWorkspaceComponentData>("inspect_workspace_component", {
       ...session,
       component_id: componentId,
+    });
+  }
+
+  async readResourceSnapshot(
+    resourceId: string,
+  ): Promise<WorkspaceAgentResult<ReadWorkspaceResourceSnapshotData>> {
+    const session = sessionInput(this.session);
+    if ("ok" in session) return session;
+    return this.transport.call<ReadWorkspaceResourceSnapshotData>("read_workspace_resource_snapshot", {
+      ...session,
+      resource_id: resourceId,
     });
   }
 

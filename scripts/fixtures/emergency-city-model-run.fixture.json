@@ -1,0 +1,191 @@
+{
+  "fixture_version": "1.0",
+  "model": "offline-deterministic-planner-fixture-v1",
+  "generated_at": "2026-08-22T00:00:00.000Z",
+  "trace_events": [
+    {
+      "type": "thread.started",
+      "thread_id": "fixture_emergency_city_thread"
+    },
+    {
+      "type": "turn.started"
+    },
+    {
+      "type": "item.completed",
+      "item": {
+        "id": "fixture_message_1",
+        "type": "agent_message",
+        "text": "A strict EmergencyPlan was produced from the supplied authoritative context."
+      }
+    },
+    {
+      "type": "turn.completed",
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0
+      }
+    }
+  ],
+  "plan": {
+    "plan_version": "1.0",
+    "source": {
+      "workspace_id": "WS_emergency_city_fixture",
+      "workspace_revision": 3,
+      "registry_digest": "registry:fixture-v1",
+      "dispatch_snapshot_hash": "fnv1a32:fixture-dispatch"
+    },
+    "objective_summary": "Clear the central avenue by relocating its four civilian blockers, switch the route indication to open, and dispatch AMB-07 toward the hospital staging endpoint through one pressed control.",
+    "observed_constraints": {
+      "eta_seconds": 28,
+      "current_clearance_m": 1.6,
+      "required_clearance_m": 3.2,
+      "route_status": "blocked"
+    },
+    "blockers": [
+      {
+        "component_id": "CMP_BLUE",
+        "reason": "Its current bounds occupy the incident approach lane."
+      },
+      {
+        "component_id": "CMP_TAXI",
+        "reason": "Its current bounds narrow the same central lane."
+      },
+      {
+        "component_id": "CMP_BUS",
+        "reason": "Its longer bounds obstruct the middle of the corridor."
+      },
+      {
+        "component_id": "CMP_RED",
+        "reason": "Its current bounds obstruct the hospital-side segment."
+      }
+    ],
+    "control": {
+      "source_component_id": "CMP_CONTROL",
+      "source_event": "pressed",
+      "actions": [
+        {
+          "action_id": "move_blue_to_north_bay",
+          "target_component_id": "CMP_BLUE",
+          "action": "move_to",
+          "input": {
+            "target": {
+              "space": "world3d",
+              "position": { "x": 4, "y": 0, "z": 3.8 },
+              "rotation": { "x": 0, "y": 0, "z": 0 },
+              "scale": { "x": 1, "y": 1, "z": 1 }
+            }
+          },
+          "requires_spatial_preflight": true,
+          "rationale": "Move the sedan out of the avenue while avoiding the protected tree's occupied bounds."
+        },
+        {
+          "action_id": "move_taxi_to_south_bay",
+          "target_component_id": "CMP_TAXI",
+          "action": "move_to",
+          "input": {
+            "target": {
+              "space": "world3d",
+              "position": { "x": 1, "y": 0, "z": -3.8 },
+              "rotation": { "x": 0, "y": 0, "z": 0 },
+              "scale": { "x": 1, "y": 1, "z": 1 }
+            }
+          },
+          "requires_spatial_preflight": true,
+          "rationale": "Use the south curb zone to remove the taxi from the corridor."
+        },
+        {
+          "action_id": "move_bus_to_north_bay",
+          "target_component_id": "CMP_BUS",
+          "action": "move_to",
+          "input": {
+            "target": {
+              "space": "world3d",
+              "position": { "x": -3, "y": 0, "z": 3.8 },
+              "rotation": { "x": 0, "y": 0, "z": 0 },
+              "scale": { "x": 1, "y": 1, "z": 1 }
+            }
+          },
+          "requires_spatial_preflight": true,
+          "rationale": "Move the longest blocker fully outside the avenue."
+        },
+        {
+          "action_id": "move_red_to_south_bay",
+          "target_component_id": "CMP_RED",
+          "action": "move_to",
+          "input": {
+            "target": {
+              "space": "world3d",
+              "position": { "x": -6.5, "y": 0, "z": -3.8 },
+              "rotation": { "x": 0, "y": 0, "z": 0 },
+              "scale": { "x": 1, "y": 1, "z": 1 }
+            }
+          },
+          "requires_spatial_preflight": true,
+          "rationale": "Remove the final civilian vehicle from the hospital-side corridor."
+        },
+        {
+          "action_id": "move_ambulance_to_hospital_staging",
+          "target_component_id": "CMP_AMBULANCE",
+          "action": "move_to",
+          "input": {
+            "target": {
+              "space": "world3d",
+              "position": { "x": -9.4, "y": 0, "z": -0.9 },
+              "rotation": { "x": 0, "y": 0, "z": 0 },
+              "scale": { "x": 1, "y": 1, "z": 1 }
+            }
+          },
+          "requires_spatial_preflight": true,
+          "rationale": "Dispatch AMB-07 to a staging point beside City General Hospital after the lane opens."
+        },
+        {
+          "action_id": "hide_blocked_route",
+          "target_component_id": "CMP_ROUTE_BLOCKED",
+          "action": "hide",
+          "input": { "target": null },
+          "requires_spatial_preflight": false,
+          "rationale": "Remove the obsolete blocked-route state."
+        },
+        {
+          "action_id": "show_open_route",
+          "target_component_id": "CMP_ROUTE_OPEN",
+          "action": "show",
+          "input": { "target": null },
+          "requires_spatial_preflight": false,
+          "rationale": "Expose the open-corridor state after the blockers move."
+        },
+        {
+          "action_id": "hide_red_signal",
+          "target_component_id": "CMP_SIGNAL_RED",
+          "action": "hide",
+          "input": { "target": null },
+          "requires_spatial_preflight": false,
+          "rationale": "Clear the stop indication for the emergency corridor."
+        },
+        {
+          "action_id": "show_green_signal",
+          "target_component_id": "CMP_SIGNAL_GREEN",
+          "action": "show",
+          "input": { "target": null },
+          "requires_spatial_preflight": false,
+          "rationale": "Show the emergency go indication."
+        }
+      ]
+    },
+    "execution_policy": {
+      "commit_mode": "validate_then_atomic",
+      "endpoint_validation": "query_spatial_placement_required",
+      "collision_policy": "preserve"
+    },
+    "success_criteria": [
+      "Every model-selected move endpoint passes query_spatial_placement at workspace revision 3.",
+      "The compiled pressed control contains only actions derived from this plan.",
+      "The final Workspace has no collision conflicts and preserves collision settings."
+    ],
+    "claim_boundaries": [
+      "This plan selects endpoints but does not itself prove that they are collision-free.",
+      "move_to validates committed endpoints, not a continuously swept vehicle path.",
+      "The synthetic dispatch snapshot is scenario data, not a live municipal feed."
+    ]
+  }
+}

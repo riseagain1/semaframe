@@ -25,7 +25,7 @@ export const SemaFrameShort = () => {
             <Wordmark compact />
             <Title style={{ fontSize: 86, marginTop: 72 }}>Agents need a world they can inspect.</Title>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 54 }}>
-              <Badge tone="orange">LIVE DATA</Badge><Badge tone="teal">SSG 3.0</Badge><Badge>PHYSICS</Badge>
+              <Badge tone="orange">LIVE DATA</Badge><Badge tone="teal">SSG 3.1</Badge><Badge>PHYSICS</Badge>
             </div>
           </AbsoluteFill>
         </VerticalScene>

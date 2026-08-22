@@ -1,0 +1,72 @@
+{
+  "version": "4.0-en.1",
+  "locale": "en-US",
+  "baseContractPath": "video/emergency-city-v4.visual-contract.json",
+  "compositionSourcePath": "video/src/EmergencyCityProofV3.tsx",
+  "compositionSourceSha256": "sha256:bd9b490084b75fc25c93af80957df51f2ef95f8c4030163b244e9c22d1118e7c",
+  "semanticOverlaySourcePath": "video/src/EmergencyCitySemanticLens.tsx",
+  "semanticOverlaySourceSha256": "sha256:3d54aab0d867d64eb4297b1ac6c652d37eb391680d175b1d6a53168aeae20d0d",
+  "silentFirst": true,
+  "audioRequiredForComprehension": false,
+  "sharesEvidenceAndTimelineWithV4": true,
+  "claimBoundaries": {
+    "dataSource": "deterministic_host_normalized_inline_snapshot_not_live_network",
+    "collisionScope": "endpoint_preflight_and_final_state_not_continuous_path",
+    "rejectedCandidateAttribution": "host_scenario_candidate_not_model_first_attempt",
+    "physicsScope": "bounded_quasi_static_preflight_not_certification"
+  },
+  "variants": {
+    "landscape": {
+      "compositionId": "SemaFrameEmergencyCityProofV4English",
+      "componentExport": "SemaFrameEmergencyCityProofV4English",
+      "posterCompositionId": "SemaFrameEmergencyCityProofV4EnglishPoster",
+      "posterComponentExport": "SemaFrameEmergencyCityProofV4EnglishPoster",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationFrames": 960,
+      "captionPath": "video/captions/semaframe-emergency-city-v4.en-US.srt",
+      "suggestedVideoPath": "artifacts/semaframe-emergency-city-v4-en.mp4",
+      "suggestedPosterPath": "artifacts/semaframe-emergency-city-v4-en-poster.png",
+      "safeArea": {"top": 54, "left": 72, "right": 72, "bottom": 54}
+    },
+    "vertical": {
+      "compositionId": "SemaFrameEmergencyCityProofV4EnglishVertical",
+      "componentExport": "SemaFrameEmergencyCityProofV4EnglishVertical",
+      "posterCompositionId": "SemaFrameEmergencyCityProofV4EnglishVerticalPoster",
+      "posterComponentExport": "SemaFrameEmergencyCityProofV4EnglishVerticalPoster",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "durationFrames": 840,
+      "captionPath": "video/captions/semaframe-emergency-city-v4-vertical.en-US.srt",
+      "suggestedVideoPath": "artifacts/semaframe-emergency-city-v4-en-vertical.mp4",
+      "suggestedPosterPath": "artifacts/semaframe-emergency-city-v4-en-vertical-poster.png",
+      "safeArea": {"top": 120, "left": 60, "right": 60, "bottom": 180}
+    }
+  },
+  "visibleCopy": {
+    "crisis": ["Ambulance arrives in 28s", "Its route is blocked"],
+    "product_definition": ["This is SemaFrame", "An AI-readable, operable 3D workspace"],
+    "goal": ["I give it one goal", "“Open the route. Hit nothing.”"],
+    "data_read": ["The AI reads dispatch data", "ETA 28s · 1.6m clear · read-only snapshot"],
+    "space_read": ["Then it reads every object", "Position · size · collider · declared actions"],
+    "collision_rejection": ["This position hits a street tree", "Endpoint preflight rejected · scene unchanged"],
+    "safe_plan": ["The AI finds 5 safe endpoints", "Endpoint preflight · 5/5 passed"],
+    "human_confirm": ["AI proposes. A human confirms.", "11 changes · pending one commit"],
+    "response": ["One click triggers 11 actions", "Vehicles yield. Signals and route sync.", "1 click · 1 atomic commit"],
+    "resolution": ["Ambulance reaches the hospital", "Final state · 0 collision conflicts"],
+    "editability": ["This is not a pre-rendered change", "Undo · redo · saved state survives reopen"],
+    "identity": ["Not a rendered clip.", "An editable 3D world.", "SEMAFRAME · AI-operable 2D + 3D workspace"]
+  },
+  "semanticLabels": {
+    "product_definition": ["OBJECT · AMB-07", "RULE · STREET TREE 3", "ACTION · RED SIGNAL 1"],
+    "data_read": ["DISPATCH SNAPSHOT · ETA 28s", "ROAD CLEARANCE · 1.6m"],
+    "space_read": ["OBJECT · AMB-07", "COLLIDER · STREET TREE 3", "DECLARED ACTION · RED SIGNAL 1"],
+    "response": ["5 MOVES", "4 SIGNAL STATES", "2 ROUTE STATES"]
+  },
+  "posterCopy": {
+    "title": ["AI can operate", "a live 3D world"],
+    "proof": "READ DATA · AVOID COLLISIONS · EDIT · UNDO"
+  }
+}

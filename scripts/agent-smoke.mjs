@@ -574,7 +574,7 @@ try {
   const tools = await mcpClient.listTools();
   const toolNames = new Set(tools.tools.map((tool) => tool.name));
   const expectedTools = [
-    "get_workspace_instructions", "inspect_workspace", "inspect_workspace_component", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
+    "get_workspace_instructions", "inspect_workspace", "inspect_workspace_component", "read_workspace_resource_snapshot", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
     "undo_workspace_batch", "redo_workspace_batch", "read_workspace_events",
   ];
   for (const required of expectedTools) {
@@ -732,7 +732,8 @@ try {
   }
   const initialCapability = initialWorkspace.data.capability_manifest;
   const spatialManifest = initialCapability?.component_types?.find((candidate) => candidate?.typeId === "spatial-entity");
-  if (spatialManifest?.version !== "1.5.0" || spatialManifest?.defaultProps?.physics?.enabled !== true ||
+  if (spatialManifest?.version !== "1.6.0" || !spatialManifest?.actions?.move_to || !spatialManifest?.events?.moved ||
+      spatialManifest?.defaultProps?.physics?.enabled !== true ||
       spatialManifest?.defaultProps?.physics?.bodyType !== "static" ||
       spatialManifest?.defaultProps?.collision?.shape !== "asset_bounds") {
     throw new Error(`The capability manifest did not publish the current physics-aware spatial contract: ${diagnosticJson(spatialManifest)}`);
@@ -1031,6 +1032,7 @@ try {
   const openApi = await fetch(`${gatewayUrl}/openapi.json`).then((response) => response.json());
   if (openApi.openapi !== "3.1.0" ||
       openApi.paths?.["/workspace/instructions"]?.post?.operationId !== "get_workspace_instructions" ||
+      openApi.paths?.["/workspace/resources/snapshot/read"]?.post?.operationId !== "read_workspace_resource_snapshot" ||
       openApi.paths?.["/workspace/assets/inspect"]?.post?.operationId !== "inspect_workspace_asset" ||
       openApi.paths?.["/workspace/models/inspect"]?.post?.operationId !== "inspect_workspace_model" ||
       openApi.paths?.["/workspace/space/inspect"]?.post?.operationId !== "inspect_workspace_space" ||
@@ -1040,11 +1042,11 @@ try {
       openApi.paths?.["/workspace/physics/simulate"]?.post?.operationId !== "simulate_workspace_physics" ||
       openApi.paths?.["/workspace/updates/submit"]?.post?.operationId !== "submit_workspace_batch" ||
       openApi.paths?.["/assets/imports/complete"]?.post?.operationId !== "complete_workspace_asset_import" ||
-      Object.keys(openApi.paths ?? {}).length !== 19 ||
+      Object.keys(openApi.paths ?? {}).length !== 20 ||
       /get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u.test(JSON.stringify(openApi))) {
     throw new Error("Agent OpenAPI discovery document is incomplete.");
   }
-  console.log("Agent browser smoke passed: exclusive eighteen-tool Workspace MCP/OpenAPI contract, explicit approval, SSG 3.1 and physics inspect/stable-placement/settle discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
+  console.log("Agent browser smoke passed: exclusive nineteen-tool Workspace MCP/OpenAPI contract, explicit approval, exact snapshot-read discovery, SSG 3.1 and physics inspect/stable-placement/settle discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
 } catch (error) {
   const safeLogs = diagnosticText(processLogs.join(""));
   if (safeLogs.trim()) console.error(safeLogs.slice(-4_000));

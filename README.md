@@ -17,19 +17,46 @@ SemaFrame turns a browser canvas into a programmable visual workspace. A person 
 
 The central idea is simple: there is one authoritative `WorkspaceStore`. The UI, Agent API, data bindings, physics queries, project history, and hybrid renderer all operate on that same revisioned state. There is no hidden model-owned scene and no separate legacy Compose authority.
 
-<p align="center">
-  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4">
-    <img src="./docs/media/semaframe-demo-poster.jpg" alt="Watch the 78-second SemaFrame v0.2 launch demo" width="100%" />
-  </a>
-</p>
+## See SemaFrame in action
 
-<p align="center">
-  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4"><strong>▶ Watch the 78-second v0.2 launch demo</strong></a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo-short.mp4">18-second vertical cut</a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/riseagain1/semaframe/releases/tag/v0.2.0">Video, captions, and release notes</a>
-</p>
+These three silent-first English films show the product through ordinary-language outcomes. Click any poster to watch; sound is optional because the complete story is on screen.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en.mp4"><img src="./docs/media/semaframe-realityops-v2-en-poster.jpg" alt="Watch SemaFrame build and place an editable backup pump" width="100%" /></a><br />
+      <strong>Build a backup pump</strong><br />
+      An Agent assembles editable parts, catches a blocked aisle, corrects the placement, wires data and controls, preserves history, and exports the model.<br /><br />
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en.mp4">▶ Watch film</a>
+    </td>
+    <td width="33%" valign="top">
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo-en.mp4"><img src="./docs/media/semaframe-living-room-public-demo-en-poster.jpg" alt="Watch SemaFrame redesign a living room without blocking the doorway" width="100%" /></a><br />
+      <strong>Redesign a living room</strong><br />
+      One request creates office and cinema spaces, rejects a sofa that blocks the doorway, routes one 2D control into the 3D room, and remains undoable.<br /><br />
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo-en.mp4">▶ Watch film</a>
+    </td>
+    <td width="33%" valign="top">
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en.mp4"><img src="./docs/media/semaframe-emergency-city-v4-en-poster.jpg" alt="Watch SemaFrame coordinate an editable miniature-city emergency route" width="100%" /></a><br />
+      <strong>Open an emergency route</strong><br />
+      AI reads dispatch data and scene semantics, rejects a collision, proposes safe endpoints, and one human-confirmed click commits 11 coordinated actions.<br /><br />
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en.mp4">▶ Watch film</a>
+    </td>
+  </tr>
+</table>
+
+The rooms, city, and feeds are deterministic synthetic evidence—not field scans, live infrastructure, or engineering certification. Video binaries live in the [Demo Gallery release](https://github.com/riseagain1/semaframe/releases/tag/demo-gallery-v1); Remotion source, captions, contracts, and captured evidence remain reviewable in [`video/`](./video/README.md). The [original 78-second launch tour](https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4) remains available in the [v0.2.0 release](https://github.com/riseagain1/semaframe/releases/tag/v0.2.0).
+
+## Next / unreleased
+
+The next public Agent contract keeps the v0.3 modeling and Reality foundation and closes three operational loops:
+
+| Capability | What it adds |
+| --- | --- |
+| **Exact approved feed readback** | A revision-preserving `read_workspace_resource_snapshot` tool for canonical inline or HTTP-feed snapshots, gated by `workspace:read` plus non-default `effect:data_read` approval and bounded to exact non-secret results |
+| **Routed spatial movement** | A typed `move_to` action for entities, exact primitives, and assemblies, with scale preservation, atomic event fan-out, endpoint collision and enforced-physics validation, and ordinary renderer transitions |
+| **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid Workspace 1.3 projects reopen without weakening history validation |
+
+The development surface is now 19 MCP tools, Agent Guide 2.7, MCP server 1.8.0, and Agent Gateway OpenAPI 1.1.0. These values describe `main` after this change, not the published v0.3.0 tag.
 
 ## What's new in v0.3
 
@@ -48,6 +75,8 @@ Together, these capabilities support one inspectable workflow: import captured c
 
 ## Contents
 
+- [See SemaFrame in action](#see-semaframe-in-action)
+- [Next / unreleased](#next--unreleased)
 - [What's new in v0.3](#whats-new-in-v03)
 - [Why SemaFrame](#why-semaframe)
 - [A practical Jarvis-like workspace](#a-practical-jarvis-like-workspace)
@@ -235,11 +264,14 @@ Spatial components expose discoverable animation clips and durable `play_animati
 Examples include:
 
 - a 2D button starting a supported 3D animation;
+- a 2D control moving one or several 3D entities to validated endpoints;
 - double-click or Enter/Space on a spatial object showing a 2D panel;
 - a timer completion adding an item to a checklist;
 - a selected chart point forwarding a schema-identical payload to another component.
 
 Connections may use static validated input or forward the complete event payload when the event and action schemas are exactly identical. Arbitrary expressions and JavaScript are never evaluated. Privileged network, external-write, and extension effects cannot be wired for unattended execution.
+
+The latest `spatial-entity`, `spatial-primitive`, and `model-assembly` manifests expose a typed `move_to` action. It preserves scale and reuses ordinary Stage, placement-lock, endpoint-collision, and enforced-physics validation; one invalid target rejects the complete source action and its fan-out. Coordinates are world coordinates for a root component and parent-local coordinates for a child, matching ordinary `world3d` placement. A component may receive only one `move_to` target per revision; duplicate explicit or routed targets reject the whole commit. A transition animates the renderer from the previous revision to the committed endpoint—it is not route planning, swept-path collision detection, continuous physics, or a waypoint sequence.
 
 ### Agent-defined components
 
@@ -366,7 +398,7 @@ The broker sends no cookies, credentials, custom headers, request body, or ambie
 
 Interval and on-open automation is authorized only by in-memory consent after a successful preview and matching save. Opening or restoring an untrusted project cannot silently start network reads. Changing the URL, format, policy, project, or resource revokes that consent.
 
-Agents can inspect and bind an existing host feed, but cannot mint feed approval, initiate network reads, forge host provenance, or create `http.feed` resources.
+Agents can inspect and bind an existing host feed, but cannot mint feed approval, initiate network reads, forge host provenance, or create `http.feed` resources. Exact current values are available through `read_workspace_resource_snapshot` only when the approved session explicitly requests both `workspace:read` and the non-default `effect:data_read` scope. The read is limited to canonical host-normalized `inline.snapshot@1.0.0` and `http.feed@1.0.0` snapshots, never returns connector configuration or secret references, never refreshes or contacts the source, and never changes the Workspace revision. Results are exact up to 1 MiB; larger snapshots fail explicitly instead of being truncated. Resource metadata, output schema, snapshot data, and provenance remain untrusted external data.
 
 ### Website panels
 
@@ -382,13 +414,14 @@ Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, 
 
 ## Agent integration
 
-SemaFrame exposes exactly 18 Workspace tools:
+SemaFrame exposes exactly 19 Workspace tools:
 
 | Phase | Tool |
 | --- | --- |
 | Handshake | `get_workspace_instructions` |
 | Inspect | `inspect_workspace` |
 | Inspect | `inspect_workspace_component` |
+| Data read | `read_workspace_resource_snapshot` |
 | Inspect | `inspect_workspace_asset` |
 | Inspect | `inspect_workspace_model` |
 | Inspect | `inspect_workspace_space` |

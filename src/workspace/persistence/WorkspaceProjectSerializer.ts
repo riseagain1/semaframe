@@ -495,21 +495,128 @@ export class WorkspaceProjectSerializer {
     // authored placement.size while projection supplied an implicit 240x144
     // box. Materialize current snapshot/checkpoint geometry on open so saved
     // state and deterministic command replay converge without a format bump.
-    normalized.checkpoint = workspaceToSerializable(migrateWorkspaceStateToCurrent(
+    const checkpoint = migrateWorkspaceStateToCurrent(
       workspaceFromSerializable(normalized.checkpoint),
       this.registry,
-    ));
-    normalized.workspace = workspaceToSerializable(migrateWorkspaceStateToCurrent(
+    );
+    const workspace = migrateWorkspaceStateToCurrent(
       workspaceFromSerializable(normalized.workspace),
       this.registry,
-    ));
+    );
     // Protocol 1.2 projects have the same command semantics as 1.3, with an
     // empty Reality Asset catalog supplied by state migration. Promote the
     // envelope after both snapshots are normalized so save/reopen converges on
     // one current version instead of retaining mixed outer/inner versions.
     normalized.protocolVersion = WORKSPACE_PROTOCOL_VERSION;
     normalized.workspaceSchemaVersion = WORKSPACE_SCHEMA_VERSION;
+    normalized.checkpoint = workspaceToSerializable(checkpoint);
+    normalized.workspace = workspaceToSerializable(workspace);
+    normalized.registryDigest = workspace.registryDigest;
+    if (
+      checkpoint.registryDigest !== project.checkpoint.registryDigest
+      || workspace.registryDigest !== project.workspace.registryDigest
+    ) {
+      return this.rebaseCurrentRegistryHistory(normalized, checkpoint, workspace);
+    }
     return normalized;
+  }
+
+  /**
+   * Rebuild only registry-derived history metadata when the built-in registry
+   * grows without a protocol/schema bump. Resolved operations and effects stay
+   * authoritative; replay lets recipe definitions and clear_workspace derive
+   * their own effective digest at the exact revision where they occurred.
+   */
+  private rebaseCurrentRegistryHistory(
+    project: WorkspaceProjectFile,
+    migratedCheckpoint: WorkspaceState,
+    migratedWorkspace: WorkspaceState,
+  ): WorkspaceProjectFile {
+    const checkpoint = structuredClone(migratedCheckpoint);
+    // Compacted commands are no longer present, so their individual registry
+    // transitions cannot be replayed. Their summaries describe the checkpoint
+    // baseline now governed by this exact current effective registry.
+    checkpoint.history = checkpoint.history.map((summary) => ({
+      ...structuredClone(summary),
+      resultingRegistryDigest: checkpoint.registryDigest,
+    }));
+    const store = new WorkspaceStore({
+      initialState: checkpoint,
+      checkpointState: checkpoint,
+      registry: this.registry,
+      nextComponentSequence: project.checkpointNextComponentSequence,
+      checkpointNextComponentSequence: project.checkpointNextComponentSequence,
+      nextEventCursor: project.checkpointNextEventCursor,
+      checkpointNextEventCursor: project.checkpointNextEventCursor,
+    });
+
+    try {
+      for (const command of project.commandHistory) {
+        const firstResolvedCursor = command.resolvedEvents[0]?.cursor;
+        if (firstResolvedCursor !== undefined) {
+          const currentCursor = store.getNextEventCursor();
+          if (firstResolvedCursor < currentCursor) {
+            throw new WorkspaceMigrationRequiredError(
+              `Registry migration event cursor moved backward at ${command.requestId}`,
+            );
+          }
+          if (firstResolvedCursor > currentCursor) {
+            store.restoreMonotonicCounters(store.getAllocatorSnapshot(), firstResolvedCursor);
+          }
+        }
+        const batch: WorkspaceCommandBatch = {
+          protocol_version: WORKSPACE_PROTOCOL_VERSION,
+          request_id: command.requestId,
+          workspace_id: checkpoint.workspaceId,
+          input_revision: command.inputRevision,
+          base_workspace_revision: command.baseWorkspaceRevision,
+          registry_digest: store.getRegistryDigest(),
+          mode: "commit",
+          operations: structuredClone(command.resolvedOperations),
+        };
+        const result = store.applyResolvedHistoryDetailed(
+          batch,
+          { actor: command.actor, permissions: ["*"] },
+          command.resolvedActionEffects,
+        );
+        const expectedCommand: WorkspaceCommandRecord = {
+          ...structuredClone(command),
+          inputRegistryDigest: result.command.inputRegistryDigest,
+          resultingRegistryDigest: result.command.resultingRegistryDigest,
+        };
+        if (!semanticWorkspaceEqual(result.command, expectedCommand)) {
+          throw new WorkspaceMigrationRequiredError(
+            `Registry migration changed resolved command ${command.requestId}`,
+          );
+        }
+      }
+      store.restoreMonotonicCounters(project.nextComponentSequence, project.nextEventCursor);
+    } catch (error) {
+      if (error instanceof WorkspaceMigrationRequiredError) throw error;
+      throw new WorkspaceMigrationRequiredError(
+        `Workspace registry history could not be migrated: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const replayed = store.getState() as WorkspaceState;
+    const expected = structuredClone(migratedWorkspace);
+    // The old project was fully validated before this pass. Only registry and
+    // history metadata may differ from its migrated final snapshot.
+    expected.registryDigest = replayed.registryDigest;
+    expected.history = structuredClone(replayed.history);
+    if (!semanticWorkspaceEqual(replayed, expected)) {
+      throw new WorkspaceMigrationRequiredError(
+        "Workspace registry history does not reproduce its migrated saved state",
+      );
+    }
+
+    return {
+      ...structuredClone(project),
+      registryDigest: replayed.registryDigest,
+      checkpoint: workspaceToSerializable(checkpoint),
+      workspace: workspaceToSerializable(replayed),
+      commandHistory: store.getCommandHistory(),
+    };
   }
 
   /** Upgrade a valid 1.1 project by materializing neutral universal effects. */
@@ -535,14 +642,19 @@ export class WorkspaceProjectSerializer {
         };
       }
     }
-    return {
+    const migrated: WorkspaceProjectFile = {
       ...normalized,
       protocolVersion: WORKSPACE_PROTOCOL_VERSION,
       workspaceSchemaVersion: WORKSPACE_SCHEMA_VERSION,
+      registryDigest: workspace.registryDigest,
       checkpoint: workspaceToSerializable(checkpoint),
       workspace: workspaceToSerializable(workspace),
       commandHistory: normalized.commandHistory,
     };
+    return checkpoint.registryDigest !== project.checkpoint.registryDigest
+      || workspace.registryDigest !== project.workspace.registryDigest
+      ? this.rebaseCurrentRegistryHistory(migrated, checkpoint, workspace)
+      : migrated;
   }
 
   private canonicalizeLegacyProjectRecipes(project: WorkspaceProjectFile): WorkspaceProjectFile {

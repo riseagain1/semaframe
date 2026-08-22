@@ -1,0 +1,194 @@
+{
+  "format": "semaframe-english-demo-gallery-visual-contract",
+  "version": 1,
+  "locale": "en-US",
+  "silentFirst": true,
+  "audioRequiredForComprehension": false,
+  "rootRegistrationPath": "video/src/Root.tsx",
+  "rootFolderName": "English-Demos",
+  "sources": {
+    "realityOps": {
+      "path": "video/src/RealityOpsProofV2.tsx",
+      "sha256": "sha256:d781190e77aaf53d07902a2680ab209beff7d41d31e14f1ca4f1af922c9c984f"
+    },
+    "livingRoom": {
+      "path": "video/src/LivingRoomPublicDemo.tsx",
+      "sha256": "sha256:dd484db035391845b6e6c163e8c301929d4f3a05bf12c0f6c69cacc9e04f8038"
+    },
+    "emergencyCity": {
+      "path": "video/src/EmergencyCityProofV3.tsx",
+      "sha256": "sha256:bd9b490084b75fc25c93af80957df51f2ef95f8c4030163b244e9c22d1118e7c"
+    },
+    "emergencyCitySemanticLens": {
+      "path": "video/src/EmergencyCitySemanticLens.tsx",
+      "sha256": "sha256:3d54aab0d867d64eb4297b1ac6c652d37eb391680d175b1d6a53168aeae20d0d"
+    }
+  },
+  "supportingContracts": [
+    {
+      "path": "video/living-room-public-demo-en.visual-contract.json",
+      "sha256": "sha256:416cec696fc8fa28f09c7e45c891643253fa201ddde679199f7e3d5107d7ddcf"
+    },
+    {
+      "path": "video/emergency-city-v4-english.visual-contract.json",
+      "sha256": "sha256:2229519de1d08ee069fae2bf189cd422154490d4511aa664b9c34114a8096ce7"
+    }
+  ],
+  "claimBoundaries": {
+    "pump": {
+      "sceneSource": "synthetic_scene_not_photo_or_scan",
+      "dataSource": "deterministic_snapshot_not_live_network",
+      "collisionScope": "endpoint_and_final_state_preflight_not_continuous_path",
+      "physicsScope": "bounded_preflight_not_engineering_certification",
+      "requiredVisibleCopy": [
+        "SYNTHETIC SCENE · DETERMINISTIC SNAPSHOT · BOUNDED PREFLIGHT, NOT CERTIFICATION"
+      ]
+    },
+    "furniture": {
+      "sceneSource": "synthetic_procedural_room_not_real_home_scan",
+      "collisionScope": "deterministic_collision_preflight_not_continuous_path",
+      "physicsScope": "bounded_preflight_not_building_certification",
+      "controlScope": "workspace_event_routing_not_smart_home_network",
+      "requiredVisibleCopy": [
+        "SYNTHETIC ROOM · COLLISION PREFLIGHT, NOT BUILDING CERTIFICATION"
+      ]
+    },
+    "traffic": {
+      "dataSource": "deterministic_host_normalized_inline_snapshot_not_live_network",
+      "collisionScope": "endpoint_preflight_and_final_state_not_continuous_path",
+      "rejectedCandidateAttribution": "host_scenario_candidate_not_model_first_attempt",
+      "physicsScope": "bounded_quasi_static_preflight_not_certification",
+      "requiredVisibleCopy": [
+        "ETA 28s · 1.6m clear · read-only snapshot",
+        "Endpoint preflight rejected · scene unchanged",
+        "AI proposes. A human confirms.",
+        "This is not a pre-rendered change"
+      ]
+    }
+  },
+  "deliveries": [
+    {
+      "id": "pump-landscape",
+      "demo": "pump",
+      "variant": "landscape",
+      "sourceRefs": ["realityOps"],
+      "componentExport": "SemaFrameRealityOpsProofV2English",
+      "compositionId": "SemaFrameRealityOpsProofV2English",
+      "posterComponentExport": "SemaFrameRealityOpsProofV2EnglishPoster",
+      "posterCompositionId": "SemaFrameRealityOpsProofV2EnglishPoster",
+      "durationExpression": "REALITY_OPS_PROOF_V2_LANDSCAPE_DURATION",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationFrames": 1080,
+      "captionPath": "video/captions/semaframe-realityops-v2.en-US.srt",
+      "captionSha256": "sha256:c252e45e4f904f2808368dba2ab38fc801d35da06a1cb5b6b68afa51807d7878",
+      "captionCueCount": 12,
+      "maxCaptionCps": 22,
+      "maxCaptionGapSeconds": 0,
+      "videoPath": "artifacts/semaframe-realityops-v2-en.mp4",
+      "posterPath": "artifacts/semaframe-realityops-v2-en-poster.png",
+      "readmePosterPath": "docs/media/semaframe-realityops-v2-en-poster.jpg",
+      "captureRoot": "video/public/realityops",
+      "audioPath": "video/public/audio/semaframe-original-bed.wav"
+    },
+    {
+      "id": "pump-vertical",
+      "demo": "pump",
+      "variant": "vertical",
+      "sourceRefs": ["realityOps"],
+      "componentExport": "SemaFrameRealityOpsProofV2VerticalEnglish",
+      "compositionId": "SemaFrameRealityOpsProofV2VerticalEnglish",
+      "posterComponentExport": "SemaFrameRealityOpsProofV2VerticalEnglishPoster",
+      "posterCompositionId": "SemaFrameRealityOpsProofV2VerticalEnglishPoster",
+      "durationExpression": "REALITY_OPS_PROOF_V2_VERTICAL_DURATION",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "durationFrames": 960,
+      "captionPath": "video/captions/semaframe-realityops-v2-vertical.en-US.srt",
+      "captionSha256": "sha256:08980a71a19676c332e50455957e693a6d08eca2312cf5a18417b5c58d5ee716",
+      "captionCueCount": 12,
+      "maxCaptionCps": 22,
+      "maxCaptionGapSeconds": 0,
+      "videoPath": "artifacts/semaframe-realityops-v2-en-vertical.mp4",
+      "posterPath": "artifacts/semaframe-realityops-v2-en-vertical-poster.png",
+      "captureRoot": "video/public/realityops",
+      "audioPath": "video/public/audio/semaframe-original-bed.wav"
+    },
+    {
+      "id": "furniture-landscape",
+      "demo": "furniture",
+      "variant": "landscape",
+      "sourceRefs": ["livingRoom"],
+      "componentExport": "SemaFrameLivingRoomPublicDemoEnglish",
+      "compositionId": "SemaFrameLivingRoomPublicDemoEnglish",
+      "posterComponentExport": "SemaFrameLivingRoomPublicDemoEnglishPoster",
+      "posterCompositionId": "SemaFrameLivingRoomPublicDemoEnglishPoster",
+      "durationExpression": "LIVING_ROOM_PUBLIC_ENGLISH_DURATION",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationFrames": 1200,
+      "captionPath": "video/captions/semaframe-living-room-public-demo.en-US.srt",
+      "captionSha256": "sha256:ef9ad67f2a5d0c11f93190d52b98846e61b97f21164a1c2e7407b280a3179b39",
+      "captionCueCount": 14,
+      "maxCaptionCps": 22.5,
+      "maxCaptionGapSeconds": 1.1,
+      "videoPath": "artifacts/semaframe-living-room-public-demo-en.mp4",
+      "posterPath": "artifacts/semaframe-living-room-public-demo-en-poster.png",
+      "readmePosterPath": "docs/media/semaframe-living-room-public-demo-en-poster.jpg",
+      "captureRoot": "video/public/living-room",
+      "audioPath": "video/public/audio/semaframe-living-room-demo.wav"
+    },
+    {
+      "id": "traffic-landscape",
+      "demo": "traffic",
+      "variant": "landscape",
+      "sourceRefs": ["emergencyCity", "emergencyCitySemanticLens"],
+      "componentExport": "SemaFrameEmergencyCityProofV4English",
+      "compositionId": "SemaFrameEmergencyCityProofV4English",
+      "posterComponentExport": "SemaFrameEmergencyCityProofV4EnglishPoster",
+      "posterCompositionId": "SemaFrameEmergencyCityProofV4EnglishPoster",
+      "durationExpression": "EMERGENCY_CITY_PROOF_V4_LANDSCAPE_DURATION",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationFrames": 960,
+      "captionPath": "video/captions/semaframe-emergency-city-v4.en-US.srt",
+      "captionSha256": "sha256:d0a8dceed2d95675283f696d51db01e55cf27bd2a947633323bf394b626d4456",
+      "captionCueCount": 13,
+      "maxCaptionCps": 25,
+      "maxCaptionGapSeconds": 0,
+      "videoPath": "artifacts/semaframe-emergency-city-v4-en.mp4",
+      "posterPath": "artifacts/semaframe-emergency-city-v4-en-poster.png",
+      "readmePosterPath": "docs/media/semaframe-emergency-city-v4-en-poster.jpg",
+      "captureRoot": "video/public/emergency-city",
+      "audioPath": "video/public/audio/semaframe-emergency-city-v3.wav"
+    },
+    {
+      "id": "traffic-vertical",
+      "demo": "traffic",
+      "variant": "vertical",
+      "sourceRefs": ["emergencyCity", "emergencyCitySemanticLens"],
+      "componentExport": "SemaFrameEmergencyCityProofV4EnglishVertical",
+      "compositionId": "SemaFrameEmergencyCityProofV4EnglishVertical",
+      "posterComponentExport": "SemaFrameEmergencyCityProofV4EnglishVerticalPoster",
+      "posterCompositionId": "SemaFrameEmergencyCityProofV4EnglishVerticalPoster",
+      "durationExpression": "EMERGENCY_CITY_PROOF_V4_VERTICAL_DURATION",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "durationFrames": 840,
+      "captionPath": "video/captions/semaframe-emergency-city-v4-vertical.en-US.srt",
+      "captionSha256": "sha256:67e25a9b97ad3273a04e39240de0c96b6cfa3de8bcbdf01a1e4721dbdbdeb802",
+      "captionCueCount": 13,
+      "maxCaptionCps": 25,
+      "maxCaptionGapSeconds": 0,
+      "videoPath": "artifacts/semaframe-emergency-city-v4-en-vertical.mp4",
+      "posterPath": "artifacts/semaframe-emergency-city-v4-en-vertical-poster.png",
+      "captureRoot": "video/public/emergency-city",
+      "audioPath": "video/public/audio/semaframe-emergency-city-v3-vertical.wav"
+    }
+  ]
+}

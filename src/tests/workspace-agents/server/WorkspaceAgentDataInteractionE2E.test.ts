@@ -187,10 +187,15 @@ describe("Workspace Agent data and interaction vertical slice", () => {
           actions: {
             activate: expect.any(Object),
             play_animation: expect.any(Object),
+            move_to: expect.objectContaining({
+              effectClass: "semantic",
+              requiredPermissions: ["component:update"],
+            }),
           },
           events: {
             activated: expect.any(Object),
             animation_started: expect.any(Object),
+            moved: expect.any(Object),
           },
         });
       const characterAsset = setupCapabilities.asset_library.assets.find(

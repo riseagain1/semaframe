@@ -1,0 +1,66 @@
+{
+  "receipt_version": "1.0",
+  "planner_run_id": "planner_0e2c736b82d0c785",
+  "planner_plan_hash": "sha256:5789379cf66989be657c464fbba229c634184c71a84c05873542fed979292cb3",
+  "authority": {
+    "workspace_id": "workspace_main",
+    "workspace_revision": 10,
+    "registry_digest": "fnv1a32:8a4109fb",
+    "dispatch_snapshot_hash": "fnv1a32:7f082125"
+  },
+  "validation_tool": "query_spatial_placement",
+  "endpoint_receipts": [
+    {
+      "actionId": "move_blue_sedan_to_safe_bay",
+      "targetId": "CMP_000097",
+      "label": "Blue sedan",
+      "workspaceId": "workspace_main",
+      "workspaceRevision": 10,
+      "registryDigest": "fnv1a32:8a4109fb",
+      "valid": true,
+      "conflicts": []
+    },
+    {
+      "actionId": "move_taxi_to_safe_bay",
+      "targetId": "CMP_000104",
+      "label": "Yellow taxi",
+      "workspaceId": "workspace_main",
+      "workspaceRevision": 10,
+      "registryDigest": "fnv1a32:8a4109fb",
+      "valid": true,
+      "conflicts": []
+    },
+    {
+      "actionId": "move_bus_to_safe_bay",
+      "targetId": "CMP_000111",
+      "label": "City bus",
+      "workspaceId": "workspace_main",
+      "workspaceRevision": 10,
+      "registryDigest": "fnv1a32:8a4109fb",
+      "valid": true,
+      "conflicts": []
+    },
+    {
+      "actionId": "move_red_compact_to_safe_bay",
+      "targetId": "CMP_000118",
+      "label": "Red compact",
+      "workspaceId": "workspace_main",
+      "workspaceRevision": 10,
+      "registryDigest": "fnv1a32:8a4109fb",
+      "valid": true,
+      "conflicts": []
+    },
+    {
+      "actionId": "move_ambulance_to_hospital_arrival",
+      "targetId": "CMP_000082",
+      "label": "Ambulance AMB-07",
+      "workspaceId": "workspace_main",
+      "workspaceRevision": 10,
+      "registryDigest": "fnv1a32:8a4109fb",
+      "valid": true,
+      "conflicts": []
+    }
+  ],
+  "all_endpoints_valid": true,
+  "route_compilation_pending": true
+}

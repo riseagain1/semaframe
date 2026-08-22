@@ -1,0 +1,234 @@
+{
+  "version": "4.0",
+  "rangeSemantics": "startInclusiveEndExclusive",
+  "sourceRangeSemantics": "sourceStartInclusiveSourceEndInclusive",
+  "compositionSourceSha256": "sha256:bd9b490084b75fc25c93af80957df51f2ef95f8c4030163b244e9c22d1118e7c",
+  "compositionSourcePath": "video/src/EmergencyCityProofV3.tsx",
+  "semanticOverlaySourceSha256": "sha256:3d54aab0d867d64eb4297b1ac6c652d37eb391680d175b1d6a53168aeae20d0d",
+  "semanticOverlaySourcePath": "video/src/EmergencyCitySemanticLens.tsx",
+  "silentFirst": true,
+  "audioRequiredForComprehension": false,
+  "timedCaptionFilesAreTranscriptsOnly": true,
+  "masterRequiresTimedCaptions": false,
+  "claimBoundaries": {
+    "dataSource": "deterministic_host_normalized_inline_snapshot_not_live_network",
+    "collisionScope": "endpoint_preflight_and_final_state_not_continuous_path",
+    "rejectedCandidateAttribution": "host_scenario_candidate_not_model_first_attempt",
+    "physicsScope": "bounded_quasi_static_preflight_not_certification"
+  },
+  "semanticTruthContract": {
+    "dataReadout": {
+      "snapshotSecondary": "SOURCE DATA",
+      "roadSecondary": "PLANNER CONSTRAINT"
+    },
+    "actionFanOut": {
+      "landscapeLocalVisibleRange": {"startFrame": 0, "endFrame": 42},
+      "verticalLocalVisibleRange": {"startFrame": 0, "endFrame": 34},
+      "retiresBeforeCameraDrift": true
+    },
+    "historyHighlight": {
+      "localTransitionFrames": [12, 40, 60],
+      "states": ["OPEN", "BLOCKED", "OPEN", "REOPEN VERIFIED"],
+      "labelsRevealTogether": true
+    }
+  },
+  "textMotionContract": {
+    "titleEnterFrames": 10,
+    "titleExitFrames": 5,
+    "proofEnterFrames": 8,
+    "proofExitFrames": 4,
+    "goalTypingCompleteFrame": 9,
+    "minimumStableFrames": 45
+  },
+  "variants": {
+    "landscape": {
+      "width": 1920,
+      "height": 1080,
+      "durationFrames": 960,
+      "fps": 30,
+      "productComprehensionDeadlineFrame": 150,
+      "safeArea": {"top": 54, "left": 72, "right": 72, "bottom": 54},
+      "layers": [
+        {"id": "crisis-primary", "kind": "primary", "text": "28秒后，救护车到达", "startFrame": 0, "endFrame": 75, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "crisis-proof", "kind": "proof", "text": "唯一通道已堵死", "startFrame": 0, "endFrame": 75, "bounds": {"x": 96, "y": 918, "width": 880, "height": 76}},
+        {"id": "product-name", "kind": "primary", "text": "这是SEMAFRAME", "startFrame": 75, "endFrame": 150, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "product-definition", "kind": "proof", "text": "AI可读、可操作的3D工作区", "startFrame": 75, "endFrame": 150, "bounds": {"x": 96, "y": 918, "width": 1100, "height": 76}},
+        {"id": "goal-primary", "kind": "primary", "text": "我对它说", "startFrame": 150, "endFrame": 210, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "goal-proof", "kind": "proof", "text": "“打开通道，别撞到东西”", "startFrame": 150, "endFrame": 210, "bounds": {"x": 96, "y": 918, "width": 1000, "height": 76}},
+        {"id": "data-primary", "kind": "primary", "text": "AI先读取调度数据", "startFrame": 210, "endFrame": 285, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "data-proof", "kind": "proof", "text": "ETA 28秒 · 净宽1.6m · 只读快照", "startFrame": 210, "endFrame": 285, "bounds": {"x": 96, "y": 918, "width": 1000, "height": 76}},
+        {"id": "space-primary", "kind": "primary", "text": "再读懂每个物体", "startFrame": 285, "endFrame": 360, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "space-proof", "kind": "proof", "text": "位置 · 尺寸 · 碰撞体 · 可执行动作", "startFrame": 285, "endFrame": 360, "bounds": {"x": 96, "y": 918, "width": 880, "height": 76}},
+        {"id": "collision-primary", "kind": "primary", "text": "这个位置会撞上街树", "startFrame": 360, "endFrame": 450, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "collision-proof", "kind": "proof", "text": "空间预检拒绝 · 原场景未改", "startFrame": 360, "endFrame": 450, "bounds": {"x": 96, "y": 918, "width": 880, "height": 76}},
+        {"id": "safe-plan-primary", "kind": "primary", "text": "AI找到5个安全终点", "startFrame": 450, "endFrame": 525, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "safe-plan-proof", "kind": "proof", "text": "终点预检 · 5/5通过", "startFrame": 450, "endFrame": 525, "bounds": {"x": 96, "y": 918, "width": 1000, "height": 76}},
+        {"id": "confirm-primary", "kind": "primary", "text": "AI出方案，人确认一次", "startFrame": 525, "endFrame": 585, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "confirm-proof", "kind": "proof", "text": "11项修改 · 等待提交", "startFrame": 525, "endFrame": 585, "bounds": {"x": 1068, "y": 918, "width": 756, "height": 76}},
+        {"id": "response-click-primary", "kind": "primary", "text": "一次点击，11个动作", "startFrame": 585, "endFrame": 660, "bounds": {"x": 96, "y": 84, "width": 980, "height": 74}},
+        {"id": "response-world-primary", "kind": "primary", "text": "车辆让路，信号和路线同步", "startFrame": 660, "endFrame": 735, "bounds": {"x": 96, "y": 84, "width": 980, "height": 74}},
+        {"id": "response-proof", "kind": "proof", "text": "1次点击 · 1次原子提交", "startFrame": 585, "endFrame": 735, "bounds": {"x": 1068, "y": 918, "width": 756, "height": 76}},
+        {"id": "resolution-primary", "kind": "primary", "text": "救护车抵达医院", "startFrame": 735, "endFrame": 795, "bounds": {"x": 96, "y": 84, "width": 880, "height": 74}},
+        {"id": "resolution-proof", "kind": "proof", "text": "最终状态 · 0碰撞冲突", "startFrame": 735, "endFrame": 795, "bounds": {"x": 1068, "y": 918, "width": 756, "height": 76}},
+        {"id": "editability-primary", "kind": "primary", "text": "改动不是播好的动画", "startFrame": 795, "endFrame": 885, "bounds": {"x": 96, "y": 84, "width": 980, "height": 74}},
+        {"id": "editability-proof", "kind": "proof", "text": "可撤销 · 可恢复 · 保存重开仍存在", "startFrame": 795, "endFrame": 885, "bounds": {"x": 96, "y": 918, "width": 1000, "height": 76}},
+        {"id": "identity-primary", "kind": "primary", "text": "不是生成一段动画\n而是修改一个3D世界", "startFrame": 885, "endFrame": 960, "bounds": {"x": 96, "y": 84, "width": 980, "height": 148}},
+        {"id": "identity-proof", "kind": "proof", "text": "SEMAFRAME · AI可操作的2D+3D工作空间", "startFrame": 885, "endFrame": 960, "bounds": {"x": 96, "y": 918, "width": 1000, "height": 76}}
+      ],
+      "nonTextOverlays": [
+        {"id": "semantic-model", "safeAreaPolicy": "safe_area", "startFrame": 75, "endFrame": 150, "bounds": {"x": 600, "y": 238, "width": 1160, "height": 654}},
+        {"id": "data-readout", "safeAreaPolicy": "safe_area", "startFrame": 210, "endFrame": 285, "bounds": {"x": 600, "y": 158, "width": 960, "height": 565}},
+        {"id": "space-scan", "safeAreaPolicy": "safe_area", "startFrame": 285, "endFrame": 360, "bounds": {"x": 600, "y": 233, "width": 1160, "height": 667}},
+        {"id": "collision-mark", "safeAreaPolicy": "safe_area", "startFrame": 360, "endFrame": 450, "bounds": {"x": 700, "y": 290, "width": 620, "height": 500}},
+        {"id": "safe-plan-checks", "safeAreaPolicy": "safe_area", "startFrame": 450, "endFrame": 525, "bounds": {"x": 75, "y": 280, "width": 370, "height": 100}},
+        {"id": "confirm-pointer", "safeAreaPolicy": "safe_area", "regions": [
+          {"id": "approach-early", "startFrame": 525, "endFrame": 555, "bounds": {"x": 912, "y": 738, "width": 144, "height": 234}},
+          {"id": "approach-late", "startFrame": 555, "endFrame": 577, "bounds": {"x": 898, "y": 878, "width": 90, "height": 124}},
+          {"id": "landed-pulse", "startFrame": 577, "endFrame": 585, "bounds": {"x": 900, "y": 910, "width": 95, "height": 112}}
+        ]},
+        {"id": "action-fanout", "safeAreaPolicy": "safe_area", "regions": [
+          {"id": "topology-and-labels", "startFrame": 585, "endFrame": 627, "bounds": {"x": 400, "y": 300, "width": 1075, "height": 510}},
+          {"id": "commit-source-and-stems", "startFrame": 585, "endFrame": 627, "bounds": {"x": 890, "y": 788, "width": 178, "height": 238}}
+        ]},
+        {"id": "history-states", "safeAreaPolicy": "safe_area", "regions": [
+          {"id": "before-undo-open", "startFrame": 795, "endFrame": 807, "bounds": {"x": 360, "y": 765, "width": 910, "height": 110}},
+          {"id": "undo-blocked", "startFrame": 807, "endFrame": 835, "bounds": {"x": 360, "y": 765, "width": 910, "height": 110}},
+          {"id": "redo-open", "startFrame": 835, "endFrame": 855, "bounds": {"x": 360, "y": 765, "width": 910, "height": 110}},
+          {"id": "reopen-verified", "startFrame": 855, "endFrame": 885, "bounds": {"x": 360, "y": 765, "width": 910, "height": 110}}
+        ]}
+      ],
+      "sourceFrameRanges": [
+        {"id": "crisis", "startFrame": 0, "endFrame": 75, "folder": "crisis-frames", "sourceStart": 0, "sourceEnd": 119},
+        {"id": "product_definition", "startFrame": 75, "endFrame": 150, "folder": "understand-frames", "sourceStart": 0, "sourceEnd": 44},
+        {"id": "goal", "startFrame": 150, "endFrame": 210, "folder": "prompt-frames", "sourceStart": 0, "sourceEnd": 59},
+        {"id": "data_read", "startFrame": 210, "endFrame": 285, "folder": "understand-frames", "sourceStart": 0, "sourceEnd": 44},
+        {"id": "space_read", "startFrame": 285, "endFrame": 360, "folder": "understand-frames", "sourceStart": 45, "sourceEnd": 89},
+        {"id": "collision", "startFrame": 360, "endFrame": 450, "folder": "collision-frames", "sourceStart": 0, "sourceEnd": 119},
+        {"id": "safe_plan", "startFrame": 450, "endFrame": 525, "folder": "plan-frames", "sourceStart": 0, "sourceEnd": 89},
+        {"id": "confirm", "startFrame": 525, "endFrame": 585, "folder": "response-frames", "sourceStart": 0, "sourceEnd": 44},
+        {"id": "response", "startFrame": 585, "endFrame": 735, "folder": "response-frames", "sourceStart": 45, "sourceEnd": 219},
+        {"id": "resolution", "startFrame": 735, "endFrame": 795, "folder": "final-frames", "sourceStart": 0, "sourceEnd": 74},
+        {"id": "undo", "startFrame": 795, "endFrame": 825, "folder": "undo-redo-frames", "sourceStart": 0, "sourceEnd": 39},
+        {"id": "redo", "startFrame": 825, "endFrame": 855, "folder": "undo-redo-frames", "sourceStart": 40, "sourceEnd": 89},
+        {"id": "reopen", "startFrame": 855, "endFrame": 885, "folder": "reopen-frames", "sourceStart": 0, "sourceEnd": 89},
+        {"id": "identity", "startFrame": 885, "endFrame": 960, "folder": "final-frames", "sourceStart": 30, "sourceEnd": 149}
+      ]
+    },
+    "vertical": {
+      "width": 1080,
+      "height": 1920,
+      "durationFrames": 840,
+      "fps": 30,
+      "productComprehensionDeadlineFrame": 120,
+      "safeArea": {"top": 120, "left": 60, "right": 60, "bottom": 180},
+      "layers": [
+        {"id": "crisis-primary", "kind": "primary", "text": "28秒后，救护车到达", "startFrame": 0, "endFrame": 60, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "crisis-proof", "kind": "proof", "text": "唯一通道已堵死", "startFrame": 0, "endFrame": 60, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "product-name", "kind": "primary", "text": "这是SEMAFRAME", "startFrame": 60, "endFrame": 120, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "product-definition", "kind": "proof", "text": "AI可读、可操作的3D工作区", "startFrame": 60, "endFrame": 120, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "goal-primary", "kind": "primary", "text": "我对它说", "startFrame": 120, "endFrame": 180, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "goal-proof", "kind": "proof", "text": "“打开通道，别撞到东西”", "startFrame": 120, "endFrame": 180, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "data-primary", "kind": "primary", "text": "AI先读取调度数据", "startFrame": 180, "endFrame": 240, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "data-proof", "kind": "proof", "text": "ETA 28秒 · 净宽1.6m · 只读快照", "startFrame": 180, "endFrame": 240, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "space-primary", "kind": "primary", "text": "再读懂每个物体", "startFrame": 240, "endFrame": 300, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "space-proof", "kind": "proof", "text": "位置 · 尺寸 · 碰撞体 · 可执行动作", "startFrame": 240, "endFrame": 300, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "collision-primary", "kind": "primary", "text": "这个位置会撞上街树", "startFrame": 300, "endFrame": 375, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "collision-proof", "kind": "proof", "text": "空间预检拒绝 · 原场景未改", "startFrame": 300, "endFrame": 375, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "safe-plan-primary", "kind": "primary", "text": "AI找到5个安全终点", "startFrame": 375, "endFrame": 435, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "safe-plan-proof", "kind": "proof", "text": "终点预检 · 5/5通过", "startFrame": 375, "endFrame": 435, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "confirm-primary", "kind": "primary", "text": "AI出方案，人确认一次", "startFrame": 435, "endFrame": 495, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "confirm-proof", "kind": "proof", "text": "11项修改 · 等待提交", "startFrame": 435, "endFrame": 495, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "response-click-primary", "kind": "primary", "text": "一次点击，11个动作", "startFrame": 495, "endFrame": 555, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "response-world-primary", "kind": "primary", "text": "车辆让路，信号和路线同步", "startFrame": 555, "endFrame": 615, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "response-proof", "kind": "proof", "text": "1次点击 · 1次原子提交", "startFrame": 495, "endFrame": 615, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "resolution-primary", "kind": "primary", "text": "救护车抵达医院", "startFrame": 615, "endFrame": 675, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "resolution-proof", "kind": "proof", "text": "最终状态 · 0碰撞冲突", "startFrame": 615, "endFrame": 675, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "editability-primary", "kind": "primary", "text": "改动不是播好的动画", "startFrame": 675, "endFrame": 765, "bounds": {"x": 60, "y": 145, "width": 960, "height": 84}},
+        {"id": "editability-proof", "kind": "proof", "text": "可撤销 · 可恢复 · 保存重开仍存在", "startFrame": 675, "endFrame": 765, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}},
+        {"id": "identity-primary", "kind": "primary", "text": "不是生成一段动画\n而是修改一个3D世界", "startFrame": 765, "endFrame": 840, "bounds": {"x": 60, "y": 145, "width": 960, "height": 168}},
+        {"id": "identity-proof", "kind": "proof", "text": "SEMAFRAME · AI可操作的2D+3D工作空间", "startFrame": 765, "endFrame": 840, "bounds": {"x": 60, "y": 1580, "width": 960, "height": 90}}
+      ],
+      "nonTextOverlays": [
+        {"id": "semantic-model", "safeAreaPolicy": "safe_area", "startFrame": 60, "endFrame": 120, "bounds": {"x": 250, "y": 480, "width": 710, "height": 390}},
+        {"id": "data-readout", "safeAreaPolicy": "safe_area", "startFrame": 180, "endFrame": 240, "bounds": {"x": 220, "y": 445, "width": 630, "height": 330}},
+        {"id": "space-scan", "safeAreaPolicy": "safe_area", "startFrame": 240, "endFrame": 300, "bounds": {"x": 250, "y": 475, "width": 710, "height": 395}},
+        {"id": "collision-mark", "safeAreaPolicy": "safe_area", "startFrame": 300, "endFrame": 375, "bounds": {"x": 200, "y": 930, "width": 680, "height": 560}},
+        {"id": "safe-plan-checks", "safeAreaPolicy": "safe_area", "startFrame": 375, "endFrame": 435, "bounds": {"x": 60, "y": 340, "width": 440, "height": 110}},
+        {"id": "confirm-pointer", "safeAreaPolicy": "safe_area", "regions": [
+          {"id": "approach-early", "startFrame": 435, "endFrame": 465, "bounds": {"x": 568, "y": 1044, "width": 262, "height": 286}},
+          {"id": "approach-late", "startFrame": 465, "endFrame": 487, "bounds": {"x": 530, "y": 1216, "width": 128, "height": 152}},
+          {"id": "landed-pulse", "startFrame": 487, "endFrame": 495, "bounds": {"x": 365, "y": 1085, "width": 350, "height": 355}}
+        ]},
+        {"id": "action-fanout", "safeAreaPolicy": "safe_area", "startFrame": 495, "endFrame": 529, "bounds": {"x": 120, "y": 530, "width": 820, "height": 410}},
+        {"id": "history-states", "safeAreaPolicy": "safe_area", "regions": [
+          {"id": "before-undo-open", "startFrame": 675, "endFrame": 687, "bounds": {"x": 120, "y": 1410, "width": 900, "height": 140}},
+          {"id": "undo-blocked", "startFrame": 687, "endFrame": 715, "bounds": {"x": 120, "y": 1410, "width": 900, "height": 140}},
+          {"id": "redo-open", "startFrame": 715, "endFrame": 735, "bounds": {"x": 120, "y": 1410, "width": 900, "height": 140}},
+          {"id": "reopen-verified", "startFrame": 735, "endFrame": 765, "bounds": {"x": 120, "y": 1410, "width": 900, "height": 140}}
+        ]}
+      ],
+      "sourceFrameRanges": [
+        {"id": "crisis", "startFrame": 0, "endFrame": 60, "folder": "crisis-frames", "sourceStart": 0, "sourceEnd": 119},
+        {"id": "product_definition", "startFrame": 60, "endFrame": 120, "folder": "understand-frames", "sourceStart": 0, "sourceEnd": 44},
+        {"id": "goal", "startFrame": 120, "endFrame": 180, "folder": "prompt-frames", "sourceStart": 0, "sourceEnd": 59},
+        {"id": "data_read", "startFrame": 180, "endFrame": 240, "folder": "understand-frames", "sourceStart": 0, "sourceEnd": 44},
+        {"id": "space_read", "startFrame": 240, "endFrame": 300, "folder": "understand-frames", "sourceStart": 45, "sourceEnd": 89},
+        {"id": "collision", "startFrame": 300, "endFrame": 375, "folder": "collision-frames", "sourceStart": 0, "sourceEnd": 119},
+        {"id": "safe_plan", "startFrame": 375, "endFrame": 435, "folder": "plan-frames", "sourceStart": 0, "sourceEnd": 89},
+        {"id": "confirm", "startFrame": 435, "endFrame": 495, "folder": "response-frames", "sourceStart": 0, "sourceEnd": 44},
+        {"id": "response", "startFrame": 495, "endFrame": 615, "folder": "response-frames", "sourceStart": 45, "sourceEnd": 219},
+        {"id": "resolution", "startFrame": 615, "endFrame": 675, "folder": "final-frames", "sourceStart": 0, "sourceEnd": 74},
+        {"id": "undo", "startFrame": 675, "endFrame": 705, "folder": "undo-redo-frames", "sourceStart": 0, "sourceEnd": 39},
+        {"id": "redo", "startFrame": 705, "endFrame": 735, "folder": "undo-redo-frames", "sourceStart": 40, "sourceEnd": 89},
+        {"id": "reopen", "startFrame": 735, "endFrame": 765, "folder": "reopen-frames", "sourceStart": 0, "sourceEnd": 89},
+        {"id": "identity", "startFrame": 765, "endFrame": 840, "folder": "final-frames", "sourceStart": 30, "sourceEnd": 149}
+      ]
+    }
+  },
+  "comprehensionBeats": [
+    {"id": "crisis", "ranges": {"landscape": {"startFrame": 0, "endFrame": 75}, "vertical": {"startFrame": 0, "endFrame": 60}}},
+    {"id": "product_definition", "ranges": {"landscape": {"startFrame": 75, "endFrame": 150}, "vertical": {"startFrame": 60, "endFrame": 120}}},
+    {"id": "goal", "ranges": {"landscape": {"startFrame": 150, "endFrame": 210}, "vertical": {"startFrame": 120, "endFrame": 180}}},
+    {"id": "data_read", "ranges": {"landscape": {"startFrame": 210, "endFrame": 285}, "vertical": {"startFrame": 180, "endFrame": 240}}},
+    {"id": "space_read", "ranges": {"landscape": {"startFrame": 285, "endFrame": 360}, "vertical": {"startFrame": 240, "endFrame": 300}}},
+    {"id": "collision", "ranges": {"landscape": {"startFrame": 360, "endFrame": 450}, "vertical": {"startFrame": 300, "endFrame": 375}}},
+    {"id": "safe_plan", "ranges": {"landscape": {"startFrame": 450, "endFrame": 525}, "vertical": {"startFrame": 375, "endFrame": 435}}},
+    {"id": "confirm", "ranges": {"landscape": {"startFrame": 525, "endFrame": 585}, "vertical": {"startFrame": 435, "endFrame": 495}}},
+    {"id": "response", "ranges": {"landscape": {"startFrame": 585, "endFrame": 735}, "vertical": {"startFrame": 495, "endFrame": 615}}},
+    {"id": "resolution", "ranges": {"landscape": {"startFrame": 735, "endFrame": 795}, "vertical": {"startFrame": 615, "endFrame": 675}}},
+    {"id": "editability", "ranges": {"landscape": {"startFrame": 795, "endFrame": 885}, "vertical": {"startFrame": 675, "endFrame": 765}}},
+    {"id": "identity", "ranges": {"landscape": {"startFrame": 885, "endFrame": 960}, "vertical": {"startFrame": 765, "endFrame": 840}}}
+  ],
+  "timedTranscriptCues": {
+    "landscape": [
+      {"id": "crisis", "startFrame": 0, "endFrame": 75, "text": {"zh": ["28秒后，救护车到达。", "唯一通道已堵死。"], "en": ["Ambulance arrives in 28s.", "Its route is blocked."]}},
+      {"id": "product_definition", "startFrame": 75, "endFrame": 150, "text": {"zh": ["这是SEMAFRAME。", "AI可读、可操作的3D工作区。"], "en": ["This is SemaFrame.", "An AI-readable, operable 3D workspace."]}},
+      {"id": "goal", "startFrame": 150, "endFrame": 210, "text": {"zh": ["我对它说：", "“打开通道，别撞到东西。”"], "en": ["I give it one goal:", "“Open the route. Hit nothing.”"]}},
+      {"id": "data_read", "startFrame": 210, "endFrame": 285, "text": {"zh": ["AI读取调度快照。", "ETA 28秒 · 净宽1.6米 · 只读"], "en": ["The AI reads dispatch data.", "ETA 28s · 1.6m clear · read-only."]}},
+      {"id": "space_read", "startFrame": 285, "endFrame": 360, "text": {"zh": ["再读懂每个物体。", "位置 · 尺寸 · 碰撞体 · 可执行动作"], "en": ["It reads every object:", "position · size · collider · actions."]}},
+      {"id": "collision", "startFrame": 360, "endFrame": 450, "text": {"zh": ["这个位置会撞上街树。", "预检拒绝，原场景保持不变。"], "en": ["This position hits a street tree.", "Rejected; scene unchanged."]}},
+      {"id": "safe_plan", "startFrame": 450, "endFrame": 525, "text": {"zh": ["找到5个安全终点。", "宿主预检：5/5通过。"], "en": ["Five safe endpoints.", "Preflight: 5/5 passed."]}},
+      {"id": "confirm", "startFrame": 525, "endFrame": 585, "text": {"zh": ["AI出方案，人确认一次。", "11项修改等待提交。"], "en": ["AI proposes. A human confirms.", "11 changes await one commit."]}},
+      {"id": "response_click", "startFrame": 585, "endFrame": 660, "text": {"zh": ["一次点击。", "11个动作，一次原子提交。"], "en": ["One click triggers 11 actions.", "One atomic commit."]}},
+      {"id": "response_world", "startFrame": 660, "endFrame": 735, "text": {"zh": ["车辆让路，信号切换。", "生命通道打开。"], "en": ["Vehicles yield.", "Signals and route synchronize."]}},
+      {"id": "resolution", "startFrame": 735, "endFrame": 795, "text": {"zh": ["救护车抵达医院。", "0冲突，通道畅通。"], "en": ["Hospital reached.", "Final state: 0 conflicts."]}},
+      {"id": "editability", "startFrame": 795, "endFrame": 885, "text": {"zh": ["撤销、恢复、保存、重开均通过。", "状态完整保留。"], "en": ["Undo · redo · save · reopen.", "The editable state survives."]}},
+      {"id": "identity", "startFrame": 885, "endFrame": 960, "text": {"zh": ["世界已保存，仍可编辑。", "SEMAFRAME · OPEN SOURCE ON GITHUB"], "en": ["Not a rendered clip.", "An editable 3D world · SemaFrame."]}}
+    ],
+    "vertical": [
+      {"id": "crisis", "startFrame": 0, "endFrame": 60, "text": {"zh": ["28秒后，救护车到达。", "唯一通道已堵死。"], "en": ["Ambulance arrives in 28s.", "Its route is blocked."]}},
+      {"id": "product_definition", "startFrame": 60, "endFrame": 120, "text": {"zh": ["这是SEMAFRAME。", "AI可读、可操作的3D工作区。"], "en": ["This is SemaFrame.", "An AI-readable, operable 3D workspace."]}},
+      {"id": "goal", "startFrame": 120, "endFrame": 180, "text": {"zh": ["我对它说：", "“打开通道，别撞到东西。”"], "en": ["I give it one goal:", "“Open the route. Hit nothing.”"]}},
+      {"id": "data_read", "startFrame": 180, "endFrame": 240, "text": {"zh": ["AI读取调度快照。", "ETA 28秒 · 净宽1.6米 · 只读"], "en": ["The AI reads dispatch data.", "ETA 28s · 1.6m clear · read-only."]}},
+      {"id": "space_read", "startFrame": 240, "endFrame": 300, "text": {"zh": ["再读懂每个物体。", "位置 · 尺寸 · 碰撞体 · 可执行动作"], "en": ["It reads every object:", "position · size · collider · actions."]}},
+      {"id": "collision", "startFrame": 300, "endFrame": 375, "text": {"zh": ["这个位置会撞上街树。", "预检拒绝，原场景保持不变。"], "en": ["This position hits a street tree.", "Rejected; scene unchanged."]}},
+      {"id": "safe_plan", "startFrame": 375, "endFrame": 435, "text": {"zh": ["找到5个安全终点。", "宿主预检：5/5通过。"], "en": ["Five safe endpoints.", "Preflight: 5/5 passed."]}},
+      {"id": "confirm", "startFrame": 435, "endFrame": 495, "text": {"zh": ["AI出方案，人确认一次。", "11项修改等待提交。"], "en": ["AI proposes. A human confirms.", "11 changes await one commit."]}},
+      {"id": "response_click", "startFrame": 495, "endFrame": 555, "text": {"zh": ["一次点击。", "11个动作，一次原子提交。"], "en": ["One click triggers 11 actions.", "One atomic commit."]}},
+      {"id": "response_world", "startFrame": 555, "endFrame": 615, "text": {"zh": ["车辆让路，信号切换。", "生命通道打开。"], "en": ["Vehicles yield.", "Signals and route synchronize."]}},
+      {"id": "resolution", "startFrame": 615, "endFrame": 675, "text": {"zh": ["救护车抵达医院。", "0冲突，通道畅通。"], "en": ["Hospital reached.", "Final state: 0 conflicts."]}},
+      {"id": "editability", "startFrame": 675, "endFrame": 765, "text": {"zh": ["撤销、恢复、保存、重开均通过。", "状态完整保留。"], "en": ["Undo · redo · save · reopen.", "The editable state survives."]}},
+      {"id": "identity", "startFrame": 765, "endFrame": 840, "text": {"zh": ["世界已保存，仍可编辑。", "SEMAFRAME · OPEN SOURCE ON GITHUB"], "en": ["Not a rendered clip.", "An editable 3D world · SemaFrame."]}}
+    ]
+  }
+}

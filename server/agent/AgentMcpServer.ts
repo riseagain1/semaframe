@@ -14,6 +14,7 @@ export const AGENT_REST_PATHS = Object.freeze({
   get_workspace_instructions: "/v1/workspace/instructions",
   inspect_workspace: "/v1/workspace/inspect",
   inspect_workspace_component: "/v1/workspace/components/inspect",
+  read_workspace_resource_snapshot: "/v1/workspace/resources/snapshot/read",
   inspect_workspace_asset: "/v1/workspace/assets/inspect",
   inspect_workspace_model: "/v1/workspace/models/inspect",
   inspect_workspace_space: "/v1/workspace/space/inspect",
