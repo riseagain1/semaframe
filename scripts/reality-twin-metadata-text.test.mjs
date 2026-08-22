@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { realityTwinMetadataText } from "./reality-twin-metadata-text.mjs";
 
@@ -28,4 +29,11 @@ test("removes complete, nested-looking, and incomplete markup fragments", () => 
 
 test("normalizes whitespace and drops unsafe control bytes", () => {
   assert.equal(realityTwinMetadataText(" A\u0000\n\t B "), "A B");
+});
+
+test("the asset preparation entrypoint binds every metadata field to the extractor", () => {
+  const source = readFileSync(new URL("./prepare-reality-twin-asset.mjs", import.meta.url), "utf8");
+  assert.match(source, /const title = realityTwinMetadataText\(record\.title\);/u);
+  assert.match(source, /return realityTwinMetadataText\(entry\.content\);/u);
+  assert.doesNotMatch(source, /\bstripHtml\b/u);
 });

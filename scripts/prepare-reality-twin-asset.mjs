@@ -24,6 +24,11 @@ import {
 import { basename, dirname, resolve } from "node:path";
 import { NodeIO } from "@gltf-transform/core";
 import sharp from "sharp";
+import {
+  isWithinRealityTwinImportLimits,
+  REALITY_TWIN_MAX_ASSET_BYTES,
+  REALITY_TWIN_MAX_SPLAT_COUNT,
+} from "./reality-twin-import-limits.mjs";
 import { realityTwinMetadataText } from "./reality-twin-metadata-text.mjs";
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
@@ -61,8 +66,6 @@ const SOURCE_SPECS = Object.freeze([
 
 const PUBLISHED_METRES = Object.freeze({ height: 0.322, width: 0.322, depth: 0.157 });
 const DEFAULT_SPLAT_COUNT = 1_500_000;
-const MAXIMUM_SPLAT_COUNT = 4_000_000;
-const MAXIMUM_OUTPUT_BYTES = 256 * 1024 * 1024;
 const RECORD_FLOATS = 14;
 const RECORD_BYTES = RECORD_FLOATS * Float32Array.BYTES_PER_ELEMENT;
 const SH_C0 = 0.28209479177387814;
@@ -89,8 +92,8 @@ function parseArguments(argv) {
   if (!Number.isSafeInteger(parsed.splatCount) || parsed.splatCount < 1) {
     throw new Error("Splat count must be a positive safe integer");
   }
-  if (parsed.splatCount > MAXIMUM_SPLAT_COUNT) {
-    throw new Error(`Splat count exceeds Semaframe's ${MAXIMUM_SPLAT_COUNT} limit`);
+  if (parsed.splatCount > REALITY_TWIN_MAX_SPLAT_COUNT) {
+    throw new Error(`Splat count exceeds Semaframe's ${REALITY_TWIN_MAX_SPLAT_COUNT} limit`);
   }
   return parsed;
 }
@@ -474,8 +477,8 @@ function generateGaussianPly(table, splatCount, sourceCombinedSha, outputPath) {
   const random = xorshift32(seed);
   const header = makeHeader(splatCount, sourceCombinedSha);
   const expectedBytes = header.length + splatCount * RECORD_BYTES;
-  if (expectedBytes > MAXIMUM_OUTPUT_BYTES) {
-    throw new Error(`Gaussian PLY would exceed Semaframe's ${MAXIMUM_OUTPUT_BYTES} byte limit`);
+  if (expectedBytes > REALITY_TWIN_MAX_ASSET_BYTES) {
+    throw new Error(`Gaussian PLY would exceed Semaframe's ${REALITY_TWIN_MAX_ASSET_BYTES} byte limit`);
   }
   const body = Buffer.allocUnsafe(splatCount * RECORD_BYTES);
   const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
@@ -628,7 +631,7 @@ const generated = generateGaussianPly(
   outputPath,
 );
 
-const title = stripHtml(record.title);
+const title = realityTwinMetadataText(record.title);
 const repeating = record.content.descriptiveNonRepeating;
 const dimensionsText = freetextValue(record, "physicalDescription", "Dimensions");
 const sourceResourceRows = sourceFiles.map((source, index) => Object.freeze({
@@ -789,10 +792,12 @@ const evidence = {
     sha256: generated.outputSha256,
     git_policy: "ignored artifact; regenerate locally from the pinned CC0 sources",
     semaframe_limits: {
-      maximum_asset_bytes: MAXIMUM_OUTPUT_BYTES,
-      maximum_splat_count: MAXIMUM_SPLAT_COUNT,
-      within_limits: generated.outputBytes < MAXIMUM_OUTPUT_BYTES
-        && generated.splatCount < MAXIMUM_SPLAT_COUNT,
+      maximum_asset_bytes: REALITY_TWIN_MAX_ASSET_BYTES,
+      maximum_splat_count: REALITY_TWIN_MAX_SPLAT_COUNT,
+      within_limits: isWithinRealityTwinImportLimits({
+        byteLength: generated.outputBytes,
+        splatCount: generated.splatCount,
+      }),
     },
   },
   validation: {

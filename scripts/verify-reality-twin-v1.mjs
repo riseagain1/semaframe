@@ -20,6 +20,7 @@ import {
   publishedModelReceipts,
   stableCanonicalJson,
 } from "./reality-twin-capture-core.mjs";
+import { isWithinRealityTwinImportLimits } from "./reality-twin-import-limits.mjs";
 
 const CONTRACT_PATH = "video/reality-twin-v1.visual-contract.json";
 const COMPOSITION_PATH = "video/src/RealityTwinProofV1.tsx";
@@ -597,7 +598,10 @@ export function validateAssetEvidence(assetEvidence) {
   invariant(derived.format === "ply" && derived.mediaType === "application/ply" && derived.model === "gaussian-3d", "Derived asset must be a Gaussian PLY.");
   invariant(derived.sphericalHarmonicsDegree === 0 && derived.splatCount === conversion.splat_count, "Derived Gaussian SH degree or splat count changed.");
   finiteNumber(derived.byteLength, "derivedAsset.byteLength", { positive: true });
-  invariant(derived.byteLength < 256 * 1024 * 1024 && derived.splatCount < 4_000_000, "Derived asset exceeds SemaFrame import limits.");
+  invariant(isWithinRealityTwinImportLimits({
+    byteLength: derived.byteLength,
+    splatCount: derived.splatCount,
+  }), "Derived asset exceeds SemaFrame import limits.");
   const derivedDigest = normalizeSha256(derived.sha256, "derivedAsset.sha256");
   invariant(derived.coordinateBasis?.units === "metres" && /RUB/iu.test(derived.coordinateBasis?.axes ?? ""), "Derived coordinate basis must be RUB metres.");
   invariant(approximatelyEqual(derived.calibrationReference?.knownDistanceMetres, assetEvidence.subject?.dimensions_metres?.height, 1e-9), "Calibration reference must match the published museum height.");
