@@ -460,17 +460,32 @@ async function installArtifactCapture(cdp) {
   })()`);
 }
 
-async function capturedArtifact(cdp, extension, timeoutMs = 120_000) {
-  await poll(
-    cdp,
-    `Object.keys(window.__realityOpsArtifacts ?? {}).some((name) => name.endsWith(${JSON.stringify(extension)}))`,
-    `${extension} download`,
-    timeoutMs,
-  );
-  return cdp.evaluate(`(() => {
-    const name = Object.keys(window.__realityOpsArtifacts).find((candidate) => candidate.endsWith(${JSON.stringify(extension)}));
-    return name ? { name, ...window.__realityOpsArtifacts[name] } : undefined;
-  })()`);
+export async function capturedArtifact(cdp, extension, timeoutMs = 120_000) {
+  if (extension === ".usda") {
+    await poll(
+      cdp,
+      'Object.keys(window.__realityOpsArtifacts ?? {}).some((name) => name.endsWith(".usda"))',
+      ".usda download",
+      timeoutMs,
+    );
+    return cdp.evaluate(`(() => {
+      const name = Object.keys(window.__realityOpsArtifacts).find((candidate) => candidate.endsWith(".usda"));
+      return name ? { name, ...window.__realityOpsArtifacts[name] } : undefined;
+    })()`);
+  }
+  if (extension === ".step") {
+    await poll(
+      cdp,
+      'Object.keys(window.__realityOpsArtifacts ?? {}).some((name) => name.endsWith(".step"))',
+      ".step download",
+      timeoutMs,
+    );
+    return cdp.evaluate(`(() => {
+      const name = Object.keys(window.__realityOpsArtifacts).find((candidate) => candidate.endsWith(".step"));
+      return name ? { name, ...window.__realityOpsArtifacts[name] } : undefined;
+    })()`);
+  }
+  throw new Error(`Unsupported RealityOps artifact extension: ${extension}`);
 }
 
 function componentRef(manifest, typeId) {

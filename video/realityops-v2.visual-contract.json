@@ -27,7 +27,7 @@
     "frameCountPerFolder": 48,
     "captureDimensions": {"width": 1600, "height": 900},
     "compositionSourceSha256": "sha256:d781190e77aaf53d07902a2680ab209beff7d41d31e14f1ca4f1af922c9c984f",
-    "captureScriptSha256": "sha256:dadf1fad73ebe2a6293e3bab75e62269bf648631ae21a33e0e3e3742f8a51e42",
+    "captureScriptSha256": "sha256:56ff3920a43bb4aeca51420c8f03597c2aa525510a503b50f8e069296bb052dc",
     "evidenceSha256": "sha256:b2880cd7ba508a96a481fe882fa0959fcb35a01adde1031e7a91ecdd1830617c",
     "captureAssetManifestSha256": "sha256:8ad6a07b39aa2de78b890f0cd87729dbab297032abab641417d9481411fb7552"
   },

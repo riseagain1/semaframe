@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {resolve} from "node:path";
 import test from "node:test";
+import {capturedArtifact} from "./realityops-demo-capture.mjs";
 import {
   assertTruthfulVisibleCopy,
   computeCaptureAssetManifest,
@@ -19,6 +20,27 @@ const loadContract = () => {
   return contract;
 };
 const clone = (value) => structuredClone(value);
+
+test("artifact capture only evaluates fixed allowlisted export queries", async () => {
+  const evaluated = [];
+  const cdp = {
+    async evaluate(expression) {
+      evaluated.push(expression);
+      if (evaluated.length % 2 === 1) return true;
+      return {name: expression.includes('endsWith(".usda")') ? "pump.usda" : "pump.step"};
+    },
+  };
+
+  assert.deepEqual(await capturedArtifact(cdp, ".usda", 10), {name: "pump.usda"});
+  assert.deepEqual(await capturedArtifact(cdp, ".step", 10), {name: "pump.step"});
+  const callCount = evaluated.length;
+  await assert.rejects(
+    capturedArtifact(cdp, '"); globalThis.__injected = true; //', 10),
+    /Unsupported RealityOps artifact extension/u,
+  );
+  assert.equal(evaluated.length, callCount);
+  assert.ok(evaluated.every((expression) => !expression.includes("__injected")));
+});
 
 test("accepts the complete dual-format RealityOps V2 visual contract", () => {
   const summary = validateVisualContract(loadContract(), {
