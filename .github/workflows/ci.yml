@@ -32,6 +32,14 @@ jobs:
         run: npm run typecheck
       - name: Type-check demo source
         run: npm run demo:typecheck
+      - name: Verify Reality Twin source contracts
+        run: |
+          npm run demo:test:audio
+          npm run demo:test:reality-twin:metadata
+          npm run demo:test:reality-twin:limits
+          npm run demo:test:reality-twin:asset-verifier
+          npm run demo:test:reality-twin:v1-verifier
+          npm run demo:test:english-gallery
       - name: Build production bundle
         run: npm run build
       - name: Verify lazy modeling and Reality runtimes
