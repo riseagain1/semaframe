@@ -19,7 +19,7 @@ The central idea is simple: there is one authoritative `WorkspaceStore`. The UI,
 
 ## See SemaFrame in action
 
-These three silent-first films show the product through ordinary-language outcomes. Click a poster for the English edition; sound is optional because the complete story is on screen.
+These three silent-first English films show the product through ordinary-language outcomes. Click any poster to watch; sound is optional because the complete story is on screen.
 
 <table>
   <tr>
@@ -27,26 +27,19 @@ These three silent-first films show the product through ordinary-language outcom
       <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en.mp4"><img src="./docs/media/semaframe-realityops-v2-en-poster.jpg" alt="Watch SemaFrame build and place an editable backup pump" width="100%" /></a><br />
       <strong>Build a backup pump</strong><br />
       An Agent assembles editable parts, catches a blocked aisle, corrects the placement, wires data and controls, preserves history, and exports the model.<br /><br />
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en.mp4">▶ English</a> ·
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2.mp4">中文</a><br />
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en-vertical.mp4">English portrait</a> ·
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-vertical.mp4">中文竖屏</a>
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en.mp4">▶ Watch film</a>
     </td>
     <td width="33%" valign="top">
       <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo-en.mp4"><img src="./docs/media/semaframe-living-room-public-demo-en-poster.jpg" alt="Watch SemaFrame redesign a living room without blocking the doorway" width="100%" /></a><br />
       <strong>Redesign a living room</strong><br />
       One request creates office and cinema spaces, rejects a sofa that blocks the doorway, routes one 2D control into the 3D room, and remains undoable.<br /><br />
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo-en.mp4">▶ English</a> ·
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo.mp4">中文</a>
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo-en.mp4">▶ Watch film</a>
     </td>
     <td width="33%" valign="top">
       <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en.mp4"><img src="./docs/media/semaframe-emergency-city-v4-en-poster.jpg" alt="Watch SemaFrame coordinate an editable miniature-city emergency route" width="100%" /></a><br />
       <strong>Open an emergency route</strong><br />
       AI reads dispatch data and scene semantics, rejects a collision, proposes safe endpoints, and one human-confirmed click commits 11 coordinated actions.<br /><br />
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en.mp4">▶ English</a> ·
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4.mp4">中文</a><br />
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en-vertical.mp4">English portrait</a> ·
-      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-vertical.mp4">中文竖屏</a>
+      <a href="https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en.mp4">▶ Watch film</a>
     </td>
   </tr>
 </table>

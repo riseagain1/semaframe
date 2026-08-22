@@ -47,7 +47,7 @@ The V4 product-comprehension cut keeps that verified capture but answers the mis
 - `SemaFrameRealityOpsPoster`: 1920×1080 still
 - English and Simplified Chinese accessibility subtitle files under `video/captions`: the city V3/V4 and RealityOps V2 landscape/portrait files follow their distinct timelines. They transcribe visible story and proof labels; they are not narration transcripts
 
-The current English and Chinese pump, furniture, and traffic films live in the [`demo-gallery-v1` GitHub Release](https://github.com/riseagain1/semaframe/releases/tag/demo-gallery-v1); the original launch films remain in [`v0.2.0`](https://github.com/riseagain1/semaframe/releases/tag/v0.2.0). The repository keeps reproducible Remotion source, captions, visual contracts, captured evidence, QA tooling, and lightweight README posters. Rendered video binaries stay out of Git history.
+The three public English showcase films—pump, furniture, and traffic—live in the [`demo-gallery-v1` GitHub Release](https://github.com/riseagain1/semaframe/releases/tag/demo-gallery-v1); the original launch films remain in [`v0.2.0`](https://github.com/riseagain1/semaframe/releases/tag/v0.2.0). The repository keeps reproducible Remotion source, captions, visual contracts, captured evidence, QA tooling, and lightweight README posters. Rendered video binaries stay out of Git history.
 
 ## Rebuild
 
