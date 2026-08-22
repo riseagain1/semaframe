@@ -1,0 +1,208 @@
+{
+  "context_hash": "sha256:b8e1598e8e8cef8af6b7c42baf4b8b973cb7cb92fdbc57eb28fcc7791781f5a4",
+  "events": [
+    {
+      "detail": "Workspace revision 10 · sha256:b8e1598e8e8cef8af6b7c42baf4b8b973cb7cb92fdbc57eb28fcc7791781f5a4",
+      "kind": "context",
+      "sequence": 1,
+      "source": "host",
+      "status": "verified",
+      "title": "Authoritative context loaded",
+      "trace_type": null
+    },
+    {
+      "detail": "gpt-5.5",
+      "kind": "model_run",
+      "sequence": 2,
+      "source": "host",
+      "status": "live",
+      "title": "Real Codex planner started",
+      "trace_type": null
+    },
+    {
+      "detail": "01a027cd-fd14-7fd3-8bc3-566f35bb4251",
+      "kind": "thread",
+      "sequence": 3,
+      "source": "codex",
+      "status": "started",
+      "title": "Codex execution thread",
+      "trace_type": "thread.started"
+    },
+    {
+      "detail": "Structured output required",
+      "kind": "turn",
+      "sequence": 4,
+      "source": "codex",
+      "status": "started",
+      "title": "Planning turn started",
+      "trace_type": "turn.started"
+    },
+    {
+      "detail": "Validated against the strict plan schema",
+      "kind": "structured_output",
+      "sequence": 5,
+      "source": "model",
+      "status": "completed",
+      "title": "Model returned an EmergencyPlan",
+      "trace_type": "item.completed"
+    },
+    {
+      "detail": "input_tokens 121767 · cached_input_tokens 21888 · output_tokens 1363 · reasoning_output_tokens 0",
+      "kind": "turn",
+      "sequence": 6,
+      "source": "codex",
+      "status": "completed",
+      "title": "Planning turn completed",
+      "trace_type": "turn.completed"
+    },
+    {
+      "detail": "Blue sedan is visible in the emergency avenue exclusion band centered at z=-0.9.",
+      "kind": "decision",
+      "sequence": 7,
+      "source": "model",
+      "status": "selected",
+      "title": "Blocker identified · Blue sedan",
+      "trace_type": "plan.blocker"
+    },
+    {
+      "detail": "Yellow taxi is visible in the emergency avenue exclusion band centered at z=-0.9.",
+      "kind": "decision",
+      "sequence": 8,
+      "source": "model",
+      "status": "selected",
+      "title": "Blocker identified · Yellow taxi",
+      "trace_type": "plan.blocker"
+    },
+    {
+      "detail": "City bus is visible in the emergency avenue exclusion band centered at z=-0.9.",
+      "kind": "decision",
+      "sequence": 9,
+      "source": "model",
+      "status": "selected",
+      "title": "Blocker identified · City bus",
+      "trace_type": "plan.blocker"
+    },
+    {
+      "detail": "Red compact is visible in the emergency avenue exclusion band centered at z=-0.9.",
+      "kind": "decision",
+      "sequence": 10,
+      "source": "model",
+      "status": "selected",
+      "title": "Blocker identified · Red compact",
+      "trace_type": "plan.blocker"
+    },
+    {
+      "detail": "(4.4, 0.24, 3.65) m · query_spatial_placement required",
+      "kind": "action",
+      "sequence": 11,
+      "source": "model",
+      "status": "requires_preflight",
+      "title": "Selected move_to · Blue sedan",
+      "trace_type": "plan.action.move_to"
+    },
+    {
+      "detail": "(1.1, 0.24, -3.65) m · query_spatial_placement required",
+      "kind": "action",
+      "sequence": 12,
+      "source": "model",
+      "status": "requires_preflight",
+      "title": "Selected move_to · Yellow taxi",
+      "trace_type": "plan.action.move_to"
+    },
+    {
+      "detail": "(-3.1, 0.24, 3.65) m · query_spatial_placement required",
+      "kind": "action",
+      "sequence": 13,
+      "source": "model",
+      "status": "requires_preflight",
+      "title": "Selected move_to · City bus",
+      "trace_type": "plan.action.move_to"
+    },
+    {
+      "detail": "(-6.3, 0.24, -3.65) m · query_spatial_placement required",
+      "kind": "action",
+      "sequence": 14,
+      "source": "model",
+      "status": "requires_preflight",
+      "title": "Selected move_to · Red compact",
+      "trace_type": "plan.action.move_to"
+    },
+    {
+      "detail": "(-9.45, 0.24, -0.85) m · query_spatial_placement required",
+      "kind": "action",
+      "sequence": 15,
+      "source": "model",
+      "status": "requires_preflight",
+      "title": "Selected move_to · Ambulance AMB-07",
+      "trace_type": "plan.action.move_to"
+    },
+    {
+      "detail": "Removes the blocked-route visual once the corridor is proposed clear.",
+      "kind": "action",
+      "sequence": 16,
+      "source": "model",
+      "status": "selected",
+      "title": "Selected hide · Blocked emergency route",
+      "trace_type": "plan.action.hide"
+    },
+    {
+      "detail": "Shows the open-route visual for the proposed cleared corridor.",
+      "kind": "action",
+      "sequence": 17,
+      "source": "model",
+      "status": "selected",
+      "title": "Selected show · Open emergency route",
+      "trace_type": "plan.action.show"
+    },
+    {
+      "detail": "Turns off the first red emergency stop signal.",
+      "kind": "action",
+      "sequence": 18,
+      "source": "model",
+      "status": "selected",
+      "title": "Selected hide · Emergency red signal 1",
+      "trace_type": "plan.action.hide"
+    },
+    {
+      "detail": "Turns off the second red emergency stop signal.",
+      "kind": "action",
+      "sequence": 19,
+      "source": "model",
+      "status": "selected",
+      "title": "Selected hide · Emergency red signal 2",
+      "trace_type": "plan.action.hide"
+    },
+    {
+      "detail": "Turns on the first green emergency go signal.",
+      "kind": "action",
+      "sequence": 20,
+      "source": "model",
+      "status": "selected",
+      "title": "Selected show · Emergency green signal 1",
+      "trace_type": "plan.action.show"
+    },
+    {
+      "detail": "Turns on the second green emergency go signal.",
+      "kind": "action",
+      "sequence": 21,
+      "source": "model",
+      "status": "selected",
+      "title": "Selected show · Emergency green signal 2",
+      "trace_type": "plan.action.show"
+    },
+    {
+      "detail": "sha256:5789379cf66989be657c464fbba229c634184c71a84c05873542fed979292cb3",
+      "kind": "plan",
+      "sequence": 22,
+      "source": "host",
+      "status": "schema_valid_preflight_pending",
+      "title": "EmergencyPlan schema accepted · host preflight pending",
+      "trace_type": "host.validation"
+    }
+  ],
+  "live_model": true,
+  "model": "gpt-5.5",
+  "plan_hash": "sha256:5789379cf66989be657c464fbba229c634184c71a84c05873542fed979292cb3",
+  "run_id": "planner_0e2c736b82d0c785",
+  "truth_window_version": "1.0"
+}

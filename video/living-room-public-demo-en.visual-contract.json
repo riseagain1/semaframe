@@ -1,0 +1,92 @@
+{
+  "version": "1.0",
+  "locale": "en-US",
+  "compositionExport": "SemaFrameLivingRoomPublicDemoEnglish",
+  "posterExport": "SemaFrameLivingRoomPublicDemoEnglishPoster",
+  "compositionSourcePath": "video/src/LivingRoomPublicDemo.tsx",
+  "compositionSourceSha256": "sha256:dd484db035391845b6e6c163e8c301929d4f3a05bf12c0f6c69cacc9e04f8038",
+  "captionPath": "video/captions/semaframe-living-room-public-demo.en-US.srt",
+  "captionRole": "accessibility_summary_of_visible_copy",
+  "captureRoot": "video/public/living-room",
+  "evidencePath": "video/public/living-room/evidence.json",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "durationFrames": 1200,
+  "durationSeconds": 40,
+  "suggestedVideoPath": "artifacts/semaframe-living-room-public-demo-en.mp4",
+  "suggestedPosterPath": "artifacts/semaframe-living-room-public-demo-en-poster.png",
+  "silentFirst": true,
+  "audioRequiredForComprehension": false,
+  "safeArea": {
+    "top": 80,
+    "left": 72,
+    "right": 72,
+    "bottom": 42
+  },
+  "claimBoundaries": {
+    "roomSource": "synthetic_procedural_baseline_not_real_home_scan",
+    "validationScope": "deterministic_collision_and_bounded_physics_preflight_not_building_certification",
+    "cinemaControlScope": "durable_workspace_event_routing_not_smart_home_network"
+  },
+  "screenCopy": {
+    "hook": [
+      "AI didn’t just furnish this room",
+      "It knows what must stay clear"
+    ],
+    "promptLabel": "ONE REQUEST TO THE AGENT",
+    "prompt": "Turn this small living room into an office and a cinema—without blocking the door.",
+    "room": [
+      "First, it maps the room",
+      "and the doorway"
+    ],
+    "build": [
+      "Then it builds spaces to work",
+      "and watch movies"
+    ],
+    "collisionQuestion": "Put the sofa here?",
+    "collisionBlocked": [
+      "Stop—",
+      "it blocks the doorway"
+    ],
+    "correctionStart": "The Agent picks a safer spot",
+    "correctionSuccess": [
+      "Sofa placed",
+      "Doorway clear"
+    ],
+    "cinemaPrompt": [
+      "Now press",
+      "“Cinema Mode”"
+    ],
+    "cinemaResponse": [
+      "TV and lights",
+      "respond together"
+    ],
+    "undo": [
+      "Changed your mind?",
+      "Undo"
+    ],
+    "redo": [
+      "Then bring it back",
+      "with Redo"
+    ],
+    "finalOpening": "This is not a rendered image",
+    "finalIdentity": [
+      "It’s an editable space you can check,",
+      "control, and keep changing"
+    ],
+    "footer": "SEMAFRAME · AN AI-OPERABLE SPATIAL WORKSPACE",
+    "boundaryNote": "SYNTHETIC ROOM · COLLISION PREFLIGHT, NOT BUILDING CERTIFICATION"
+  },
+  "timeline": [
+    { "id": "hook", "startFrame": 0, "endFrame": 72 },
+    { "id": "prompt", "startFrame": 72, "endFrame": 150 },
+    { "id": "room", "startFrame": 150, "endFrame": 255 },
+    { "id": "build", "startFrame": 255, "endFrame": 420 },
+    { "id": "collision", "startFrame": 420, "endFrame": 600, "blockedCopyStartFrame": 532 },
+    { "id": "correction", "startFrame": 600, "endFrame": 750, "successCopyStartFrame": 698 },
+    { "id": "cinema", "startFrame": 750, "endFrame": 960, "clickStartFrame": 878, "responseCopyStartFrame": 894 },
+    { "id": "undoRedo", "startFrame": 960, "endFrame": 1080, "undoCopyStartFrame": 992, "redoCopyStartFrame": 1042 },
+    { "id": "identity", "startFrame": 1080, "endFrame": 1200, "identityCopyStartFrame": 1146 }
+  ]
+}

@@ -1,0 +1,64 @@
+1
+00:00:00,000 --> 00:00:02,000
+Ambulance arrives in 28s.
+Its route is blocked.
+
+2
+00:00:02,000 --> 00:00:04,000
+This is SemaFrame.
+An AI-readable, operable 3D workspace.
+
+3
+00:00:04,000 --> 00:00:06,000
+I give it one goal:
+“Open the route. Hit nothing.”
+
+4
+00:00:06,000 --> 00:00:08,000
+The AI reads dispatch data.
+ETA 28s · 1.6m clear · read-only.
+
+5
+00:00:08,000 --> 00:00:10,000
+It reads every object:
+position · size · collider · actions.
+
+6
+00:00:10,000 --> 00:00:12,500
+This position hits a street tree.
+Rejected; scene unchanged.
+
+7
+00:00:12,500 --> 00:00:14,500
+Five safe endpoints.
+Preflight: 5/5 passed.
+
+8
+00:00:14,500 --> 00:00:16,500
+AI proposes. A human confirms.
+11 changes await one commit.
+
+9
+00:00:16,500 --> 00:00:18,500
+One click triggers 11 actions.
+One atomic commit.
+
+10
+00:00:18,500 --> 00:00:20,500
+Vehicles yield.
+Signals and route synchronize.
+
+11
+00:00:20,500 --> 00:00:22,500
+Hospital reached.
+Final state: 0 conflicts.
+
+12
+00:00:22,500 --> 00:00:25,500
+Undo · redo · save · reopen.
+The editable state survives.
+
+13
+00:00:25,500 --> 00:00:28,000
+Not a rendered clip.
+An editable 3D world · SemaFrame.

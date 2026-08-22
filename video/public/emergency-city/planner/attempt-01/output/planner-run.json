@@ -1,0 +1,46 @@
+{
+  "authority": {
+    "dispatch_snapshot_hash": "fnv1a32:7f082125",
+    "registry_digest": "fnv1a32:8a4109fb",
+    "workspace_id": "workspace_main",
+    "workspace_revision": 10
+  },
+  "generated_at": "2026-08-22T04:50:44.038Z",
+  "hardcoded_fallback": false,
+  "hashes": {
+    "context": "sha256:b8e1598e8e8cef8af6b7c42baf4b8b973cb7cb92fdbc57eb28fcc7791781f5a4",
+    "output_schema": "sha256:21eb032abc92533664ca7be0c324666a59c96d22367a3a7956505f0df4a71387",
+    "plan": "sha256:5789379cf66989be657c464fbba229c634184c71a84c05873542fed979292cb3",
+    "prompt": "sha256:463f5eb084245519076f86c38ab97621de67384a6fd280b62eaa62e0eadef569",
+    "raw_trace": "sha256:21807d5aa8274e79cb9ad553d1df30eb9e46baa15653cf684ed85eced743e68a",
+    "truth_window_events": "sha256:bc070806657826d5aeb1e87cc208140e31733c121cc8fda29a4e8640ece624bd"
+  },
+  "live_model": true,
+  "mode": "live_codex",
+  "model": "gpt-5.5",
+  "outputs": [
+    "emergency-plan.json",
+    "codex-trace.raw.jsonl",
+    "truth-window-events.json",
+    "planner-run.json"
+  ],
+  "plan_summary": {
+    "actionCount": 11,
+    "blockerCount": 4,
+    "moveCount": 5,
+    "sourceComponentId": "CMP_000129",
+    "sourceEvent": "pressed",
+    "visibilityActionCount": 6
+  },
+  "planner_run_version": "1.0",
+  "run_hash": "sha256:0e2c736b82d0c78557cbc447ef5a6249b53c6cea0ae7fa024689e87a4c000f6b",
+  "run_id": "planner_0e2c736b82d0c785",
+  "runtime_version": "codex-cli 0.131.0",
+  "safety": {
+    "automatic_fixture_fallback": false,
+    "collision_policy": "preserve",
+    "endpoints_are_host_preflight_pending": true,
+    "model_tool_use_allowed": false,
+    "model_working_directory_isolated_from_repository": true
+  }
+}

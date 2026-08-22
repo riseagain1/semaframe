@@ -1,7 +1,7 @@
 {
   "spatialGraph": {
     "format": "semaframe-spatial-graph",
-    "version": "2.0",
+    "version": "3.1",
     "workspaceRevision": 2,
     "stage": {
       "component_id": "CMP_000001",

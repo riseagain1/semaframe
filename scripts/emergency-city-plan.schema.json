@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semaframe.local/schemas/emergency-city-plan-1.0.json",
+  "title": "SemaFrame Emergency City Agent Plan",
+  "description": "A model-authored, revision-bound emergency-corridor plan. Endpoints remain proposals until the Workspace validates them with query_spatial_placement.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "plan_version",
+    "source",
+    "objective_summary",
+    "observed_constraints",
+    "blockers",
+    "control",
+    "execution_policy",
+    "success_criteria",
+    "claim_boundaries"
+  ],
+  "properties": {
+    "plan_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "workspace_revision",
+        "registry_digest",
+        "dispatch_snapshot_hash"
+      ],
+      "properties": {
+        "workspace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workspace_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "registry_digest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "dispatch_snapshot_hash": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "objective_summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 600
+    },
+    "observed_constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eta_seconds",
+        "current_clearance_m",
+        "required_clearance_m",
+        "route_status"
+      ],
+      "properties": {
+        "eta_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "current_clearance_m": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "required_clearance_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000
+        },
+        "route_status": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["component_id", "reason"],
+        "properties": {
+          "component_id": {
+            "$ref": "#/$defs/componentId"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          }
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_component_id", "source_event", "actions"],
+      "properties": {
+        "source_component_id": {
+          "$ref": "#/$defs/componentId"
+        },
+        "source_event": {
+          "type": "string",
+          "const": "pressed"
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "action_id",
+              "target_component_id",
+              "action",
+              "input",
+              "requires_spatial_preflight",
+              "rationale"
+            ],
+            "properties": {
+              "action_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$"
+              },
+              "target_component_id": {
+                "$ref": "#/$defs/componentId"
+              },
+              "action": {
+                "type": "string",
+                "enum": ["move_to", "show", "hide"]
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["target"],
+                "properties": {
+                  "target": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/worldPlacement"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              "requires_spatial_preflight": {
+                "type": "boolean"
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            }
+          }
+        }
+      }
+    },
+    "execution_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit_mode", "endpoint_validation", "collision_policy"],
+      "properties": {
+        "commit_mode": {
+          "type": "string",
+          "const": "validate_then_atomic"
+        },
+        "endpoint_validation": {
+          "type": "string",
+          "const": "query_spatial_placement_required"
+        },
+        "collision_policy": {
+          "type": "string",
+          "const": "preserve"
+        }
+      }
+    },
+    "success_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 400
+      }
+    },
+    "claim_boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    }
+  },
+  "$defs": {
+    "componentId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "finiteCoordinate": {
+      "type": "number",
+      "minimum": -1000000,
+      "maximum": 1000000
+    },
+    "vec3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/finiteCoordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/finiteCoordinate"
+        },
+        "z": {
+          "$ref": "#/$defs/finiteCoordinate"
+        }
+      }
+    },
+    "worldPlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["space", "position", "rotation", "scale"],
+      "properties": {
+        "space": {
+          "type": "string",
+          "const": "world3d"
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "rotation": {
+          "$ref": "#/$defs/vec3"
+        },
+        "scale": {
+          "$ref": "#/$defs/vec3"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+1
+00:00:00,000 --> 00:00:02,400
+AI furnished this room.
+It knows what must stay clear.
+
+2
+00:00:02,400 --> 00:00:05,000
+Request: Add work and movies.
+Keep the doorway clear.
+
+3
+00:00:05,000 --> 00:00:08,500
+First, it maps the room
+and the doorway.
+
+4
+00:00:08,500 --> 00:00:14,000
+Then it builds spaces to work
+and watch movies.
+
+5
+00:00:14,000 --> 00:00:17,733
+Put the sofa here?
+
+6
+00:00:17,733 --> 00:00:20,000
+Stop—it blocks the doorway.
+
+7
+00:00:20,000 --> 00:00:23,267
+The Agent picks a safer spot.
+
+8
+00:00:23,267 --> 00:00:25,000
+Sofa placed. Doorway clear.
+
+9
+00:00:25,000 --> 00:00:29,733
+Now press “Cinema Mode.”
+
+10
+00:00:29,800 --> 00:00:32,000
+TV and lights respond together.
+
+11
+00:00:33,067 --> 00:00:34,733
+Changed your mind? Undo.
+
+12
+00:00:34,733 --> 00:00:36,000
+Bring it back with Redo.
+
+13
+00:00:36,000 --> 00:00:38,200
+Not a rendered image.
+
+14
+00:00:38,200 --> 00:00:40,000
+Editable, inspectable, ready to change.

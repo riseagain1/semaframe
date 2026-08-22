@@ -1,6 +1,14 @@
 node_modules/
 dist/
-artifacts/
+
+# Rendered videos are distributed as GitHub Release assets, not Git blobs.
+# Keep Remotion source, capture evidence, captions, contracts, and posters tracked.
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.mkv
+*.avi
 video/public/audio/*.wav
 
 # Local social-media launch assets. Keep reproducible product/demo sources,

@@ -1,0 +1,145 @@
+{
+  "demo": "SemaFrame warm living-room physical pull request",
+  "generatedAt": "2026-08-21T13:23:49.443Z",
+  "syntheticBaseline": true,
+  "workspace": {
+    "revision": 7,
+    "componentCount": 46
+  },
+  "collisionGuard": {
+    "errorCode": "spatial_collision",
+    "requiredAction": "query_spatial_placement",
+    "revisionBefore": 4,
+    "revisionAfterRejection": 4,
+    "previewComponentIds": [
+      "CMP_000039",
+      "CMP_000040",
+      "CMP_000041",
+      "CMP_000042",
+      "CMP_000043",
+      "CMP_000044",
+      "CMP_000045",
+      "CMP_000046"
+    ],
+    "rejectedReservedComponentIds": [
+      "CMP_000047",
+      "CMP_000048",
+      "CMP_000049",
+      "CMP_000050",
+      "CMP_000051",
+      "CMP_000052",
+      "CMP_000053",
+      "CMP_000054"
+    ],
+    "preflightValid": false,
+    "conflicts": [
+      {
+        "component_id": "__SPATIAL_CANDIDATE__",
+        "conflicts_with": "CMP_000008",
+        "overlap": {
+          "x": 2.2000000000000006,
+          "y": 1.5,
+          "z": 1.3399999999999999
+        }
+      }
+    ],
+    "suggestionCount": 3,
+    "correctedPreflightValid": true,
+    "correctedPreflightConflicts": []
+  },
+  "correction": {
+    "resultingRevision": 6,
+    "spatialGraphVersion": "3.1",
+    "collisionConflictCount": 0,
+    "physicsVersion": "2.0",
+    "physicsModel": "quasi_static_rigid_support_v2",
+    "physicsFeasible": true,
+    "physicsIssues": []
+  },
+  "cinemaMode": {
+    "pointerInput": true,
+    "sourceButtonId": "CMP_000038",
+    "controlledComponentIds": [
+      "CMP_000012",
+      "CMP_000021",
+      "CMP_000022",
+      "CMP_000023",
+      "CMP_000030"
+    ],
+    "expectedVisibility": [
+      "visible",
+      "visible",
+      "visible",
+      "visible",
+      "hidden"
+    ],
+    "sourceFrame": 28,
+    "routedVisibilityEventCount": 5,
+    "finalVisibility": [
+      "visible",
+      "visible",
+      "visible",
+      "visible",
+      "hidden"
+    ],
+    "eventSummary": [
+      {
+        "type": "pressed",
+        "componentId": "CMP_000038",
+        "source": "user"
+      },
+      {
+        "type": "visibility_changed",
+        "componentId": "CMP_000022",
+        "source": "binding"
+      },
+      {
+        "type": "visibility_changed",
+        "componentId": "CMP_000023",
+        "source": "binding"
+      },
+      {
+        "type": "visibility_changed",
+        "componentId": "CMP_000021",
+        "source": "binding"
+      },
+      {
+        "type": "visibility_changed",
+        "componentId": "CMP_000012",
+        "source": "binding"
+      },
+      {
+        "type": "visibility_changed",
+        "componentId": "CMP_000030",
+        "source": "binding"
+      }
+    ]
+  },
+  "undoRedo": {
+    "revisionBeforeUndo": 7,
+    "undoRevision": 6,
+    "redoRevision": 7,
+    "restored": true,
+    "undoSourceFrame": 16,
+    "redoSourceFrame": 32
+  },
+  "capture": {
+    "width": 1600,
+    "height": 900,
+    "frameCountPerSequence": 48,
+    "frameFolders": [
+      "room-frames",
+      "build-frames",
+      "collision-frames",
+      "correction-frames",
+      "cinema-control-frames",
+      "undo-redo-frames",
+      "final-orbit-frames"
+    ]
+  },
+  "claimBoundaries": [
+    "The room is a synthetic procedural baseline, not a scan of a real home.",
+    "Collision and physics are deterministic preflight, not building-code certification.",
+    "Cinema mode uses durable event routing and renderer transitions, not a smart-home network."
+  ]
+}
