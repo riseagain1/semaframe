@@ -96,14 +96,14 @@
     "@sparkjsdev/spark": "2.1.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.33.0",
     "manifold-3d": "3.5.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "replicad": "1.0.0",
     "replicad-opencascadejs": "1.0.0",
     "saxes": "^6.0.0",
-    "three": "0.180.0",
+    "three": "0.185.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
