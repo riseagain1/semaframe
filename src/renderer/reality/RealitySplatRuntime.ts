@@ -16,6 +16,7 @@ import {
   type RealitySplatQuality,
   type RealitySplatRuntimeSnapshot,
   type RealitySplatRuntimeStatus,
+  type RealitySplatSurfaceHit,
 } from "./types";
 
 export type RealitySplatRuntimeOptions = Readonly<{
@@ -255,6 +256,40 @@ export class RealitySplatRuntime {
       root: record.root,
       selectionObject: record.boundsProxy.hitTarget,
     };
+  }
+
+  /**
+   * Raycast one loaded capture surface without making splats part of ordinary
+   * Workspace selection. Spark's current LOD index is intentionally used: the
+   * result is a visual surface estimate, not survey-grade geometry.
+   */
+  raycastSurface(instanceId: string, raycaster: THREE.Raycaster): RealitySplatSurfaceHit | undefined {
+    if (this.disposed || this.contextLost) return undefined;
+    const record = this.instances.get(instanceId);
+    if (!record || !record.root.visible || record.descriptor.visible === false
+      || !record.splat.visible || record.splat.opacity <= 1e-6) return undefined;
+    for (let ancestor = record.root.parent; ancestor; ancestor = ancestor.parent) {
+      if (!ancestor.visible) return undefined;
+    }
+
+    record.root.updateWorldMatrix(true, true);
+    const previousRaycastable = record.splat.raycastable;
+    try {
+      record.splat.raycastable = true;
+      const hit = raycaster.intersectObject(record.splat, false)[0];
+      if (!hit || !Number.isFinite(hit.distance)
+        || ![hit.point.x, hit.point.y, hit.point.z].every(Number.isFinite)) return undefined;
+      const sourcePoint = record.splat.worldToLocal(hit.point.clone());
+      if (![sourcePoint.x, sourcePoint.y, sourcePoint.z].every(Number.isFinite)) return undefined;
+      return Object.freeze({
+        worldPoint: Object.freeze({ x: hit.point.x, y: hit.point.y, z: hit.point.z }),
+        sourcePoint: Object.freeze({ x: sourcePoint.x, y: sourcePoint.y, z: sourcePoint.z }),
+        cameraDistance: hit.distance,
+        fidelity: "gaussian-lod",
+      });
+    } finally {
+      record.splat.raycastable = previousRaycastable;
+    }
   }
 
   remove(instanceId: string): boolean {

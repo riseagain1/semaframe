@@ -48,6 +48,14 @@ import {
   SemaFrameEmergencyCityProofV4Vertical,
   SemaFrameEmergencyCityProofV4VerticalPoster,
 } from "./EmergencyCityProofV3";
+import {
+  REALITY_TWIN_PROOF_V1_LANDSCAPE_DURATION,
+  REALITY_TWIN_PROOF_V1_VERTICAL_DURATION,
+  SemaFrameRealityTwinProofV1,
+  SemaFrameRealityTwinProofV1Poster,
+  SemaFrameRealityTwinProofV1Vertical,
+  SemaFrameRealityTwinProofV1VerticalPoster,
+} from "./RealityTwinProofV1";
 
 export const FPS = 30;
 
@@ -220,6 +228,34 @@ export const RemotionRoot = () => (
       <Still
         id="SemaFrameEmergencyCityProofV4EnglishVerticalPoster"
         component={SemaFrameEmergencyCityProofV4EnglishVerticalPoster}
+        width={1080}
+        height={1920}
+      />
+      <Composition
+        id="SemaFrameRealityTwinProofV1"
+        component={SemaFrameRealityTwinProofV1}
+        width={1920}
+        height={1080}
+        fps={FPS}
+        durationInFrames={REALITY_TWIN_PROOF_V1_LANDSCAPE_DURATION}
+      />
+      <Composition
+        id="SemaFrameRealityTwinProofV1Vertical"
+        component={SemaFrameRealityTwinProofV1Vertical}
+        width={1080}
+        height={1920}
+        fps={FPS}
+        durationInFrames={REALITY_TWIN_PROOF_V1_VERTICAL_DURATION}
+      />
+      <Still
+        id="SemaFrameRealityTwinProofV1Poster"
+        component={SemaFrameRealityTwinProofV1Poster}
+        width={1920}
+        height={1080}
+      />
+      <Still
+        id="SemaFrameRealityTwinProofV1VerticalPoster"
+        component={SemaFrameRealityTwinProofV1VerticalPoster}
         width={1080}
         height={1920}
       />

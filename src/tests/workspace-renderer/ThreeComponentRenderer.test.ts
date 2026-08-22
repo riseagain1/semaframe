@@ -513,6 +513,19 @@ describe("ThreeComponentRenderer", () => {
     expect(port.zoomBy).toHaveBeenCalledWith(1.2);
   });
 
+  it("passes Reality measurement lifecycle controls through to the Three renderer", () => {
+    const port = new FakeThreePort();
+    port.startRealityMeasurement.mockReturnValue(true);
+    const renderer = new ThreeComponentRenderer({ renderer: port });
+
+    expect(renderer.startRealityMeasurement("reality-pole")).toBe(true);
+    expect(port.startRealityMeasurement).toHaveBeenCalledOnce();
+    expect(port.startRealityMeasurement).toHaveBeenCalledWith("reality-pole");
+
+    renderer.cancelRealityMeasurement();
+    expect(port.cancelRealityMeasurement).toHaveBeenCalledOnce();
+  });
+
   it("serializes async revisions against the last fully rendered scene", async () => {
     const gate = deferred<void>();
     const port = new FakeThreePort();
@@ -600,6 +613,8 @@ class FakeThreePort implements ThreeRendererPort {
   frameAll = vi.fn();
   resetView = vi.fn();
   zoomBy = vi.fn();
+  startRealityMeasurement = vi.fn((_entityId: string) => false);
+  cancelRealityMeasurement = vi.fn();
 }
 
 function objectSize(object: import("three").Object3D | undefined): { x: number; y: number; z: number } {

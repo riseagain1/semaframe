@@ -1,0 +1,49 @@
+1
+00:00:00,000 --> 00:00:02,000
+A real scan. Can an Agent use it?
+
+2
+00:00:02,000 --> 00:00:04,000
+SemaFrame is a spatial workspace for Agents.
+
+3
+00:00:04,000 --> 00:00:07,000
+Import the Smithsonian museum 3D scan,
+converted offline.
+
+4
+00:00:07,000 --> 00:00:11,500
+Two real viewport picks
+and one known length set the scale.
+
+5
+00:00:11,500 --> 00:00:14,500
+A distinct A/B session checks a second span.
+
+6
+00:00:14,500 --> 00:00:17,500
+The Agent reads scale and layout—
+not raw asset bytes.
+
+7
+00:00:17,500 --> 00:00:22,000
+It creates an exact proxy and editable case
+around the visual-only scan.
+
+8
+00:00:22,000 --> 00:00:25,500
+Publish. Block a collision. Correct the fit.
+The case stays editable.
+
+9
+00:00:25,500 --> 00:00:28,000
+Export the case as OpenUSD USDA. Scan excluded.
+
+10
+00:00:28,000 --> 00:00:30,000
+Undo, save, reopen, and keep editing.
+
+11
+00:00:30,000 --> 00:00:32,000
+Reality for context.
+Models for decisions.

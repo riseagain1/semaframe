@@ -14,7 +14,10 @@ let targetFolders = Set([
   "furniture-landscape",
   "traffic-landscape",
   "traffic-vertical",
+  "reality-twin-landscape",
+  "reality-twin-vertical",
 ])
+let expectedImagesPerFolder = 8
 
 guard let enumerator = FileManager.default.enumerator(
   at: scanRoot,
@@ -37,6 +40,16 @@ let imageURLs = enumerator.compactMap { item -> URL? in
 guard !imageURLs.isEmpty else {
   fputs("No English QA stills found under \(scanRoot.path).\n", stderr)
   exit(1)
+}
+
+for folder in targetFolders.sorted() {
+  let count = imageURLs.filter {
+    $0.deletingLastPathComponent().lastPathComponent == folder
+  }.count
+  guard count == expectedImagesPerFolder else {
+    fputs("Expected \(expectedImagesPerFolder) QA stills in \(folder), found \(count).\n", stderr)
+    exit(1)
+  }
 }
 
 func containsHan(_ text: String) -> Bool {

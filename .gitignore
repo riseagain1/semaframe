@@ -2,7 +2,7 @@ node_modules/
 dist/
 
 # Rendered videos are distributed as GitHub Release assets, not Git blobs.
-# Keep Remotion source, capture evidence, captions, contracts, and posters tracked.
+# Keep reproducible Remotion source, captions, contracts, and verification code tracked.
 *.mp4
 *.mov
 *.m4v
@@ -10,6 +10,12 @@ dist/
 *.mkv
 *.avi
 video/public/audio/*.wav
+
+# Regenerable capture, render, poster, QA, and verification output.
+# Demo source and contracts remain tracked; every artifact is rebuilt locally.
+artifacts/
+video/public/reality-twin/
+docs/media/semaframe-reality-twin-v1-*.jpg
 
 # Local social-media launch assets. Keep reproducible product/demo sources,
 # README media, and public brand artwork tracked; ignore platform-only variants.

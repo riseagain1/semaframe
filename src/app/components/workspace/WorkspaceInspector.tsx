@@ -12,6 +12,7 @@ import type {
   World3DPlacement,
 } from "../../../workspace/components";
 import type { ComponentActionRequest, WorkspaceRenderComponent } from "../../../workspace/renderer/contracts";
+import type { RealityMeasurementEvent } from "../../../renderer/reality";
 import { resolveVideoSource, type VideoSourceKind } from "./VideoPlayerView";
 import { resolveWebPanelSource } from "./WebPanelView";
 import { parseSpatialCollisionConfig } from "../../../workspace/spatial";
@@ -72,7 +73,7 @@ export type WorkspaceComponentManifestUpgrade = Readonly<{
 export type WorkspaceInspectorProps = Readonly<{
   component?: WorkspaceRenderComponent;
   onAction?: (request: ComponentActionRequest) => void;
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
   resizePolicy?: ComponentResizePolicy;
   onResize?: (request: WorkspaceComponentResizeRequest) => void;
   onVisualEffects?: (request: WorkspaceComponentVisualEffectsRequest) => void;
@@ -83,6 +84,9 @@ export type WorkspaceInspectorProps = Readonly<{
   worldPlacement?: World3DPlacement;
   assemblyOptions?: readonly WorkspaceAssemblyOption[];
   realityProxyOptions?: readonly WorkspaceAssemblyOption[];
+  realityMeasurement?: RealityMeasurementEvent;
+  onStartRealityMeasurement?: (componentId: string) => boolean;
+  onCancelRealityMeasurement?: () => void;
   onTransform?: (request: WorkspaceComponentTransformRequest) => void;
   onReparent?: (request: WorkspaceComponentHierarchyRequest) => boolean | void;
   onSelectComponent?: (componentId: string) => void;
@@ -104,6 +108,9 @@ export function WorkspaceInspector({
   worldPlacement,
   assemblyOptions = [],
   realityProxyOptions = [],
+  realityMeasurement,
+  onStartRealityMeasurement,
+  onCancelRealityMeasurement,
   onTransform,
   onReparent,
   onSelectComponent,
@@ -172,6 +179,9 @@ export function WorkspaceInspector({
         <RealitySplatInspectorEditor
           component={component}
           proxyOptions={realityProxyOptions}
+          measurement={realityMeasurement}
+          onStartMeasurement={onStartRealityMeasurement}
+          onCancelMeasurement={onCancelRealityMeasurement}
           onUpdate={onUpdate}
         />
       )}
@@ -541,7 +551,7 @@ function ParametricPrimitiveInspectorEditor({
   onUpdate,
 }: Readonly<{
   component: WorkspaceRenderComponent;
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
 }>) {
   const formId = useId();
   const primitive = safePrimitive(component.props.geometry);
@@ -645,7 +655,7 @@ function ModelAssemblyInspectorEditor({
   onUpdate,
 }: Readonly<{
   component: WorkspaceRenderComponent;
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
 }>) {
   const formId = useId();
   const [displayName, setDisplayName] = useState(component.label);
@@ -714,11 +724,17 @@ function safeRealityCalibration(value: unknown): RealityAssetCalibration {
 function RealitySplatInspectorEditor({
   component,
   proxyOptions,
+  measurement,
+  onStartMeasurement,
+  onCancelMeasurement,
   onUpdate,
 }: Readonly<{
   component: WorkspaceRenderComponent;
   proxyOptions: readonly WorkspaceAssemblyOption[];
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  measurement?: RealityMeasurementEvent;
+  onStartMeasurement?: (componentId: string) => boolean;
+  onCancelMeasurement?: () => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
 }>) {
   const formId = useId();
   const calibration = safeRealityCalibration(component.props.calibration);
@@ -728,7 +744,14 @@ function RealitySplatInspectorEditor({
   const currentProxyIds = Array.isArray(component.props.semanticProxyIds)
     ? component.props.semanticProxyIds.filter((value): value is string => typeof value === "string")
     : [];
-  const signature = JSON.stringify({ calibration, currentQuality, currentProxyIds });
+  const assetRef = recordValue(component.props.assetRef);
+  const measurementForAsset = measurement?.componentId === component.id
+    && measurement.assetId === stringValue(assetRef?.assetId)
+    && measurement.assetDigest === stringValue(assetRef?.digest)
+    ? measurement
+    : undefined;
+  const measurementIsLive = Boolean(measurementForAsset && measurementForAsset.kind !== "cancelled");
+  const signature = JSON.stringify({ assetRef, calibration, currentQuality, currentProxyIds });
   const [mode, setMode] = useState<RealityCalibrationMode>(calibration.status);
   const [coordinateSystem, setCoordinateSystem] = useState<RealityCoordinateSystem>(calibration.sourceCoordinateSystem);
   const [declaredUnit, setDeclaredUnit] = useState<RealityDeclaredUnit>(
@@ -743,23 +766,123 @@ function RealitySplatInspectorEditor({
   const [quality, setQuality] = useState<RealityQuality>(currentQuality);
   const [proxyIds, setProxyIds] = useState<readonly string[]>(currentProxyIds);
   const [error, setError] = useState<string>();
+  const [measurementDraftSessionId, setMeasurementDraftSessionId] = useState<number>();
+  const [confirmedReferenceSessionId, setConfirmedReferenceSessionId] = useState<number>();
+  const activeMeasurementSessionRef = useRef<number | undefined>(undefined);
+  const completedMeasurementSessionRef = useRef<number | undefined>(undefined);
+  const focusedMeasurementSessionRef = useRef<number | undefined>(undefined);
+  const referenceDistanceInputRef = useRef<HTMLInputElement>(null);
+  const persistedMode = calibration.status;
+  const persistedSourceDistance = calibration.status === "reference-distance"
+    ? String(calibration.sourceDistance)
+    : "1";
+  const persistedReferenceDistanceM = calibration.status === "reference-distance"
+    ? String(calibration.referenceDistanceM)
+    : "1";
+  const persistedDeclaredUnit: RealityDeclaredUnit = calibration.status === "metadata-declared"
+    ? calibration.declaredUnit
+    : "metre";
 
   useEffect(() => {
-    setMode(calibration.status);
-    setCoordinateSystem(calibration.sourceCoordinateSystem);
-    setDeclaredUnit(calibration.status === "metadata-declared" ? calibration.declaredUnit : "metre");
-    setSourceDistance(calibration.status === "reference-distance" ? String(calibration.sourceDistance) : "1");
-    setReferenceDistanceM(calibration.status === "reference-distance" ? String(calibration.referenceDistanceM) : "1");
+    if (!measurementIsLive) {
+      setMode(calibration.status);
+      setCoordinateSystem(calibration.sourceCoordinateSystem);
+      setDeclaredUnit(persistedDeclaredUnit);
+      setSourceDistance(persistedSourceDistance);
+      setReferenceDistanceM(persistedReferenceDistanceM);
+      setMeasurementDraftSessionId(undefined);
+      setConfirmedReferenceSessionId(undefined);
+    }
     setQuality(currentQuality);
     setProxyIds(currentProxyIds);
     setError(undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [component.id, signature]);
+  }, [component.id, signature, measurementIsLive]);
+
+  useEffect(() => {
+    const activeMeasurement = measurementForAsset?.kind === "cancelled"
+      ? undefined
+      : measurementForAsset;
+    if (!activeMeasurement) {
+      if (activeMeasurementSessionRef.current !== undefined) {
+        setMode(persistedMode);
+        setCoordinateSystem(calibration.sourceCoordinateSystem);
+        setDeclaredUnit(persistedDeclaredUnit);
+        setSourceDistance(persistedSourceDistance);
+        setReferenceDistanceM(persistedReferenceDistanceM);
+        setMeasurementDraftSessionId(undefined);
+        setConfirmedReferenceSessionId(undefined);
+        setError(undefined);
+      }
+      activeMeasurementSessionRef.current = undefined;
+      completedMeasurementSessionRef.current = undefined;
+      focusedMeasurementSessionRef.current = undefined;
+      return;
+    }
+
+    if (activeMeasurementSessionRef.current !== activeMeasurement.sessionId) {
+      activeMeasurementSessionRef.current = activeMeasurement.sessionId;
+      completedMeasurementSessionRef.current = undefined;
+      focusedMeasurementSessionRef.current = undefined;
+      setMode(persistedMode);
+      setCoordinateSystem(calibration.sourceCoordinateSystem);
+      setDeclaredUnit(persistedDeclaredUnit);
+      setSourceDistance(persistedSourceDistance);
+      setReferenceDistanceM(persistedReferenceDistanceM);
+      setMeasurementDraftSessionId(undefined);
+      setConfirmedReferenceSessionId(undefined);
+      setError(undefined);
+    }
+
+    if (activeMeasurement.kind === "complete"
+      && completedMeasurementSessionRef.current !== activeMeasurement.sessionId) {
+      completedMeasurementSessionRef.current = activeMeasurement.sessionId;
+      setMode("reference-distance");
+      setSourceDistance(formatMeasuredDistance(activeMeasurement.sourceDistance));
+      // A new A/B span cannot silently inherit either the placeholder 1 m value
+      // or a real distance that belonged to a previous span. The user must make
+      // one explicit input change for this exact renderer session.
+      setReferenceDistanceM("");
+      setMeasurementDraftSessionId(activeMeasurement.sessionId);
+      setConfirmedReferenceSessionId(undefined);
+      setError(undefined);
+    }
+  }, [
+    calibration.sourceCoordinateSystem,
+    calibration.status,
+    measurementForAsset,
+    persistedDeclaredUnit,
+    persistedMode,
+    persistedReferenceDistanceM,
+    persistedSourceDistance,
+  ]);
+
+  useEffect(() => {
+    if (measurementForAsset?.kind !== "complete"
+      || measurementDraftSessionId !== measurementForAsset.sessionId
+      || mode !== "reference-distance"
+      || focusedMeasurementSessionRef.current === measurementForAsset.sessionId) return;
+    const input = referenceDistanceInputRef.current;
+    if (!input) return;
+    focusedMeasurementSessionRef.current = measurementForAsset.sessionId;
+    input.focus({ preventScroll: true });
+  }, [measurementDraftSessionId, measurementForAsset, mode]);
 
   const locked = component.locks.props || !onUpdate;
-  const assetRef = recordValue(component.props.assetRef);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (locked || !onUpdate) {
+      setError("Reality settings are locked and could not be applied.");
+      return;
+    }
+    if (measurementForAsset?.kind === "complete"
+      && (mode !== "reference-distance"
+        || measurementDraftSessionId !== measurementForAsset.sessionId
+        || confirmedReferenceSessionId !== measurementForAsset.sessionId
+        || !inRange(Number(referenceDistanceM), 1e-12, 1e6))) {
+      setError("Enter the known real distance for this measured A/B span, or clear its markers before applying other Reality settings.");
+      return;
+    }
     if (mode !== "uncalibrated" && coordinateSystem === "UNKNOWN") {
       setError("Choose the capture's source coordinate system before claiming metric calibration.");
       return;
@@ -808,7 +931,7 @@ function RealitySplatInspectorEditor({
     }
 
     setError(undefined);
-    onUpdate?.({
+    const applied = onUpdate({
       componentId: component.id,
       props: {
         assetRef: assetRef ? structuredClone(assetRef) : null,
@@ -817,6 +940,25 @@ function RealitySplatInspectorEditor({
         semanticProxyIds: [...proxyIds],
       } as unknown as JSONObject,
     });
+    if (applied === false) {
+      setError("Reality settings could not be applied. The A/B measurement is still available; fix the Workspace error and try again.");
+      return;
+    }
+    onCancelMeasurement?.();
+  };
+
+  const activeMeasurement = measurementForAsset;
+  const measurementActive = activeMeasurement !== undefined && activeMeasurement.kind !== "cancelled";
+  const completedMeasurementNeedsReference = activeMeasurement?.kind === "complete"
+    && (mode !== "reference-distance"
+      || measurementDraftSessionId !== activeMeasurement.sessionId
+      || confirmedReferenceSessionId !== activeMeasurement.sessionId
+      || !inRange(Number(referenceDistanceM), 1e-12, 1e6));
+  const startMeasurement = () => {
+    setError(undefined);
+    if (!onStartMeasurement?.(component.id)) {
+      setError("The loaded Gaussian surface is not ready. Relink its local bytes or wait for rendering to finish.");
+    }
   };
 
   return <section className="workspace-inspector__modeling workspace-inspector__reality" aria-labelledby={`${formId}-heading`}>
@@ -830,23 +972,61 @@ function RealitySplatInspectorEditor({
       <div><dt>Digest</dt><dd>{stringValue(assetRef.digest)}</dd></div>
     </dl> : <p className="workspace-inspector__privacy">No asset is linked. The renderer will keep a placeholder.</p>}
     <form onSubmit={submit} noValidate>
+      <fieldset className="workspace-inspector__reality-measurement">
+        <legend>Two-point surface calibration</legend>
+        <p className="workspace-inspector__hint">
+          Pick A and B directly on the capture. This uses the Gaussian LOD surface as a visual estimate,
+          not survey or CAD geometry.
+        </p>
+        <div className="workspace-inspector__measurement-actions">
+          <button type="button" disabled={locked || !assetRef || !onStartMeasurement} onClick={startMeasurement}>
+            {measurementActive ? "Restart two-point pick" : "Pick two points"}
+          </button>
+          {measurementActive && <button type="button" onClick={onCancelMeasurement}>
+            {activeMeasurement.kind === "complete" ? "Clear markers" : "Cancel"}
+          </button>}
+        </div>
+        <p className="workspace-inspector__measurement-status" role="status" aria-live="polite">
+          {realityMeasurementStatus(activeMeasurement)}
+        </p>
+      </fieldset>
       <label htmlFor={`${formId}-quality`}><span>Render quality</span><select id={`${formId}-quality`} aria-label="Render quality" value={quality} disabled={locked} onChange={(event) => setQuality(event.target.value as RealityQuality)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
       <label htmlFor={`${formId}-calibration`}><span>Calibration</span><select id={`${formId}-calibration`} aria-label="Calibration" value={mode} disabled={locked} onChange={(event) => { setMode(event.target.value as RealityCalibrationMode); setError(undefined); }}><option value="uncalibrated">Uncalibrated</option><option value="metadata-declared">Declared unit</option><option value="reference-distance">Reference distance</option></select></label>
       <label htmlFor={`${formId}-coordinates`}><span>Source coordinates</span><select id={`${formId}-coordinates`} aria-label="Source coordinates" value={coordinateSystem} disabled={locked} onChange={(event) => { setCoordinateSystem(event.target.value as RealityCoordinateSystem); setError(undefined); }}>{REALITY_COORDINATE_SYSTEMS.map((system) => <option key={system} value={system}>{system}{system === "RUB" ? " · right/up/back" : system === "UNKNOWN" ? " · unknown" : ""}</option>)}</select></label>
       {mode === "metadata-declared" && <label htmlFor={`${formId}-unit`}><span>Source unit</span><select id={`${formId}-unit`} aria-label="Source unit" value={declaredUnit} disabled={locked} onChange={(event) => setDeclaredUnit(event.target.value as RealityDeclaredUnit)}><option value="metre">Metre</option><option value="centimetre">Centimetre</option><option value="millimetre">Millimetre</option><option value="inch">Inch</option><option value="foot">Foot</option></select></label>}
       {mode === "reference-distance" && <fieldset>
         <legend>Known reference</legend>
-        <label htmlFor={`${formId}-source-distance`}><span>Source distance</span><input id={`${formId}-source-distance`} aria-label="Source distance" type="number" min="0.000000000001" max="1000000000" step="any" value={sourceDistance} disabled={locked} onChange={(event) => { setSourceDistance(event.target.value); setError(undefined); }} /></label>
-        <label htmlFor={`${formId}-reference-distance`}><span>Real distance (m)</span><input id={`${formId}-reference-distance`} aria-label="Real distance (m)" type="number" min="0.000000000001" max="1000000" step="any" value={referenceDistanceM} disabled={locked} onChange={(event) => { setReferenceDistanceM(event.target.value); setError(undefined); }} /></label>
+        <label htmlFor={`${formId}-source-distance`}><span>Source distance</span><input id={`${formId}-source-distance`} aria-label="Source distance" type="number" min="0.000000000001" max="1000000000" step="any" value={sourceDistance} disabled={locked || measurementForAsset?.kind === "complete"} onChange={(event) => { setSourceDistance(event.target.value); setError(undefined); }} /></label>
+        <label htmlFor={`${formId}-reference-distance`}><span>Real distance (m)</span><input ref={referenceDistanceInputRef} id={`${formId}-reference-distance`} aria-label="Real distance (m)" type="number" min="0.000000000001" max="1000000" step="any" value={referenceDistanceM} disabled={locked} onChange={(event) => { setReferenceDistanceM(event.target.value); if (measurementForAsset?.kind === "complete" && measurementDraftSessionId === measurementForAsset.sessionId) setConfirmedReferenceSessionId(measurementForAsset.sessionId); setError(undefined); }} /></label>
       </fieldset>}
       <fieldset>
         <legend>Engineering proxies</legend>
         {proxyOptions.length === 0 ? <p className="workspace-inspector__hint">Create an editable primitive, entity, or assembly to provide collision and engineering semantics.</p> : proxyOptions.map((option) => { const checked = proxyIds.includes(option.id); return <label key={option.id}><input type="checkbox" checked={checked} disabled={locked || (!checked && proxyIds.length >= 128)} onChange={(event) => setProxyIds((current) => event.target.checked ? [...current, option.id] : current.filter((id) => id !== option.id))} />{option.label}</label>; })}
       </fieldset>
       {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
-      <button type="submit" disabled={locked}>Apply Reality settings</button>
+      <button type="submit" disabled={locked || completedMeasurementNeedsReference}>Apply Reality settings</button>
     </form>
   </section>;
+}
+
+export function realityMeasurementStatus(measurement: RealityMeasurementEvent | undefined): string {
+  if (!measurement || measurement.kind === "cancelled") return "Ready to pick a known span from the visible capture.";
+  if (measurement.kind === "started") return "Pick point A on the visible Gaussian surface. You can also aim at viewport center and press Enter. Press Escape to cancel.";
+  if (measurement.kind === "point") {
+    return measurement.pointIndex === 1
+      ? "Point A captured. Pick point B on a different part of the surface."
+      : "Point B captured. Calculating the source-space distance…";
+  }
+  if (measurement.kind === "miss") return measurement.message;
+  return `Measured ${formatMeasuredDistance(measurement.sourceDistance)} source units (${formatMeasuredDistance(measurement.displayedDistance)} current display units). Enter the known real distance, then apply.`;
+}
+
+function formatMeasuredDistance(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  if (value === 0) return "0";
+  const magnitude = Math.abs(value);
+  if (magnitude >= 1e6 || magnitude < 1e-5) return value.toExponential(6);
+  return Number(value.toPrecision(8)).toString();
 }
 
 function CollisionInspectorEditor({
@@ -854,7 +1034,7 @@ function CollisionInspectorEditor({
   onUpdate,
 }: Readonly<{
   component: WorkspaceRenderComponent;
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
 }>) {
   const formId = useId();
   const raw = component.props.collision;
@@ -1011,7 +1191,7 @@ function PhysicsInspectorEditor({
   report,
 }: Readonly<{
   component: WorkspaceRenderComponent;
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
   report?: PhysicsBodyReport;
 }>) {
   const formId = useId();
@@ -1298,7 +1478,7 @@ function VideoPlayerInspectorEditor({
   onUpdate,
 }: Readonly<{
   component: WorkspaceRenderComponent;
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
 }>) {
   const formId = useId();
   const sourceFromComponent = stringValue(component.props.sourceUrl);
@@ -1445,7 +1625,7 @@ function WebPanelInspectorEditor({
   onUpdate,
 }: Readonly<{
   component: WorkspaceRenderComponent;
-  onUpdate?: (request: WorkspaceComponentUpdateRequest) => void;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
 }>) {
   const formId = useId();
   const sourceFromComponent = stringValue(component.props.sourceUrl);

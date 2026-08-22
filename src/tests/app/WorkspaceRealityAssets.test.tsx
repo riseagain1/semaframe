@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,6 +6,7 @@ import {
   WorkspaceInspector,
   WorkspaceRealityAssets,
 } from "../../app/components/workspace";
+import type { RealityMeasurementEvent } from "../../renderer/reality";
 import type { RealityAssetDescriptor } from "../../workspace/assets";
 import { inspectRealityAsset, MemoryAssetVault } from "../../workspace/assets";
 import { DEFAULT_COMPONENT_REGISTRY } from "../../workspace/components";
@@ -19,6 +20,8 @@ afterEach(cleanup);
 
 const digest = `sha256:${"a".repeat(64)}` as const;
 const assetId = `ra_${"a".repeat(64)}` as const;
+const replacementDigest = `sha256:${"b".repeat(64)}` as const;
+const replacementAssetId = `ra_${"b".repeat(64)}` as const;
 
 function descriptor(): RealityAssetDescriptor {
   return {
@@ -163,6 +166,76 @@ describe("human Reality asset workflow", () => {
     expect(onImport).toHaveBeenCalledOnce();
   });
 
+  it("hides the Inspector while picking and restores it with the completed calibration draft", async () => {
+    const user = userEvent.setup();
+    const onStartMeasurement = vi.fn(() => true);
+    const chrome = (measurement?: RealityMeasurementEvent) => <WorkspaceChrome
+      catalog={[]}
+      selected={splatComponent()}
+      sources={[]}
+      realityAssets={[]}
+      realityMeasurement={measurement}
+      onStartRealityMeasurement={onStartMeasurement}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onAction={vi.fn()}
+      onCreateShowcase={vi.fn()}
+    />;
+    const view = render(chrome());
+
+    await user.click(screen.getByRole("button", { name: "Inspector" }));
+    await user.click(screen.getByRole("button", { name: "Pick two points" }));
+    expect(onStartMeasurement).toHaveBeenCalledWith("CMP_REALITY");
+    expect(screen.queryByRole("region", { name: "inspector panel" })).not.toBeInTheDocument();
+
+    view.rerender(chrome({
+      kind: "point",
+      componentId: "CMP_REALITY",
+      assetId,
+      assetDigest: digest,
+      sessionId: 13,
+      pointIndex: 1,
+      point: {
+        sourcePoint: { x: 0, y: 0, z: 0 },
+        worldPoint: { x: 0, y: 0, z: 0 },
+        cameraDistance: 5,
+        fidelity: "gaussian-lod",
+      },
+    }));
+    expect(screen.queryByRole("region", { name: "inspector panel" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Point A captured/)).toHaveClass("sr-only");
+
+    view.rerender(chrome({
+      kind: "complete",
+      componentId: "CMP_REALITY",
+      assetId,
+      assetDigest: digest,
+      sessionId: 13,
+      points: [{
+        sourcePoint: { x: 0, y: 0, z: 0 },
+        worldPoint: { x: 0, y: 0, z: 0 },
+        cameraDistance: 5,
+        fidelity: "gaussian-lod",
+      }, {
+        sourcePoint: { x: 3, y: 4, z: 0 },
+        worldPoint: { x: 0.3, y: 0.4, z: 0 },
+        cameraDistance: 5,
+        fidelity: "gaussian-lod",
+      }],
+      sourceDistance: 5,
+      displayedDistance: 0.5,
+      fidelity: "gaussian-lod",
+    }));
+
+    expect(await screen.findByRole("region", { name: "inspector panel" })).toBeVisible();
+    const measuredSourceDistance = screen.getByRole("spinbutton", { name: "Source distance" });
+    expect(measuredSourceDistance).toHaveValue(5);
+    expect(measuredSourceDistance).toBeDisabled();
+    const completedStatuses = screen.getAllByText(/Measured 5 source units/);
+    expect(completedStatuses).toHaveLength(1);
+    expect(completedStatuses[0]).not.toHaveClass("sr-only");
+  });
+
   it("offers exact-content relink for missing bytes and confirms unreferenced deletion", async () => {
     const user = userEvent.setup();
     const onRelink = vi.fn();
@@ -232,6 +305,360 @@ describe("human Reality asset workflow", () => {
         semanticProxyIds: ["CMP_POLE_PROXY"],
       },
     });
+  });
+
+  it("turns a two-point Gaussian surface pick into one reference-distance calibration draft", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    const onStartMeasurement = vi.fn(() => true);
+    const onCancelMeasurement = vi.fn();
+    const component = splatComponent();
+    const view = render(<WorkspaceInspector
+      component={component}
+      onUpdate={onUpdate}
+      onStartRealityMeasurement={onStartMeasurement}
+      onCancelRealityMeasurement={onCancelMeasurement}
+    />);
+
+    expect(screen.getByText(/Gaussian LOD surface as a visual estimate/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Pick two points" }));
+    expect(onStartMeasurement).toHaveBeenCalledWith("CMP_REALITY");
+
+    view.rerender(<WorkspaceInspector
+      component={component}
+      onUpdate={onUpdate}
+      onStartRealityMeasurement={onStartMeasurement}
+      onCancelRealityMeasurement={onCancelMeasurement}
+      realityMeasurement={{
+        kind: "point",
+        componentId: "CMP_REALITY",
+        assetId,
+        assetDigest: digest,
+        sessionId: 7,
+        pointIndex: 1,
+        point: {
+          sourcePoint: { x: 1, y: 2, z: 3 },
+          worldPoint: { x: 4, y: 5, z: 6 },
+          cameraDistance: 8,
+          fidelity: "gaussian-lod",
+        },
+      }}
+    />);
+    expect(screen.getByText(/Point A captured/)).toBeVisible();
+
+    view.rerender(<WorkspaceInspector
+      component={component}
+      onUpdate={onUpdate}
+      onStartRealityMeasurement={onStartMeasurement}
+      onCancelRealityMeasurement={onCancelMeasurement}
+      realityMeasurement={{
+        kind: "complete",
+        componentId: "CMP_REALITY",
+        assetId,
+        assetDigest: digest,
+        sessionId: 7,
+        points: [{
+          sourcePoint: { x: 1, y: 2, z: 3 },
+          worldPoint: { x: 4, y: 5, z: 6 },
+          cameraDistance: 8,
+          fidelity: "gaussian-lod",
+        }, {
+          sourcePoint: { x: 4, y: 6, z: 3 },
+          worldPoint: { x: 4.3, y: 5.4, z: 6 },
+          cameraDistance: 8,
+          fidelity: "gaussian-lod",
+        }],
+        sourceDistance: 5,
+        displayedDistance: 0.5,
+        fidelity: "gaussian-lod",
+      }}
+    />);
+
+    expect(screen.getByRole("combobox", { name: "Calibration" })).toHaveValue("reference-distance");
+    const measuredSource = screen.getByRole("spinbutton", { name: "Source distance" });
+    expect(measuredSource).toHaveValue(5);
+    expect(measuredSource).toBeDisabled();
+    expect(screen.getByText(/Measured 5 source units/)).toBeVisible();
+    let realDistance = screen.getByRole("spinbutton", { name: "Real distance (m)" });
+    const apply = screen.getByRole("button", { name: "Apply Reality settings" });
+    expect(realDistance).toHaveValue(null);
+    await waitFor(() => expect(realDistance).toHaveFocus());
+    expect(apply).toBeDisabled();
+
+    // Button state is not the security boundary: a programmatic form submit
+    // must also fail closed until this exact measurement session receives a
+    // real user input change.
+    fireEvent.submit(apply.closest("form")!);
+    expect(screen.getByRole("alert")).toHaveTextContent(/known real distance/i);
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    // Changing the calibration selector must not turn an unfinished A/B
+    // session into an escape hatch. The explicit Clear markers action is the
+    // only way to abandon this span and restore persisted settings.
+    await user.selectOptions(screen.getByRole("combobox", { name: "Calibration" }), "uncalibrated");
+    expect(apply).toBeDisabled();
+    fireEvent.submit(apply.closest("form")!);
+    expect(screen.getByRole("alert")).toHaveTextContent(/clear its markers/i);
+    expect(onUpdate).not.toHaveBeenCalled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Calibration" }), "reference-distance");
+    realDistance = screen.getByRole("spinbutton", { name: "Real distance (m)" });
+
+    // Even a synthetic DOM mutation cannot replace the measured span: the
+    // persisted calibration must use the immutable A/B receipt in state.
+    fireEvent.change(measuredSource, { target: { value: "999" } });
+    await user.type(realDistance, "2");
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onUpdate.mock.calls[0]?.[0].props.calibration).toEqual({
+      version: 1,
+      status: "reference-distance",
+      sourceCoordinateSystem: "RUB",
+      targetCoordinateSystem: "RUB",
+      metersPerSourceUnit: 0.4,
+      sourceDistance: 5,
+      referenceDistanceM: 2,
+    });
+    expect(onCancelMeasurement).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the completed A/B receipt when the Workspace rejects the settings write", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn(() => false);
+    const onCancelMeasurement = vi.fn();
+    render(<WorkspaceInspector
+      component={splatComponent()}
+      onUpdate={onUpdate}
+      onStartRealityMeasurement={() => true}
+      onCancelRealityMeasurement={onCancelMeasurement}
+      realityMeasurement={{
+        kind: "complete",
+        componentId: "CMP_REALITY",
+        assetId,
+        assetDigest: digest,
+        sessionId: 72,
+        points: [{
+          sourcePoint: { x: 0, y: 0, z: 0 },
+          worldPoint: { x: 0, y: 0, z: 0 },
+          cameraDistance: 5,
+          fidelity: "gaussian-lod",
+        }, {
+          sourcePoint: { x: 0, y: 5, z: 0 },
+          worldPoint: { x: 0, y: 0.5, z: 0 },
+          cameraDistance: 5,
+          fidelity: "gaussian-lod",
+        }],
+        sourceDistance: 5,
+        displayedDistance: 0.5,
+        fidelity: "gaussian-lod",
+      }}
+    />);
+
+    const realDistance = screen.getByRole("spinbutton", { name: "Real distance (m)" });
+    await waitFor(() => expect(realDistance).toHaveFocus());
+    await user.type(realDistance, "2");
+    await user.click(screen.getByRole("button", { name: "Apply Reality settings" }));
+
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onCancelMeasurement).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/measurement is still available/i);
+    expect(screen.getByText(/Measured 5 source units/)).toBeVisible();
+  });
+
+  it("restores persisted calibration after an unapplied measurement is cancelled", async () => {
+    const user = userEvent.setup();
+    const base = splatComponent();
+    const component: WorkspaceRenderComponent = {
+      ...base,
+      props: {
+        ...base.props,
+        calibration: {
+          version: 1,
+          status: "reference-distance",
+          sourceCoordinateSystem: "RUB",
+          targetCoordinateSystem: "RUB",
+          metersPerSourceUnit: 0.01,
+          sourceDistance: 250,
+          referenceDistanceM: 2.5,
+        },
+      },
+    };
+    const complete: RealityMeasurementEvent = {
+      kind: "complete",
+      componentId: "CMP_REALITY",
+      assetId,
+      assetDigest: digest,
+      sessionId: 71,
+      points: [{
+        sourcePoint: { x: 0, y: 0, z: 0 },
+        worldPoint: { x: 0, y: 0, z: 0 },
+        cameraDistance: 5,
+        fidelity: "gaussian-lod",
+      }, {
+        sourcePoint: { x: 3, y: 4, z: 0 },
+        worldPoint: { x: 0.3, y: 0.4, z: 0 },
+        cameraDistance: 5,
+        fidelity: "gaussian-lod",
+      }],
+      sourceDistance: 5,
+      displayedDistance: 0.5,
+      fidelity: "gaussian-lod",
+    };
+    const view = render(<WorkspaceInspector
+      component={component}
+      onUpdate={vi.fn()}
+      onStartRealityMeasurement={() => true}
+      realityMeasurement={complete}
+    />);
+
+    const measuredRealDistance = screen.getByRole("spinbutton", { name: "Real distance (m)" });
+    await waitFor(() => expect(measuredRealDistance).toHaveValue(null));
+    await user.type(measuredRealDistance, "9");
+    expect(measuredRealDistance).toHaveValue(9);
+
+    view.rerender(<WorkspaceInspector
+      component={component}
+      onUpdate={vi.fn()}
+      onStartRealityMeasurement={() => true}
+      realityMeasurement={{
+        kind: "cancelled",
+        componentId: "CMP_REALITY",
+        assetId,
+        assetDigest: digest,
+        sessionId: 71,
+      }}
+    />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("spinbutton", { name: "Source distance" })).toHaveValue(250);
+      expect(screen.getByRole("spinbutton", { name: "Real distance (m)" })).toHaveValue(2.5);
+    });
+  });
+
+  it("keeps a missed Gaussian pick ephemeral and lets the user cancel without a Workspace write", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    const onCancelMeasurement = vi.fn();
+    render(<WorkspaceInspector
+      component={splatComponent()}
+      onUpdate={onUpdate}
+      onStartRealityMeasurement={() => true}
+      onCancelRealityMeasurement={onCancelMeasurement}
+      realityMeasurement={{
+        kind: "miss",
+        componentId: "CMP_REALITY",
+        assetId,
+        assetDigest: digest,
+        sessionId: 3,
+        pickedPoints: 1,
+        message: "No Gaussian surface was found there. Click a visible part of the capture.",
+      }}
+    />);
+
+    expect(screen.getByText(/No Gaussian surface was found/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCancelMeasurement).toHaveBeenCalledOnce();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a completed source span immutable but rejects it after rebinding to different bytes", () => {
+    const component = splatComponent();
+    const completedMeasurement = {
+      kind: "complete",
+      componentId: "CMP_REALITY",
+      assetId,
+      assetDigest: digest,
+      sessionId: 9,
+      points: [{
+        sourcePoint: { x: 0, y: 0, z: 0 },
+        worldPoint: { x: 0, y: 0, z: 0 },
+        cameraDistance: 4,
+        fidelity: "gaussian-lod",
+      }, {
+        sourcePoint: { x: 5, y: 0, z: 0 },
+        worldPoint: { x: 5, y: 0, z: 0 },
+        cameraDistance: 4,
+        fidelity: "gaussian-lod",
+      }],
+      sourceDistance: 5,
+      displayedDistance: 5,
+      fidelity: "gaussian-lod",
+    } satisfies RealityMeasurementEvent;
+    const view = render(<WorkspaceInspector
+      component={component}
+      onUpdate={vi.fn()}
+      onStartRealityMeasurement={() => true}
+      realityMeasurement={completedMeasurement}
+    />);
+
+    const measuredSource = screen.getByRole("spinbutton", { name: "Source distance" });
+    expect(measuredSource).toHaveValue(5);
+    expect(measuredSource).toBeDisabled();
+    view.rerender(<WorkspaceInspector
+      component={{
+        ...component,
+        props: {
+          ...component.props,
+          assetRef: { assetId: replacementAssetId, digest: replacementDigest },
+        },
+      }}
+      onUpdate={vi.fn()}
+      onStartRealityMeasurement={() => true}
+      realityMeasurement={completedMeasurement}
+    />);
+
+    expect(screen.getByRole("combobox", { name: "Calibration" })).toHaveValue("uncalibrated");
+    expect(screen.queryByRole("spinbutton", { name: "Source distance" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Ready to pick a known span/)).toBeVisible();
+  });
+
+  it("resets an unapplied completed draft when a fresh measurement session starts", () => {
+    const component = splatComponent();
+    const view = render(<WorkspaceInspector
+      component={component}
+      onUpdate={vi.fn()}
+      onStartRealityMeasurement={() => true}
+      realityMeasurement={{
+        kind: "complete",
+        componentId: "CMP_REALITY",
+        assetId,
+        assetDigest: digest,
+        sessionId: 10,
+        points: [{
+          sourcePoint: { x: 0, y: 0, z: 0 },
+          worldPoint: { x: 0, y: 0, z: 0 },
+          cameraDistance: 4,
+          fidelity: "gaussian-lod",
+        }, {
+          sourcePoint: { x: 3, y: 4, z: 0 },
+          worldPoint: { x: 3, y: 4, z: 0 },
+          cameraDistance: 4,
+          fidelity: "gaussian-lod",
+        }],
+        sourceDistance: 5,
+        displayedDistance: 5,
+        fidelity: "gaussian-lod",
+      }}
+    />);
+    expect(screen.getByRole("spinbutton", { name: "Source distance" })).toHaveValue(5);
+
+    view.rerender(<WorkspaceInspector
+      component={component}
+      onUpdate={vi.fn()}
+      onStartRealityMeasurement={() => true}
+      realityMeasurement={{
+        kind: "started",
+        componentId: "CMP_REALITY",
+        assetId,
+        assetDigest: digest,
+        sessionId: 11,
+      }}
+    />);
+
+    expect(screen.getByRole("combobox", { name: "Calibration" })).toHaveValue("uncalibrated");
+    expect(screen.queryByRole("spinbutton", { name: "Source distance" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Pick point A on the visible Gaussian surface/)).toBeVisible();
   });
 
   it("does not claim metric calibration while source coordinates remain unknown", async () => {

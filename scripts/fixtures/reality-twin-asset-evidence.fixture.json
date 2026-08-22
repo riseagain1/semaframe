@@ -1,0 +1,130 @@
+{
+  "schema": "semaframe.reality-twin-asset-evidence.v1",
+  "source": {
+    "derivation": "smithsonian_glb_scan_to_gaussian_ply",
+    "nativeGaussianCapture": false,
+    "sourceClass": "official_museum_mesh_scan",
+    "conversionLocation": "offline",
+    "objectUrl": "https://3d.si.edu/object/3d/ritual-wine-ewer-gong-masks-taotie-dragons-and-real-animals%3Ad8c646aa-4ebc-11ea-b77f-2e728ce88125",
+    "rights": "CC0"
+  },
+  "rights": {
+    "status": "CC0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "retrieval": {
+    "source_files": [
+      {
+        "part": "lid",
+        "format": "GLB 2.0",
+        "units": "m",
+        "gltf_standardized": true,
+        "url": "https://3d-api.si.edu/content/document/3d_package:d8c646aa-4ebc-11ea-b77f-2e728ce88125/resources/f1961_33-part_01-laser-ortery_texture-150k-4096_std.glb",
+        "bytes": 11548844,
+        "sha256": "80f28188353f11e3ceebd8cfe79c9e7159d9c5b511d1d0b2741f1458fbbd0e80"
+      },
+      {
+        "part": "body",
+        "format": "GLB 2.0",
+        "units": "m",
+        "gltf_standardized": true,
+        "url": "https://3d-api.si.edu/content/document/3d_package:d8c646aa-4ebc-11ea-b77f-2e728ce88125/resources/f1961_33-part_02-x_pol-ort_texture-150k-4096_std.glb",
+        "bytes": 12736888,
+        "sha256": "143277b0b40b82a7ee7f96fed09cfc85813de49dba14b6b1b3d1d239d63ad616"
+      }
+    ],
+    "combined_source_sha256": "828b7c5a5c6f1c15be2ab5be99d1ec73a3274c605347b424340ce94935a0e7da"
+  },
+  "conversion": {
+    "algorithm": "deterministic area-weighted triangle surface sampling with bilinear base-color lookup",
+    "gaussian_model": "3D anisotropic surface Gaussians, SH degree 0",
+    "splat_count": 1500000,
+    "transform": {
+      "source_convention": "standard glTF 2.0 right-handed, +Y up, metres",
+      "target_convention": "Semaframe RUB: +X right, +Y up, +Z back, metres",
+      "shape_policy": "uniform scale only; no anisotropic deformation"
+    },
+    "limitations": [
+      "This is a surface-Gaussian derivative, not a native photogrammetry-trained Gaussian capture.",
+      "Gaussian geometry is visual evidence only; engineering and metrology require an exact semantic proxy."
+    ]
+  },
+  "derivedAsset": {
+    "relativePath": "artifacts/reality-twin/late-shang-gong.gaussian.ply",
+    "mediaType": "application/ply",
+    "format": "ply",
+    "model": "gaussian-3d",
+    "sphericalHarmonicsDegree": 0,
+    "splatCount": 1500000,
+    "byteLength": 84000660,
+    "sha256": "207f1208e18b141059e051998de8df81c193a7362029603f8f244f23bcb35d93",
+    "coordinateBasis": {
+      "axes": "RUB (+X right, +Y up, +Z back)",
+      "units": "metres"
+    },
+    "calibrationReference": {
+      "knownDistanceMetres": 0.322,
+      "policy": "one uniform scale; no anisotropic deformation"
+    },
+    "independentDimensionChecks": {
+      "toleranceMetres": 0.02,
+      "acceptanceBasis": "demo registration tolerance only; not a metrology or manufacturing claim",
+      "width": {
+        "catalogMetres": 0.322,
+        "scanAabbMetres": 0.3304335913255299,
+        "residualMetres": 0.008433591325529899,
+        "passed": true
+      },
+      "depth": {
+        "catalogMetres": 0.157,
+        "scanAabbMetres": 0.14555202138853837,
+        "residualMetres": -0.011447978611461629,
+        "passed": true
+      }
+    }
+  },
+  "subject": {
+    "dimensions_metres": {
+      "height": 0.322,
+      "width": 0.322,
+      "depth": 0.157
+    }
+  },
+  "output": {
+    "relative_path": "artifacts/reality-twin/late-shang-gong.gaussian.ply",
+    "bytes": 84000660,
+    "sha256": "207f1208e18b141059e051998de8df81c193a7362029603f8f244f23bcb35d93",
+    "semaframe_limits": {
+      "within_limits": true
+    }
+  },
+  "validation": {
+    "status": "passed",
+    "semaframe_current_preflight": {
+      "descriptor": {
+        "assetId": "ra_207f1208e18b141059e051998de8df81c193a7362029603f8f244f23bcb35d93",
+        "digest": "sha256:207f1208e18b141059e051998de8df81c193a7362029603f8f244f23bcb35d93",
+        "format": "ply",
+        "model": "gaussian-3d",
+        "engineeringAuthority": "visual_only",
+        "byteLength": 84000660,
+        "splatCount": 1500000,
+        "sourceBounds": {
+          "min": { "x": -0.1651691049337387, "y": 0.00002675482573977206, "z": -0.07274134457111359 },
+          "max": { "x": 0.16515757143497467, "y": 0.3219611644744873, "z": 0.07276829332113266 }
+        }
+      }
+    },
+    "spark_browser_import": {
+      "initialized": true,
+      "rendered": true,
+      "decoded_splats": 1500000,
+      "active_splats": 1500000,
+      "screenshot": {
+        "bytes": 556039,
+        "sha256": "04fabca8b4ebeb848273475f8c10b2c937d5b82127c2bd467032e5fa5e714f44",
+        "subject_crop_non_background_fraction": 0.5743234890109891
+      }
+    }
+  }
+}

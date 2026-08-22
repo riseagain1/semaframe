@@ -203,6 +203,111 @@ describe("RealitySplatRuntime", () => {
     })).toThrow("atomic load replacement");
   });
 
+  it("temporarily enables surface raycasts, returns the nearest hit, and recovers source coordinates", async () => {
+    FakeSplatMesh.instances = [];
+    const descriptor = instance("surface-hit", {
+      transform: {
+        position: { x: 7, y: -3, z: 5 },
+        rotationRadians: { x: Math.PI / 7, y: -Math.PI / 5, z: Math.PI / 9 },
+        uniformScale: 2.5,
+      },
+    });
+    const { value } = runtime();
+    await value.load({ instance: descriptor, bytes: new Uint8Array(4) });
+    const splat = FakeSplatMesh.instances.at(-1);
+    expect(splat).toBeDefined();
+    if (!splat) throw new Error("Expected the fake splat to load.");
+
+    // Match the axis-sign correction applied to a real capture child. The
+    // returned source point must be before both this transform and placement.
+    splat.position.set(0.75, -0.25, 1.5);
+    splat.rotation.set(-Math.PI / 8, Math.PI / 6, 0, "XYZ");
+    splat.scale.set(-1, 1, -1);
+    splat.updateWorldMatrix(true, true);
+
+    const expectedSourcePoint = new THREE.Vector3(0.35, 1.2, -0.8);
+    const fartherSourcePoint = new THREE.Vector3(-1.1, 0.4, 2.3);
+    const expectedWorldPoint = splat.localToWorld(expectedSourcePoint.clone());
+    const fartherWorldPoint = splat.localToWorld(fartherSourcePoint.clone());
+    expect(splat.raycastable).toBe(false);
+
+    splat.raycast = vi.fn((_raycaster, intersections) => {
+      expect(splat.raycastable).toBe(true);
+      // Deliberately return the farther hit first; Three's Raycaster owns the
+      // distance ordering that the runtime consumes.
+      intersections.push({
+        distance: 11,
+        point: fartherWorldPoint.clone(),
+        object: splat,
+      });
+      intersections.push({
+        distance: 3.25,
+        point: expectedWorldPoint.clone(),
+        object: splat,
+      });
+    });
+
+    const hit = value.raycastSurface("surface-hit", new THREE.Raycaster());
+
+    expect(splat.raycast).toHaveBeenCalledOnce();
+    expect(splat.raycastable).toBe(false);
+    expect(hit).toMatchObject({ cameraDistance: 3.25, fidelity: "gaussian-lod" });
+    expect(hit?.worldPoint.x).toBeCloseTo(expectedWorldPoint.x, 8);
+    expect(hit?.worldPoint.y).toBeCloseTo(expectedWorldPoint.y, 8);
+    expect(hit?.worldPoint.z).toBeCloseTo(expectedWorldPoint.z, 8);
+    expect(hit?.sourcePoint.x).toBeCloseTo(expectedSourcePoint.x, 8);
+    expect(hit?.sourcePoint.y).toBeCloseTo(expectedSourcePoint.y, 8);
+    expect(hit?.sourcePoint.z).toBeCloseTo(expectedSourcePoint.z, 8);
+  });
+
+  it("restores the prior raycastable state when Spark raycasting throws", async () => {
+    FakeSplatMesh.instances = [];
+    const { value } = runtime();
+    await value.load({ instance: instance("surface-error"), bytes: new Uint8Array(4) });
+    const splat = FakeSplatMesh.instances.at(-1);
+    expect(splat).toBeDefined();
+    if (!splat) throw new Error("Expected the fake splat to load.");
+    const failure = new Error("synthetic Spark raycast failure");
+    splat.raycast = vi.fn(() => {
+      expect(splat.raycastable).toBe(true);
+      throw failure;
+    });
+
+    expect(() => value.raycastSurface("surface-error", new THREE.Raycaster())).toThrow(failure);
+    expect(splat.raycastable).toBe(false);
+  });
+
+  it("fails closed for no hit, hidden captures, and WebGL context loss", async () => {
+    FakeSplatMesh.instances = [];
+    const descriptor = instance("surface-closed");
+    const { scene, value } = runtime();
+    await value.load({ instance: descriptor, bytes: new Uint8Array(4) });
+    const splat = FakeSplatMesh.instances.at(-1);
+    expect(splat).toBeDefined();
+    if (!splat) throw new Error("Expected the fake splat to load.");
+    splat.raycast = vi.fn(() => undefined);
+    const raycaster = new THREE.Raycaster();
+
+    expect(value.raycastSurface("surface-closed", raycaster)).toBeUndefined();
+    expect(splat.raycast).toHaveBeenCalledOnce();
+    expect(splat.raycastable).toBe(false);
+
+    value.update({ ...descriptor, visible: false });
+    expect(value.raycastSurface("surface-closed", raycaster)).toBeUndefined();
+    expect(splat.raycast).toHaveBeenCalledOnce();
+    expect(splat.raycastable).toBe(false);
+
+    value.update({ ...descriptor, visible: true });
+    scene.visible = false;
+    expect(value.raycastSurface("surface-closed", raycaster)).toBeUndefined();
+    expect(splat.raycast).toHaveBeenCalledOnce();
+    scene.visible = true;
+
+    value.handleContextLost();
+    expect(value.raycastSurface("surface-closed", raycaster)).toBeUndefined();
+    expect(splat.raycast).toHaveBeenCalledOnce();
+  });
+
   it("cancels before provider creation and never commits a late instance", async () => {
     let resolveModule!: (module: SparkModuleLike) => void;
     const modulePromise = new Promise<SparkModuleLike>((resolve) => { resolveModule = resolve; });

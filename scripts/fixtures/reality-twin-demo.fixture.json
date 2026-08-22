@@ -1,0 +1,102 @@
+{
+  "format": "semaframe-reality-twin-capture-fixture",
+  "version": 1,
+  "sceneKey": "reality-twin",
+  "title": "From scan to safe display",
+  "subject": {
+    "label": "Late-Shang ritual bronze wine ewer (gong)",
+    "referenceCollection": "Smithsonian Open Access",
+    "referenceLicense": "CC0",
+    "sourceDerivation": "smithsonian_glb_scan_to_gaussian_ply",
+    "nativeGaussianCapture": false,
+    "captureTruth": "The delivery asset is derived offline from two official Smithsonian museum GLB scan parts into a supported Gaussian PLY. It is not a native Gaussian capture and is not reconstructed from photos inside SemaFrame."
+  },
+  "gaussian": {
+    "displayName": "late-shang-gong.reality-twin.ply",
+    "format": "ply",
+    "mediaType": "application/ply",
+    "minimumSplatCount": 1500000,
+    "sourceCoordinateSystem": "RUB",
+    "assetEvidenceSchema": "semaframe.reality-twin-asset-evidence.v1"
+  },
+  "physicalTruth": {
+    "catalogDimensionsM": { "x": 0.322, "y": 0.322, "z": 0.157 },
+    "proxyDimensionsM": { "x": 0.322, "y": 0.322, "z": 0.157 },
+    "scanResidualToleranceM": { "x": 0.02, "y": 0.02, "z": 0.02 },
+    "independentWidthToleranceM": 0.02,
+    "toleranceSource": "asset-evidence.json derivedAsset.independentDimensionChecks.width; 20 mm demo registration tolerance only, not a metrology claim.",
+    "calibration": {
+      "label": "BASE to CREST",
+      "knownDistanceM": 0.322,
+      "axis": "y",
+      "minimumAcceptedSourceSpanM": 0.28,
+      "maximumAcceptedSourceSpanM": 0.35
+    }
+  },
+  "workspace": {
+    "projectName": "Reality Twin - Shang Gong",
+    "modelId": "com.semaframe.reality-twin.protective-case",
+    "modelVersion": "1.0.0",
+    "stage": { "widthM": 2.4, "heightM": 1.8, "depthM": 2 },
+    "scanPlacement": { "x": 0, "y": 0.12, "z": 0 },
+    "proxy": {
+      "center": { "x": 0, "y": 0.281, "z": 0 },
+      "sizeM": { "x": 0.322, "y": 0.322, "z": 0.157 },
+      "authority": "published_catalog_dimensions"
+    },
+    "plinth": {
+      "center": { "x": 0, "y": 0.06, "z": 0 },
+      "sizeM": { "x": 0.52, "y": 0.12, "z": 0.36 }
+    },
+    "case": {
+      "clearanceM": 0.04,
+      "glassThicknessM": 0.008,
+      "rootY": 0.12,
+      "sourceRootX": 0.72,
+      "unsafeRootX": -0.12,
+      "correctedRootX": 0,
+      "editedTopThicknessM": 0.01
+    }
+  },
+  "capture": {
+    "viewport": { "width": 1920, "height": 1080 },
+    "sequences": [
+      "orbit-frames",
+      "import-frames",
+      "calibration-frames",
+      "verification-frames",
+      "spatial-read-frames",
+      "proxy-build-frames",
+      "proxy-edit-frames",
+      "export-frames",
+      "reopen-frames",
+      "final-frames"
+    ],
+    "sequenceFrameCounts": {
+      "orbit-frames": 60,
+      "import-frames": 60,
+      "calibration-frames": 90,
+      "verification-frames": 60,
+      "spatial-read-frames": 60,
+      "proxy-build-frames": 90,
+      "proxy-edit-frames": 90,
+      "export-frames": 60,
+      "reopen-frames": 60,
+      "final-frames": 60
+    }
+  },
+  "requiredGates": [
+    "browser_authoritative_asset_import",
+    "gaussian_lod_two_point_measurement",
+    "independent_metric_dimension_check",
+    "semantic_proxy_link",
+    "atomic_spatial_collision_rejection",
+    "corrected_collision_free_ssg",
+    "numeric_instance_edit",
+    "undo_redo",
+    "save_reopen",
+    "published_editable_model",
+    "openusd_export",
+    "usdchecker_exit_zero"
+  ]
+}

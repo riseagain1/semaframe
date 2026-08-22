@@ -74,6 +74,61 @@ export type RealitySplatRuntimeSnapshot = Readonly<{
   pendingInstanceIds: readonly string[];
 }>;
 
+/**
+ * One visual-surface hit returned by Spark's bounded LOD raycast index.
+ *
+ * `worldPoint` is in the live Three.js render coordinate system. `sourcePoint`
+ * is the same hit transformed back into the immutable capture coordinate
+ * system, before Workspace placement, calibration scale, or axis conversion.
+ */
+export type RealitySplatSurfaceHit = Readonly<{
+  worldPoint: RealityVector3;
+  sourcePoint: RealityVector3;
+  cameraDistance: number;
+  fidelity: "gaussian-lod";
+}>;
+
+export type RealityMeasurementPoint = Readonly<{
+  sourcePoint: RealityVector3;
+  /** Floating-origin-safe Workspace world coordinates. */
+  worldPoint: RealityVector3;
+  cameraDistance: number;
+  fidelity: "gaussian-lod";
+}>;
+
+type RealityMeasurementSubject = Readonly<{
+  componentId: string;
+  assetId: string;
+  assetDigest: string;
+  sessionId: number;
+}>;
+
+export type RealityMeasurementEvent = RealityMeasurementSubject & (
+  | Readonly<{
+      kind: "started";
+    }>
+  | Readonly<{
+      kind: "point";
+      pointIndex: 1 | 2;
+      point: RealityMeasurementPoint;
+    }>
+  | Readonly<{
+      kind: "complete";
+      points: readonly [RealityMeasurementPoint, RealityMeasurementPoint];
+      sourceDistance: number;
+      displayedDistance: number;
+      fidelity: "gaussian-lod";
+    }>
+  | Readonly<{
+      kind: "miss";
+      pickedPoints: 0 | 1;
+      message: string;
+    }>
+  | Readonly<{
+      kind: "cancelled";
+    }>
+);
+
 export const DEFAULT_REALITY_SPLAT_TRANSFORM: RealitySplatTransform = Object.freeze({
   position: Object.freeze({ x: 0, y: 0, z: 0 }),
   rotationRadians: Object.freeze({ x: 0, y: 0, z: 0 }),

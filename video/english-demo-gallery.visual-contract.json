@@ -1,6 +1,6 @@
 {
   "format": "semaframe-english-demo-gallery-visual-contract",
-  "version": 1,
+  "version": 2,
   "locale": "en-US",
   "silentFirst": true,
   "audioRequiredForComprehension": false,
@@ -22,6 +22,10 @@
     "emergencyCitySemanticLens": {
       "path": "video/src/EmergencyCitySemanticLens.tsx",
       "sha256": "sha256:3d54aab0d867d64eb4297b1ac6c652d37eb391680d175b1d6a53168aeae20d0d"
+    },
+    "realityTwin": {
+      "path": "video/src/RealityTwinProofV1.tsx",
+      "sha256": "sha256:eaf032cfe3e39fddc3474c748146a2d3ee4bdac0a4c5cbd759a4eb06cb91a170"
     }
   },
   "supportingContracts": [
@@ -32,6 +36,10 @@
     {
       "path": "video/emergency-city-v4-english.visual-contract.json",
       "sha256": "sha256:2229519de1d08ee069fae2bf189cd422154490d4511aa664b9c34114a8096ce7"
+    },
+    {
+      "path": "video/reality-twin-v1.visual-contract.json",
+      "sha256": "sha256:dc4e74f3883f5a81b5ac95365691f6612a71ab936343a63b0670be2673e97b65"
     }
   ],
   "claimBoundaries": {
@@ -64,6 +72,18 @@
         "AI proposes. A human confirms.",
         "This is not a pre-rendered change"
       ]
+    },
+    "realityTwin": {
+      "captureSource": "smithsonian_museum_glb_scan_converted_offline_to_gaussian_ply_not_native_gaussian_capture",
+      "measurementScope": "automated_inspector_pointer_selection_on_current_gaussian_lod_visual_scale_estimate_not_human_claim_not_survey_or_cad_measurement",
+      "agentVisionScope": "deterministic_authorized_mcp_client_reads_descriptor_calibration_metric_bounds_and_proxy_relations_not_generative_planner_not_raw_splats_pixels_or_source_glb",
+      "engineeringAuthority": "gaussian_visual_evidence_only_parametric_proxy_owns_collision_physics_dimensions_and_engineering_meaning",
+      "exportScope": "published_parametric_protective_case_usda_only_not_semantic_proxy_gaussian_representation_or_complete_workspace",
+      "requiredVisibleCopy": [
+        "SMITHSONIAN MUSEUM SCAN · PREPARED OFFLINE",
+        "SCAN = VISUAL ONLY · PROXY = EXACT GEOMETRY · NOT SURVEY OR CAD MEASUREMENT",
+        "PARAMETRIC CASE MODEL · CAPTURE EXCLUDED"
+      ]
     }
   },
   "deliveries": [
@@ -86,9 +106,14 @@
       "captionCueCount": 12,
       "maxCaptionCps": 22,
       "maxCaptionGapSeconds": 0,
+      "maxCaptionLineCharacters": 42,
       "videoPath": "artifacts/semaframe-realityops-v2-en.mp4",
       "posterPath": "artifacts/semaframe-realityops-v2-en-poster.png",
       "readmePosterPath": "docs/media/semaframe-realityops-v2-en-poster.jpg",
+      "readmeLink": {
+        "kind": "published-release-asset",
+        "href": "https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-realityops-v2-en.mp4"
+      },
       "captureRoot": "video/public/realityops",
       "audioPath": "video/public/audio/semaframe-original-bed.wav"
     },
@@ -111,6 +136,7 @@
       "captionCueCount": 12,
       "maxCaptionCps": 22,
       "maxCaptionGapSeconds": 0,
+      "maxCaptionLineCharacters": 42,
       "videoPath": "artifacts/semaframe-realityops-v2-en-vertical.mp4",
       "posterPath": "artifacts/semaframe-realityops-v2-en-vertical-poster.png",
       "captureRoot": "video/public/realityops",
@@ -135,9 +161,14 @@
       "captionCueCount": 14,
       "maxCaptionCps": 22.5,
       "maxCaptionGapSeconds": 1.1,
+      "maxCaptionLineCharacters": 42,
       "videoPath": "artifacts/semaframe-living-room-public-demo-en.mp4",
       "posterPath": "artifacts/semaframe-living-room-public-demo-en-poster.png",
       "readmePosterPath": "docs/media/semaframe-living-room-public-demo-en-poster.jpg",
+      "readmeLink": {
+        "kind": "published-release-asset",
+        "href": "https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-living-room-public-demo-en.mp4"
+      },
       "captureRoot": "video/public/living-room",
       "audioPath": "video/public/audio/semaframe-living-room-demo.wav"
     },
@@ -160,9 +191,14 @@
       "captionCueCount": 13,
       "maxCaptionCps": 25,
       "maxCaptionGapSeconds": 0,
+      "maxCaptionLineCharacters": 42,
       "videoPath": "artifacts/semaframe-emergency-city-v4-en.mp4",
       "posterPath": "artifacts/semaframe-emergency-city-v4-en-poster.png",
       "readmePosterPath": "docs/media/semaframe-emergency-city-v4-en-poster.jpg",
+      "readmeLink": {
+        "kind": "published-release-asset",
+        "href": "https://github.com/riseagain1/semaframe/releases/download/demo-gallery-v1/semaframe-emergency-city-v4-en.mp4"
+      },
       "captureRoot": "video/public/emergency-city",
       "audioPath": "video/public/audio/semaframe-emergency-city-v3.wav"
     },
@@ -185,10 +221,61 @@
       "captionCueCount": 13,
       "maxCaptionCps": 25,
       "maxCaptionGapSeconds": 0,
+      "maxCaptionLineCharacters": 42,
       "videoPath": "artifacts/semaframe-emergency-city-v4-en-vertical.mp4",
       "posterPath": "artifacts/semaframe-emergency-city-v4-en-vertical-poster.png",
       "captureRoot": "video/public/emergency-city",
       "audioPath": "video/public/audio/semaframe-emergency-city-v3-vertical.wav"
+    },
+    {
+      "id": "reality-twin-landscape",
+      "demo": "realityTwin",
+      "variant": "landscape",
+      "sourceRefs": ["realityTwin"],
+      "componentExport": "SemaFrameRealityTwinProofV1",
+      "compositionId": "SemaFrameRealityTwinProofV1",
+      "posterComponentExport": "SemaFrameRealityTwinProofV1Poster",
+      "posterCompositionId": "SemaFrameRealityTwinProofV1Poster",
+      "durationExpression": "REALITY_TWIN_PROOF_V1_LANDSCAPE_DURATION",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "durationFrames": 960,
+      "captionPath": "video/captions/semaframe-reality-twin-v1.en-US.srt",
+      "captionSha256": "sha256:d8baa9e2ffc5661c6e01e45bb9ab1a31d9536d82274419f6810240bcf530790b",
+      "captionCueCount": 11,
+      "maxCaptionCps": 20,
+      "maxCaptionGapSeconds": 0,
+      "maxCaptionLineCharacters": 52,
+      "videoPath": "artifacts/semaframe-reality-twin-v1-en.mp4",
+      "posterPath": "artifacts/semaframe-reality-twin-v1-en-poster.png",
+      "captureRoot": "video/public/reality-twin",
+      "audioPath": "video/public/audio/semaframe-original-bed.wav"
+    },
+    {
+      "id": "reality-twin-vertical",
+      "demo": "realityTwin",
+      "variant": "vertical",
+      "sourceRefs": ["realityTwin"],
+      "componentExport": "SemaFrameRealityTwinProofV1Vertical",
+      "compositionId": "SemaFrameRealityTwinProofV1Vertical",
+      "posterComponentExport": "SemaFrameRealityTwinProofV1VerticalPoster",
+      "posterCompositionId": "SemaFrameRealityTwinProofV1VerticalPoster",
+      "durationExpression": "REALITY_TWIN_PROOF_V1_VERTICAL_DURATION",
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "durationFrames": 900,
+      "captionPath": "video/captions/semaframe-reality-twin-v1-vertical.en-US.srt",
+      "captionSha256": "sha256:75c0a3b186827f75aea0463ec4f039edbfe66967376e6ce17d4183a116145a86",
+      "captionCueCount": 11,
+      "maxCaptionCps": 20,
+      "maxCaptionGapSeconds": 0,
+      "maxCaptionLineCharacters": 52,
+      "videoPath": "artifacts/semaframe-reality-twin-v1-en-vertical.mp4",
+      "posterPath": "artifacts/semaframe-reality-twin-v1-en-vertical-poster.png",
+      "captureRoot": "video/public/reality-twin",
+      "audioPath": "video/public/audio/semaframe-original-bed.wav"
     }
   ]
 }

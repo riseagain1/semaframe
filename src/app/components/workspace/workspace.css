@@ -852,6 +852,12 @@
 .workspace-inspector__modeling fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 2px 0; padding: 8px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; }
 .workspace-inspector__modeling fieldset legend { padding: 0 4px; color: #93a1b5; font-size: .68rem; font-weight: 700; }
 .workspace-inspector__modeling fieldset label { display: grid; min-width: 0; gap: 3px; color: #cbd3df; font-size: .68rem; }
+.workspace-inspector__reality-measurement > .workspace-inspector__hint,
+.workspace-inspector__reality-measurement > .workspace-inspector__measurement-status,
+.workspace-inspector__reality-measurement > .workspace-inspector__measurement-actions { grid-column: 1 / -1; }
+.workspace-inspector__measurement-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 7px; }
+.workspace-inspector__measurement-actions button { width: 100%; }
+.workspace-inspector__measurement-status { min-height: 2.6em; margin: 0; color: #aeeeff; font: 650 .69rem/1.35 system-ui, sans-serif; }
 .workspace-inspector__modeling :disabled { cursor: not-allowed; opacity: .48; }
 .workspace-inspector__modeling button { min-height: 44px; }
 .workspace-inspector__transform fieldset { grid-template-columns: repeat(3, minmax(0, 1fr)); }

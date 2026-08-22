@@ -66,7 +66,7 @@ v0.3 moves SemaFrame beyond scene assembly into an Agent-native modeling and Rea
 | --- | --- |
 | **Parametric modeling** | Exact SI primitives, editable multipart assemblies, collision-aware placement, numeric human controls, and immutable reusable model definitions with ordinary editable instances |
 | **CAD and interchange** | Deterministic OpenUSD USDA, bounded Manifold STL/OBJ, and a real OpenCascade AP242 STEP subset running in lazy, cancellable Workers |
-| **Gaussian Splat Reality Layer** | Human or approved-Agent import of PLY, SPZ v4, and SOG v2 captures with explicit calibration, content-addressed browser storage, digest relinking, and editable semantic engineering proxies |
+| **Gaussian Splat Reality Layer** | Human or approved-Agent import of PLY, SPZ v4, and SOG v2 captures with direct A/B surface-pick calibration, content-addressed browser storage, digest relinking, and editable semantic engineering proxies |
 | **Agent-native spatial workflow** | SSG 3.1 spatial understanding, 18 approval-gated MCP tools, secure streaming asset ingress, collision and bounded-physics evidence, undo/redo, save/reopen, live data bindings, and typed 2D-to-3D actions |
 
 Together, these capabilities support one inspectable workflow: import captured context, build exact semantic parts and proxies, check placement and feasibility, connect live controls, publish reusable models, preserve the result, and export standard formats—without taking editability away from the person using the workspace.
@@ -126,7 +126,7 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Universal canvas | Mix navigable Three.js content with DOM/SVG panels on one canvas |
 | Component system | 19 versioned built-ins plus bounded Agent-defined declarative recipes |
 | Parametric modeling | Exact SI primitives, editable assemblies, immutable reusable models, collision-aware instances, and numeric Inspector controls |
-| Reality capture | Local PLY, SPZ v4, and SOG v2 Gaussian splats with explicit metric calibration, content-addressed storage, missing-byte relink, and editable semantic proxies |
+| Reality capture | Local PLY, SPZ v4, and SOG v2 Gaussian splats with direct two-point metric calibration, content-addressed storage, missing-byte relink, and editable semantic proxies |
 | Solid export | OpenUSD USDA assemblies, bounded Manifold STL/OBJ solids, and an OpenCascade STEP subset |
 | Spatial reasoning | Revision-bound SemaFrame Spatial Graph 3.1 with transforms, analytic geometry evidence, visual-only Reality nodes, semantic proxies, bounds, colliders, support, and intersection relations |
 | Collision | Asset bounds, explicit boxes, and compound oriented-box colliders with independent enable/trigger controls |
@@ -318,6 +318,8 @@ A `gaussian-splat@1.0.0` component supplies editable placement, quality, visual 
 - `uncalibrated` preserves source units and does not claim metric bounds;
 - `metadata-declared` records a declared unit and metres per source unit; or
 - `reference-distance` records the measured source distance and real-world distance used to derive scale.
+
+For reference-distance calibration, the Inspector can start a direct two-point pick on the visible Gaussian surface. The person chooses A and B with the pointer (or aims at viewport center and presses Enter), sees ephemeral markers and the measured source-space span, then enters the one known real distance and applies it. The pick is sampled from Spark's current Gaussian LOD, so it is deliberately labeled as a visual estimate—not survey or CAD measurement. Escape, selection changes, renderer replacement, or applying the calibration clears the ephemeral measurement session; it never becomes hidden authoritative geometry.
 
 Source coordinates are mapped explicitly into SemaFrame's right/up/back (`RUB`) basis. Spark 2.1 renders the splat inside the existing Three.js scene so it participates in depth, selection bounds, visibility, glow, and context recovery. If local bytes are absent after opening a project on another browser, SemaFrame shows a deterministic placeholder. **Relink** accepts only a file with the descriptor's exact digest.
 
