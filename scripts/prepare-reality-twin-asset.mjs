@@ -24,6 +24,7 @@ import {
 import { basename, dirname, resolve } from "node:path";
 import { NodeIO } from "@gltf-transform/core";
 import sharp from "sharp";
+import { realityTwinMetadataText } from "./reality-twin-metadata-text.mjs";
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "..");
 const ARTIFACT_ROOT = resolve(REPOSITORY_ROOT, "artifacts/reality-twin");
@@ -135,19 +136,10 @@ async function downloadFile(url, path, expectedBytes, expectedSha256, offline) {
   return { bytes, sha256 };
 }
 
-function stripHtml(value) {
-  return String(value)
-    .replaceAll(/<[^>]*>/g, "")
-    .replaceAll("&amp;", "&")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .trim();
-}
-
 function freetextValue(record, group, label) {
   const entry = record.content?.freetext?.[group]?.find((item) => item.label === label);
   if (!entry?.content) throw new Error(`Smithsonian record is missing ${group}/${label}`);
-  return stripHtml(entry.content);
+  return realityTwinMetadataText(entry.content);
 }
 
 function selectOfficialRecord(openAccess) {
