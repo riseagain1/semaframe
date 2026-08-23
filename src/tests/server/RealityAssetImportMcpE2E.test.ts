@@ -313,7 +313,7 @@ describe("Reality Asset Agent MCP vertical slice", () => {
       collision_conflicts: unknown[];
       nodes: Array<Record<string, unknown>>;
     };
-    expect(graph.version).toBe("3.1");
+    expect(graph.version).toBe("3.2");
     expect(graph.collision_conflicts).toEqual([]);
     expect(graph.nodes.find(({ id }) => id === scanId)).toMatchObject({
       node_kind: "reality",

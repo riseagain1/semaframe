@@ -13,6 +13,26 @@ scale, axis-angle rotation, and translation; union, cut, and intersection;
 OCCT topology validation; volume, area, centre of mass, density-derived mass,
 and bounds; bounded indexed tessellation; and AP242 STEP export in metres.
 
+`cad/` builds a replay-safe authoring layer above that kernel. A
+`CadPartDefinitionV1` contains bounded dimension-aware parameter expressions,
+line/circle/arc sketches and constraints, ordered features, and active body
+identity. `CadKernel.evaluatePart` and the Worker RPC execute sketch, extrude,
+revolve, boolean, hole, and explicit all-edge fillet/chamfer features as real
+OCCT solids. Shell, sweep, loft, and linear/circular patterns are schema-reserved
+but raise the internal evaluator code `unsupported_cad_feature` in V1; the
+public `CadKernel.evaluatePart` boundary reports this as
+`cad_part_evaluation_failed`. Evaluation returns compact
+digest-matched evidence plus transferable render meshes; OCCT objects never
+cross the runtime boundary or enter project persistence.
+
+`cadHandoff.ts` uses an internal same-runtime borrowed-shape seam to build a
+non-unioned XCAF product assembly. Its deterministic package includes AP242
+STEP, USDA, the full editable Model Definition, and a verification report. The
+export is accepted only after OCCT re-import proves solid count, aggregate
+world bounds, and volume. STEP preserves exact direct-editable B-rep and
+occurrences, while the SemaFrame sidecar—not STEP—preserves the native semantic
+feature history and assembly mate intent.
+
 The application receives opaque shape handles. It never receives an OCCT
 pointer, Emscripten filesystem, or Replicad object. Every created solid is
 validated with `BRepCheck_Analyzer`, every measured/tessellated result is
@@ -34,9 +54,22 @@ const step = await cad.exportStep(result, "Mounting block");
 await cad.dispose();
 ```
 
-`loadCadKernel()` is also available for Node tests, servers, or code already
-running inside a Worker. Merely importing the module does not initialize the
-WASM runtime.
+`loadCadKernel()` is also available for Node tests, controlled server code, or
+code already running inside a Worker. Its time checks are cooperative, so an
+untrusted server workload still needs an outer disposable Worker/process hard
+stop. Merely importing the module does not initialize the WASM runtime.
+
+The Agent adapter therefore uses the browser Worker by default and fails
+closed when a host has no disposable Worker. Its direct-kernel factory seam is
+for controlled tests or an outer process that already supplies a hard stop; it
+is never selected implicitly for untrusted Agent work.
+
+Project JSON is an untrusted transport, not proof that persisted measurements
+came from OCCT. The browser project-open and recovery paths re-evaluate every
+unique CAD definition in a disposable Worker, compare the complete compact
+evidence, and refuse to open on mismatch, timeout, capacity overflow, or a
+missing hard-stop runtime. The synchronous serializer refuses to replay an
+unverified deserialized CAD project.
 
 ## Execution and cancellation
 
@@ -58,9 +91,12 @@ still fetches the application's own WASM asset in the normal way.
 
 ## Bounds and failure boundary
 
-Important v1 caps include 1,000 m primitive dimensions, 5,000 m evaluated
-shape extents, 256 live handles, boolean complexity 128, 500,000 mesh vertices,
-1,000,000 triangles, 64 MiB STEP text, and a maximum operation budget of 120 s.
+Important v1 caps include 1,000 m primitive/CAD dimensions, 256 parameters,
+256 features, 64 active CAD bodies, 128 sketch variables and constraints,
+5,000 m evaluated
+shape extents, 256 live handles, boolean complexity 128, 500,000 aggregate mesh
+vertices, 1,000,000 aggregate triangles, 32 MiB aggregate transferable mesh
+buffers, 64 MiB STEP text, and a maximum operation budget of 120 s.
 See `CAD_KERNEL_LIMITS` for the authoritative values. Failures use stable
 `CadKernelError.code` values, including `invalid_input`, `limit_exceeded`,
 `shape_invalid`, `boolean_failed`, `operation_timeout`, and `aborted`.
@@ -69,7 +105,10 @@ STEP import is deliberately not in v1. A byte limit alone cannot bound topology,
 allocation, or parse time for an untrusted STEP file before OCCT parses it. It
 should only be added through a disposable Worker with separate memory/process
 limits and post-import topology caps. Exported STEP is integration-tested by
-parsing it back through the real OCCT STEP reader and checking dimensions.
+parsing it back through the real OCCT STEP reader and checking solid count,
+aggregate world bounds, and volume. Product names and occurrence records are
+also checked in the emitted Part 21 text; this version does not claim a full
+semantic XCAF re-import audit of every name, color, or hierarchy relationship.
 
 ## Bundle and licensing implications
 

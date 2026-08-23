@@ -26,8 +26,10 @@ export const PREVIOUS_WORKSPACE_SCHEMA_VERSION = "1.1" as const;
 /** Last release before the content-addressed Reality Asset catalog. */
 export const MODELING_WORKSPACE_PROTOCOL_VERSION = "1.2" as const;
 export const MODELING_WORKSPACE_SCHEMA_VERSION = "1.2" as const;
+/** Last project schema before ModelDefinition 2.0 persistence. */
+export const REALITY_WORKSPACE_SCHEMA_VERSION = "1.3" as const;
 export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
-export const WORKSPACE_SCHEMA_VERSION = "1.3" as const;
+export const WORKSPACE_SCHEMA_VERSION = "1.4" as const;
 export const MAX_WORKSPACE_OPERATIONS = 100;
 export const MAX_WORKSPACE_BATCH_BYTES = 1_048_576;
 export const MAX_WORKSPACE_JSON_DEPTH = 32;
@@ -41,6 +43,7 @@ export type WorkspaceSchemaVersion =
   | typeof LEGACY_WORKSPACE_SCHEMA_VERSION
   | typeof PREVIOUS_WORKSPACE_SCHEMA_VERSION
   | typeof MODELING_WORKSPACE_SCHEMA_VERSION
+  | typeof REALITY_WORKSPACE_SCHEMA_VERSION
   | typeof WORKSPACE_SCHEMA_VERSION;
 
 export type WorkspaceActor = "user" | "agent" | "system" | "migration";

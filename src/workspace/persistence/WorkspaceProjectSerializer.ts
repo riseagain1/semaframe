@@ -25,8 +25,11 @@ import {
 import {
   LEGACY_WORKSPACE_PROTOCOL_VERSION,
   LEGACY_WORKSPACE_SCHEMA_VERSION,
+  MODELING_WORKSPACE_PROTOCOL_VERSION,
+  MODELING_WORKSPACE_SCHEMA_VERSION,
   PREVIOUS_WORKSPACE_PROTOCOL_VERSION,
   PREVIOUS_WORKSPACE_SCHEMA_VERSION,
+  REALITY_WORKSPACE_SCHEMA_VERSION,
   WORKSPACE_PROTOCOL_VERSION,
   WORKSPACE_SCHEMA_VERSION,
   type SharedView,
@@ -51,9 +54,29 @@ import {
 import type { WorkspaceState } from "../state/workspaceState";
 import { semanticWorkspaceEqual } from "../state/workspaceUtils";
 import { MAX_WORKSPACE_PROJECT_BYTES } from "../state/workspaceLimits";
+import {
+  assertWorkspaceProjectCadEvidenceWithinVerificationLimits,
+  assertWorkspaceProjectCadEvidenceVerified,
+} from "./cadProjectEvidenceVerification";
 import workspaceProjectSchema from "./workspaceProject.schema.json";
 
 export const WORKSPACE_PROJECT_FORMAT_VERSION = "1.0" as const;
+
+/**
+ * Only projects captured directly from a live WorkspaceStore receive this
+ * local attestation. Keeping it private prevents callers from marking an
+ * arbitrary project as trusted, while the canonical snapshot rejects later
+ * mutation of the returned object.
+ */
+const liveStoreProjectSnapshots = new WeakMap<object, string>();
+
+function hasCurrentLiveStoreSnapshot(project: WorkspaceProjectFile): boolean {
+  const snapshot = liveStoreProjectSnapshots.get(project);
+  if (snapshot === undefined) return false;
+  if (snapshot === stableStringify(project)) return true;
+  liveStoreProjectSnapshots.delete(project);
+  return false;
+}
 
 function projectByteLength(serialized: string): number {
   return new TextEncoder().encode(serialized).byteLength;
@@ -82,7 +105,7 @@ export type SerializableWorkspaceState = {
   aliases: Array<[string, string]>;
   sharedViews: Array<[string, SharedView]>;
   recipes: Array<[string, ComponentRecipe]>;
-  /** Added in the modeling extension. Missing means an older project with no models. */
+  /** ModelDefinition 2.0 is persisted by Workspace schema 1.4. */
   modelDefinitions?: Array<[string, ModelDefinition]>;
   history: WorkspaceAppliedBatchSummary[];
 };
@@ -435,6 +458,7 @@ export class WorkspaceProjectSerializer {
     };
     this.validate(project);
     assertProjectByteLength(JSON.stringify(project));
+    assertWorkspaceProjectCadEvidenceWithinVerificationLimits(project);
     return project;
   }
 
@@ -443,7 +467,7 @@ export class WorkspaceProjectSerializer {
     store: WorkspaceStore,
     metadata: Pick<WorkspaceProjectInput, "createdAt" | "updatedAt"> = {},
   ): WorkspaceProjectFile {
-    return this.create({
+    const project = this.create({
       projectId,
       workspace: store.getState() as WorkspaceState,
       checkpoint: store.getCheckpointState() as WorkspaceState,
@@ -454,11 +478,14 @@ export class WorkspaceProjectSerializer {
       commandHistory: store.getCommandHistory(),
       ...metadata,
     });
+    liveStoreProjectSnapshots.set(project, stableStringify(project));
+    return project;
   }
 
   serialize(input: WorkspaceProjectFile | WorkspaceProjectInput): string {
     const project = "formatVersion" in input ? structuredClone(input) : this.create(input);
     this.validate(project);
+    assertWorkspaceProjectCadEvidenceWithinVerificationLimits(project);
     const serialized = JSON.stringify(project, null, 2);
     assertProjectByteLength(serialized);
     return serialized;
@@ -503,10 +530,10 @@ export class WorkspaceProjectSerializer {
       workspaceFromSerializable(normalized.workspace),
       this.registry,
     );
-    // Protocol 1.2 projects have the same command semantics as 1.3, with an
-    // empty Reality Asset catalog supplied by state migration. Promote the
-    // envelope after both snapshots are normalized so save/reopen converges on
-    // one current version instead of retaining mixed outer/inner versions.
+    // Protocol/schema 1.2 projects and Workspace Protocol 1.3 projects carrying
+    // either project schema 1.3 or 1.4 share current replay semantics. Promote
+    // the envelope after both snapshots are normalized so save/reopen converges
+    // on schema 1.4 without rewriting the command protocol.
     normalized.protocolVersion = WORKSPACE_PROTOCOL_VERSION;
     normalized.workspaceSchemaVersion = WORKSPACE_SCHEMA_VERSION;
     normalized.checkpoint = workspaceToSerializable(checkpoint);
@@ -738,6 +765,9 @@ export class WorkspaceProjectSerializer {
   }
 
   replay(project: WorkspaceProjectFile, verifySavedState = true): WorkspaceStore {
+    if (!hasCurrentLiveStoreSnapshot(project)) {
+      assertWorkspaceProjectCadEvidenceVerified(project);
+    }
     this.validate(project);
     const checkpoint = workspaceFromSerializable(project.checkpoint);
     const store = new WorkspaceStore({
@@ -1381,8 +1411,14 @@ export class WorkspaceProjectSerializer {
       && String(project.workspaceSchemaVersion) === LEGACY_WORKSPACE_SCHEMA_VERSION;
     const previous = String(project.protocolVersion) === PREVIOUS_WORKSPACE_PROTOCOL_VERSION
       && String(project.workspaceSchemaVersion) === PREVIOUS_WORKSPACE_SCHEMA_VERSION;
-    if (!current && !(allowLegacy && (legacy || previous))) {
-      throw new WorkspaceMigrationRequiredError(`Workspace protocol/schema is incompatible with ${WORKSPACE_PROTOCOL_VERSION}`);
+    const modeling = String(project.protocolVersion) === MODELING_WORKSPACE_PROTOCOL_VERSION
+      && String(project.workspaceSchemaVersion) === MODELING_WORKSPACE_SCHEMA_VERSION;
+    const priorProjectSchema = String(project.protocolVersion) === WORKSPACE_PROTOCOL_VERSION
+      && String(project.workspaceSchemaVersion) === REALITY_WORKSPACE_SCHEMA_VERSION;
+    if (!current && !(allowLegacy && (legacy || previous || modeling || priorProjectSchema))) {
+      throw new WorkspaceMigrationRequiredError(
+        `Workspace protocol/schema is incompatible with protocol ${WORKSPACE_PROTOCOL_VERSION} and schema ${WORKSPACE_SCHEMA_VERSION}`,
+      );
     }
     // Exact registry equality is checked on each embedded state, including recipes.
     if (!project.registryDigest) throw new WorkspaceMigrationRequiredError("Workspace registry digest is missing");

@@ -33,6 +33,7 @@ import type {
 } from "../../../workspace/agents/contracts";
 import {
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
+  WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WorkspaceEngineError,
 } from "../../../workspace/agents/contracts";
 import { WorkspaceStoreEngineAdapter } from "../../../workspace/agents/WorkspaceStoreEngineAdapter";
@@ -196,7 +197,9 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
         digest: "model_digest",
         root_node_id: "ROOT",
         id_map_keys: ["ROOT"],
-        nodes: [],
+        nodes: modelId === "oversized.model"
+          ? [{ node_id: "ROOT", props: { cad_document: "x".repeat(WORKSPACE_MODEL_INSPECTION_MAX_BYTES) } }]
+          : [],
       },
     };
   }
@@ -403,7 +406,7 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("2.7");
+    expect(instructions.guide.guide_version).toBe("2.8");
     expect(instructions.guide.protocol_version).toBe("1.3");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),
@@ -617,6 +620,45 @@ describe("WorkspaceAgentController", () => {
       ok: false,
       error: { code: "reality_asset_not_found", required_action: "inspect_workspace" },
     });
+  });
+
+  it("returns complete model inspections and fails an oversized final response without truncation", async () => {
+    const controller = controllerFor(new FakeWorkspaceEngine(), ["workspace:read"]);
+    const session = await sessionFor(controller, ["workspace:read"]);
+    expect(unwrap(await controller.inspectWorkspaceModel({
+      ...session,
+      model_id: "com.semaframe.fixture",
+      version: "2.0.0",
+    }))).toMatchObject({
+      model_definition: {
+        model_id: "com.semaframe.fixture",
+        version: "2.0.0",
+        id_map_keys: ["ROOT"],
+      },
+      complete: true,
+      response_limit_bytes: WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+    });
+
+    const oversized = await controller.inspectWorkspaceModel({
+      ...session,
+      model_id: "oversized.model",
+      version: "2.0.0",
+    });
+    expect(oversized).toMatchObject({
+      ok: false,
+      error: {
+        code: "model_inspection_too_large",
+        retryable: false,
+        details: {
+          model_id: "oversized.model",
+          version: "2.0.0",
+          encoded_response_bytes: expect.any(Number),
+          max_response_bytes: WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+          truncation_performed: false,
+        },
+      },
+    });
+    expect(oversized).not.toHaveProperty("data");
   });
 
   it("deduplicates concurrent and repeated asset completion per session and clears failures for retry", async () => {

@@ -48,15 +48,17 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## Next / unreleased
 
-The next public Agent contract keeps the v0.3 modeling and Reality foundation and closes three operational loops:
+The next public Agent contract keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes three operational loops:
 
 | Capability | What it adds |
 | --- | --- |
+| **Editable CAD parts** | Versioned SI parameters, bounded constraint sketches, ordered feature history, real OCCT B-rep evaluation, host-authored evidence, human Inspector editing, and atomic Agent authoring |
+| **Verified CAD handoff** | A deterministic ZIP with a non-unioned AP242/XCAF assembly, names/colors/occurrences, OpenUSD scene layer, editable SemaFrame sidecar, limitations report, and geometric OCCT re-import proof |
 | **Exact approved feed readback** | A revision-preserving `read_workspace_resource_snapshot` tool for canonical inline or HTTP-feed snapshots, gated by `workspace:read` plus non-default `effect:data_read` approval and bounded to exact non-secret results |
-| **Routed spatial movement** | A typed `move_to` action for entities, exact primitives, and assemblies, with scale preservation, atomic event fan-out, endpoint collision and enforced-physics validation, and ordinary renderer transitions |
-| **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid Workspace 1.3 projects reopen without weakening history validation |
+| **Routed spatial movement** | A typed `move_to` action for entities, exact primitives, CAD parts, and assemblies, with scale preservation, atomic event fan-out, endpoint collision and enforced-physics validation, and ordinary renderer transitions |
+| **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid project-schema 1.3 files reopen without weakening history validation |
 
-The development surface is now 19 MCP tools, Agent Guide 2.7, MCP server 1.8.0, and Agent Gateway OpenAPI 1.1.0. These values describe `main` after this change, not the published v0.3.0 tag.
+The development surface is now Workspace Protocol 1.3 with project schema 1.4, 19 MCP tools, Agent Guide 2.8, MCP server 1.8.0, Agent Gateway OpenAPI 1.1.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
 
 ## What's new in v0.3
 
@@ -124,11 +126,11 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Area | Current capability |
 | --- | --- |
 | Universal canvas | Mix navigable Three.js content with DOM/SVG panels on one canvas |
-| Component system | 19 versioned built-ins plus bounded Agent-defined declarative recipes |
-| Parametric modeling | Exact SI primitives, editable assemblies, immutable reusable models, collision-aware instances, and numeric Inspector controls |
+| Component system | 20 versioned built-ins plus bounded Agent-defined declarative recipes |
+| Parametric modeling | Exact SI primitives plus editable OCCT CAD parts with parameters, bounded constraint sketches, ordered features, assemblies, immutable reusable models, and numeric Inspector controls |
 | Reality capture | Local PLY, SPZ v4, and SOG v2 Gaussian splats with direct two-point metric calibration, content-addressed storage, missing-byte relink, and editable semantic proxies |
-| Solid export | OpenUSD USDA assemblies, bounded Manifold STL/OBJ solids, and an OpenCascade STEP subset |
-| Spatial reasoning | Revision-bound SemaFrame Spatial Graph 3.1 with transforms, analytic geometry evidence, visual-only Reality nodes, semantic proxies, bounds, colliders, support, and intersection relations |
+| Solid export | OpenUSD USDA assemblies, bounded Manifold STL/OBJ solids, legacy fused STEP, and a verified non-unioned AP242/XCAF CAD handoff package |
+| Spatial reasoning | Revision-bound SemaFrame Spatial Graph 3.2 with transforms, analytic and exact CAD evidence, visual-only Reality nodes, semantic proxies, bounds, colliders, support, and intersection relations |
 | Collision | Asset bounds, explicit boxes, and compound oriented-box colliders with independent enable/trigger controls |
 | Physics | Optional static/dynamic/kinematic intent, mass and material properties, constraints, stability reports, placement preflight, and deterministic settle previews |
 | Data | Local JSON/CSV snapshots and approved public HTTPS JSON/CSV/RSS/Atom feeds |
@@ -141,7 +143,7 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 
 The built-in component registry contains:
 
-- spatial, modeling, and reality: `stage-3d`, `spatial-entity`, `spatial-primitive`, `model-assembly`, `gaussian-splat`;
+- spatial, modeling, and reality: `stage-3d`, `spatial-entity`, `spatial-primitive`, `cad-part`, `model-assembly`, `gaussian-splat`;
 - layout: `group`, `panel`;
 - content: `text`, `image`, `annotation`, `document`;
 - media and web: `video-player`, `web-panel`;
@@ -245,7 +247,7 @@ Every Workspace object is a versioned component with:
 - locks and provenance;
 - resource bindings;
 - declared actions and events;
-- optional collision and physics attributes for spatial entities and exact primitives.
+- optional collision and physics attributes for spatial entities, exact primitives, and CAD parts.
 
 The engine validates operations against the pinned manifest. It does not silently clamp malformed commands or reinterpret stale component definitions.
 
@@ -271,7 +273,7 @@ Examples include:
 
 Connections may use static validated input or forward the complete event payload when the event and action schemas are exactly identical. Arbitrary expressions and JavaScript are never evaluated. Privileged network, external-write, and extension effects cannot be wired for unattended execution.
 
-The latest `spatial-entity`, `spatial-primitive`, and `model-assembly` manifests expose a typed `move_to` action. It preserves scale and reuses ordinary Stage, placement-lock, endpoint-collision, and enforced-physics validation; one invalid target rejects the complete source action and its fan-out. Coordinates are world coordinates for a root component and parent-local coordinates for a child, matching ordinary `world3d` placement. A component may receive only one `move_to` target per revision; duplicate explicit or routed targets reject the whole commit. A transition animates the renderer from the previous revision to the committed endpoint—it is not route planning, swept-path collision detection, continuous physics, or a waypoint sequence.
+The latest `spatial-entity`, `spatial-primitive`, `cad-part`, and `model-assembly` manifests expose a typed `move_to` action. It preserves scale and reuses ordinary Stage, placement-lock, endpoint-collision, and enforced-physics validation; one invalid target rejects the complete source action and its fan-out. Coordinates are world coordinates for a root component and parent-local coordinates for a child, matching ordinary `world3d` placement. A component may receive only one `move_to` target per revision; duplicate explicit or routed targets reject the whole commit. A transition animates the renderer from the previous revision to the committed endpoint—it is not route planning, swept-path collision detection, continuous physics, or a waypoint sequence.
 
 ### Agent-defined components
 
@@ -291,21 +293,30 @@ SemaFrame now has a closed modeling contract rather than inferring geometry from
 - capsule radius, cylindrical height, and axis; or
 - plane dimensions and normal axis.
 
-The same canonical descriptor produces render geometry, local bounds, analytic collider evidence, volume, SSG output, physics evidence, persistence digest, and export geometry. Primitive scale remains identity so dimensions cannot silently disagree with a renderer transform. A `model-assembly` is an editable transform root with `external_only`, `all`, or `none` collision policy; reparenting can preserve world or local transforms explicitly.
+The same canonical descriptor produces render geometry, local bounds, analytic collider evidence, volume, SSG output, physics evidence, persistence digest, and export geometry. Primitive scale remains identity so dimensions cannot silently disagree with a renderer transform.
 
-The **Models** panel publishes an assembly subtree as an immutable, digest-pinned model definition. An instance is materialized as an ordinary editable assembly and primitive tree, not a hidden proxy. SemaFrame chooses a collision-safe starting location, reserves every ID atomically, and preserves the source definition when an instance is edited. Agents use the same `publish_model`, `inspect_workspace_model`, `instantiate_model`, and `delete_model_definition` contract with revision, scope, and ID-reservation checks.
+A `cad-part` stores a versioned `CadPartDefinition` rather than a baked triangle mesh. Its SI parameter expressions drive bounded line/circle/arc constraint sketches and an ordered feature history. CAD V1 evaluates sketch profiles, extrude, revolve, boolean union/cut/intersection, through/blind holes, and explicit `all_edges` fillet/chamfer with OpenCascade. Shell, sweep, loft, and linear/circular pattern records are reserved in the schema but currently fail explicitly at evaluation; they never masquerade as completed geometry. Over-constrained sketches and invalid B-reps also fail closed, while under-constrained sketches remain valid with a recorded warning.
+
+Successful evaluation records only compact, digest-matched evidence—body identity, exact B-rep status, bounds, volume, area, centre of mass, evaluator versions, and diagnostics—in the Workspace. Transferable render meshes stay outside persistence. The human Inspector provides a dimensioned plate/through-hole starter, feature history, measurements, manufacturing identity, and an advanced document editor. An Agent submits the same semantic document; the authoritative host evaluates it before commit, overwrites forged digest/evidence, and leaves revision, undo history, and the previous valid solid untouched if evaluation fails.
+
+Serialized evidence is not trusted merely because its JSON fields and 32-bit definition digest are self-consistent. Before an external or recovery project containing CAD can replace the current Workspace, the browser rebuilds every unique CAD definition in a disposable Worker and compares the complete evidence record. Missing Worker isolation, a resource cap, a timeout, or any measurement mismatch rejects the open and leaves the current project unchanged.
+
+A `model-assembly@2` is an editable transform root with `external_only`, `all`, or `none` collision policy, optional part/material identity, and validated fixed/revolute/slider/planar mate metadata. Mate endpoints must stay inside the assembly subtree; datum and topology roles are allowed only on CAD parts. These mates preserve intent for Agents and in the editable handoff sidecar; STEP occurrences do not contain downstream-native mate constraints, and SemaFrame does not yet have a kinematic assembly solver. Reparenting can preserve world or local transforms explicitly.
+
+The **Models** panel publishes an assembly subtree as an immutable, digest-pinned model definition. V2 definitions preserve editable CAD documents, logical/part/material identity, and remapped assembly mate endpoints. An instance is materialized as an ordinary editable assembly, primitive, and CAD-part tree—not a hidden proxy. SemaFrame chooses a collision-safe starting location, reserves every ID atomically, and preserves the source definition when an instance is edited. Agents use the same `publish_model`, `inspect_workspace_model`, `instantiate_model`, and `delete_model_definition` contract with revision, scope, and ID-reservation checks.
 
 ### Export paths
 
 | Format | Implementation | Intended use |
 | --- | --- | --- |
-| USDA | Deterministic OpenUSD layer, metres and Y-up, stable prim IDs, Xforms, analytic primitives, and PreviewSurface materials | DCC, simulation, and spatial interchange |
+| USDA | Deterministic OpenUSD layer, metres and Y-up, stable prim IDs, Xforms, analytic primitive geometry/materials, plus CAD hierarchy, transforms, and visibility | DCC, simulation, and spatial interchange; exact CAD geometry remains in STEP and the complete CAD recipe/material record in the SemaFrame sidecar |
 | STL / OBJ | Bounded Manifold 3.5.1 WebAssembly union with watertight/manifold diagnostics and hard vertex/triangle/output caps; STL coordinates are conventional millimetres, OBJ coordinates remain metres | Mesh-solid handoff and 3D-print prototyping |
-| STEP | Real OpenCascade B-rep through Replicad, AP242 Part 21 in metres | Downstream CAD handoff for the v1 box/sphere/cylinder and uniform-transform subset |
+| STEP | Legacy real OpenCascade fused B-rep through Replicad, AP242 Part 21 in metres | One-solid handoff for the box/sphere/cylinder and uniform-transform subset |
+| CAD package | Deterministic ZIP containing a non-unioned AP242/XCAF assembly, names/colors/product occurrences, USDA, full editable SemaFrame definition sidecar, machine-readable limitations report, hashes, and a geometric OCCT re-import proof | Continue detailed work in downstream CAD while retaining separate solids and the original Agent-editable recipe |
 
-CSG and CAD run in disposable, lazy-loaded Workers. Cancellation or a time limit terminates the Worker, which is the only reliable hard stop while synchronous WebAssembly geometry code is running. The OpenCascade runtime is served as one fingerprinted local WASM asset; it is not fetched from a CDN.
+The production browser paths for CSG, CAD evaluation, and CAD handoff run in disposable, lazy-loaded Workers. Cancellation or a time limit terminates the Worker, which is the only reliable hard stop while synchronous WebAssembly geometry code is running. A headless Agent adapter without a disposable Worker fails CAD evaluation closed instead of falling back to in-process OCCT; controlled tests may inject a direct kernel explicitly. The OpenCascade runtime is served as one fingerprinted local WASM asset; it is not fetched from a CDN. The handoff Worker re-imports its own STEP and verifies solid count, aggregate world bounds, and volume before a package can be downloaded. Repeated exports of the same canonical definition with the pinned runtime are byte-identical.
 
-This makes SemaFrame useful for accurate blockouts, rooms, furniture, fixtures, equipment envelopes, simple product concepts, spatial assemblies, collision/stability preflight, and light maker workflows. It is deliberately described as **AI-native parametric spatial/model assembly** or **light CAD**, not professional mechanical CAD. There is not yet a sketch constraint solver, persistent topological face naming, fillet/chamfer/shell/sweep/loft feature tree, GD&T, STEP import, or FEA certification workflow.
+This makes SemaFrame useful for accurate blockouts, rooms, furniture, fixtures, equipment envelopes, machined-part first passes, spatial assemblies, collision/stability preflight, and reducing the amount of manual rebuilding before downstream CAD refinement. Dimensions and evaluated solids are exact to the supplied constraints and OpenCascade model—not proof of manufacturing tolerance, survey accuracy, or fitness for purpose. It is deliberately described as **Agent-native spatial modeling with light parametric CAD**, not a replacement for a mature mechanical CAD/PLM stack. There is not yet robust persistent per-face naming, arbitrary edge selection, evaluated shell/sweep/loft/pattern features, GD&T/PMI, drawings, STEP import, vendor-native feature-tree generation, a kinematic mate solver, or FEA certification.
 
 ## Reality capture and Gaussian splats
 
@@ -323,7 +334,7 @@ For reference-distance calibration, the Inspector can start a direct two-point p
 
 Source coordinates are mapped explicitly into SemaFrame's right/up/back (`RUB`) basis. Spark 2.1 renders the splat inside the existing Three.js scene so it participates in depth, selection bounds, visibility, glow, and context recovery. If local bytes are absent after opening a project on another browser, SemaFrame shows a deterministic placeholder. **Relink** accepts only a file with the descriptor's exact digest.
 
-Reality data never owns collision, mass, support, constraints, CAD export, or structural feasibility. For an engineering-aware digital twin, link the splat to one or more editable `spatial-primitive`, `spatial-entity`, or `model-assembly` components through `semanticProxyIds`. SSG 3.1 exposes the splat as a `reality` node plus `represented_by` / `proxy_for` relations; the proxies remain the sole engineering authority. A utility-pole capture, for example, can provide visual field context while an exact cylinder/assembly proxy drives clearance, collision, stability, and export.
+Reality data never owns collision, mass, support, constraints, CAD export, or structural feasibility. For an engineering-aware digital twin, link the splat to one or more editable `spatial-primitive`, `cad-part`, `spatial-entity`, or `model-assembly` components through `semanticProxyIds`. SSG 3.2 exposes the splat as a `reality` node plus `represented_by` / `proxy_for` relations; the proxies remain the sole engineering authority. A utility-pole capture, for example, can provide visual field context while an exact cylinder/CAD/assembly proxy drives clearance, collision, stability, and export.
 
 Agent import is deliberately split into capabilities:
 
@@ -339,12 +350,13 @@ Current import limits are 256 MiB, 4 million splats, and 128 registered descript
 
 ### SemaFrame Spatial Graph
 
-`inspect_workspace_space` returns **SemaFrame Spatial Graph 3.1 (SSG)** in `data.spatial_graph`: a revision-bound, model-readable projection of the open Workspace. It includes:
+`inspect_workspace_space` returns **SemaFrame Spatial Graph 3.2 (SSG)** in `data.spatial_graph`: a revision-bound, model-readable projection of the open Workspace. It includes:
 
 - stable prim paths and component identity;
 - parent-aware world transforms;
-- explicit asset, primitive, assembly, and visual-only Reality node kinds;
+- explicit asset, primitive, CAD, assembly, and visual-only Reality node kinds;
 - exact primitive parameters, digest, dimensions, local bounds, volume, analytic collider, and material summary;
+- exact CAD definition/evaluator identity, body count, local bounds, B-rep volume/area, and feature diagnostics;
 - assembly collision policy, model reference, ancestry, and aggregate descendant bounds;
 - Reality Asset identity, calibration, metric-bounds status, and semantic-proxy relations without local byte disclosure;
 - asset-derived and component-derived world bounds;
@@ -357,13 +369,13 @@ SSG is derived JSON, not a second scene database and not a Pixar OpenUSD file. T
 
 ### Collision
 
-Current spatial entities and parametric primitives support:
+Current spatial entities, parametric primitives, and evaluated CAD parts support:
 
 - asset-derived bounds;
 - one explicit box collider; or
 - up to 16 compound oriented-box parts.
 
-Parametric `asset_bounds` comes from the exact geometry descriptor, not an asset approximation. SSG preserves the analytic sphere/cylinder/cone/capsule evidence, while the current feasibility narrow phase conservatively tests its exact oriented bounding volume. Assembly policy can ignore internal part/part contacts while retaining external collisions, include all contacts, or exclude the assembly subtree from collision feasibility.
+Parametric `asset_bounds` comes from the exact geometry descriptor, and CAD `asset_bounds` comes from verified OCCT B-rep bounds—not an asset approximation. SSG preserves analytic primitive evidence and exact CAD measurements, while the current feasibility narrow phase conservatively tests their oriented bounding volumes. Assembly policy can ignore internal part/part contacts while retaining external collisions, include all contacts, or exclude the assembly subtree from collision feasibility.
 
 Collision can be enabled or disabled independently of physics. A collider may also be a trigger. Solid overlaps reject the entire atomic update; touching faces and trigger volumes are represented explicitly. Parent/child attachment can use a safety margin, but true solid penetration remains invalid.
 
@@ -374,7 +386,7 @@ Physics is optional per component. Turning the physics master switch off preserv
 Supported attributes include:
 
 - static, dynamic, and kinematic body type;
-- mass and center-of-mass offset;
+- mass and center-of-mass offset (applied from the evaluated geometric centre of mass for CAD parts, otherwise from resolved bounds);
 - friction, restitution, and gravity scale;
 - report or enforce stability mode;
 - up to 16 fixed, hinge, slider, or ball constraints.
@@ -470,7 +482,7 @@ The closed protocol supports 24 operations:
 
 Every batch carries exact Workspace identity, base revision, registry digest, request ID, and a bounded operation list. Validation and reduction occur on a draft. Any failure leaves authoritative state unchanged. Identical retries are idempotent; changed retries, stale revisions, unknown fields, unpinned digests, invalid geometry, collisions, and missing permissions fail closed.
 
-Saved components remain pinned to their manifest version. `upgrade_component_manifest` explicitly moves a compatible older built-in to the latest exact reference as one atomic, undoable, replayable operation. Workspace 1.0 through 1.2 project migrations remain supported.
+Saved components remain pinned to their manifest version. `upgrade_component_manifest` explicitly moves a compatible older built-in to the latest exact reference as one atomic, undoable, replayable operation. Workspace project-schema 1.0 through 1.3 migrations remain supported.
 
 Protocol source of truth:
 
@@ -547,7 +559,7 @@ SemaFrame deliberately does not claim the following:
 - **Not a general code sandbox.** Recipe components use a closed declarative vocabulary.
 - **Not a general physics engine.** Current physics focuses on collision, support, conservative stability, constraints, and bounded settle previews.
 - **Not structural certification.** Material properties, stress, fatigue, fracture, tolerances, and safety factors are not modeled.
-- **Not full mechanical CAD.** Exact primitives, editable assemblies, manifold mesh solids, and a real B-rep STEP subset are available; sketch constraints, a general feature tree, robust persistent topology naming, STEP import, and engineering drawings are not.
+- **Not full mechanical CAD.** Exact primitives, bounded constraint sketches, a real editable B-rep feature subset, assembly intent, and verified AP242 handoff are available. Robust persistent per-face naming, arbitrary topology selection, evaluated shell/sweep/loft/pattern features, native vendor feature trees, STEP import, GD&T/PMI, drawings, PLM, and FEA are not.
 - **Reality capture is visual evidence, not engineering truth.** Gaussian splats do not provide collision, physics, CAD, material, or certification authority; editable semantic proxies must carry those claims.
 - **Project JSON is not a portable splat bundle.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest.
 - **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
@@ -606,7 +618,7 @@ src/
     data/                 Resources, feeds, bindings, connector contracts
     interaction/          Pointer, keyboard, selection, and activation routing
     persistence/          Workspace project schema and serializer
-    modeling/             Exact primitives, reusable models, OpenUSD, CSG, and bounded CAD workers
+    modeling/             Exact primitives, CAD documents/solver/features, reusable models, OpenUSD, CSG, and bounded CAD/handoff workers
     physics/              Physics configuration, reports, and deterministic preview
     protocol/             Workspace Protocol schema, types, and validation
     renderer/             Hybrid projection bridge and 2D/3D component projection

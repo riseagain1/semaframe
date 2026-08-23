@@ -6,9 +6,14 @@
  */
 
 export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "2.7" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "2.8" as const;
 /** Final JSON cap for one public inspect_workspace_component result. */
 export const WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES = 1_048_576;
+/**
+ * Final JSON cap for one public inspect_workspace_model result.
+ * Model inspections are exact: oversized definitions fail and are never
+ * compacted or truncated.
+ */
 export const WORKSPACE_MODEL_INSPECTION_MAX_BYTES = 1_048_576;
 /**
  * Final JSON cap for one public read_workspace_resource_snapshot result.
@@ -23,6 +28,7 @@ export const WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE =
  * client_id/client_name values added by WorkspaceAgentController.
  */
 export const WORKSPACE_COMPONENT_INSPECTION_WRAPPER_RESERVE_BYTES = 2_048;
+export const WORKSPACE_MODEL_INSPECTION_WRAPPER_RESERVE_BYTES = 2_048;
 export const WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES = 2_048;
 
 export type JSONPrimitive = string | number | boolean | null;

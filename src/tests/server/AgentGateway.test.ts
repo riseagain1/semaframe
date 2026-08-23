@@ -90,7 +90,7 @@ describe("Agent Gateway browser boundary", () => {
       enabled: false,
       connected: false,
       engineConnected: false,
-      instructionVersion: "2.7",
+      instructionVersion: "2.8",
       csrfToken: expect.any(String),
     }));
     expect(JSON.stringify(payload)).not.toMatch(/pairing|bearer|mcpServers/u);

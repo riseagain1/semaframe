@@ -7,6 +7,7 @@
  */
 
 import type { ParametricPrimitive } from "../workspace/modeling/parametricGeometry";
+import type { CadPartDefinitionV1 } from "../workspace/modeling/cad";
 
 export type JSONScalar = string | number | boolean | null;
 export type EntityId = string;
@@ -102,6 +103,14 @@ export type EntityRenderGeometry =
       kind: "parametric";
       definition: ParametricPrimitive;
       digest: string;
+      material: ParametricRenderMaterial;
+      castShadow: boolean;
+      receiveShadow: boolean;
+    }
+  | {
+      kind: "cad";
+      definition: CadPartDefinitionV1;
+      definitionDigest: string;
       material: ParametricRenderMaterial;
       castShadow: boolean;
       receiveShadow: boolean;

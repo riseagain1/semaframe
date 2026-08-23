@@ -166,6 +166,39 @@ describe("composable Workspace MCP tools", () => {
         geometry: { kind: "mesh", uri: "https://example.invalid/model.glb" },
       },
     }).success).toBe(false);
+    const semanticCadCandidate = {
+      ...exactParametricCandidate,
+      candidate: {
+        cad_definition: {
+          formatVersion: "1.0",
+          partId: "preflight_part",
+          displayName: "Preflight part",
+          units: "metre",
+          parameters: [],
+          history: [],
+          activeBodyIds: [],
+        },
+        placement: exactParametricCandidate.candidate.placement,
+      },
+    };
+    expect(spatialPlacementInput?.safeParse(semanticCadCandidate).success).toBe(true);
+    expect(spatialPlacementInput?.safeParse({
+      ...semanticCadCandidate,
+      candidate: {
+        ...semanticCadCandidate.candidate,
+        geometry: { kind: "box", sizeM: { x: 1, y: 1, z: 1 } },
+      },
+    }).success).toBe(false);
+    expect(spatialPlacementInput?.safeParse({
+      ...semanticCadCandidate,
+      candidate: {
+        ...semanticCadCandidate.candidate,
+        cad_definition: {
+          ...semanticCadCandidate.candidate.cad_definition,
+          history: Array.from({ length: 257 }, () => ({})),
+        },
+      },
+    }).success).toBe(false);
 
     const componentOutput = recorder.tools.get("inspect_workspace_component")
       ?.definition.outputSchema as ZodType | undefined;
@@ -572,12 +605,13 @@ describe("Workspace REST adapter", () => {
     });
   });
 
-  it("maps resource snapshot failures to explicit REST statuses instead of 500", async () => {
+  it("maps exact-read and model-inspection size failures to explicit REST statuses instead of 500", async () => {
     const expected = new Map([
       ["resource_not_found", 404],
       ["resource_snapshot_unavailable", 409],
       ["resource_snapshot_not_readable", 422],
       ["resource_snapshot_too_large", 413],
+      ["model_inspection_too_large", 413],
     ]);
     let code = "resource_not_found";
     const handler = createWorkspaceAgentRestHandler(

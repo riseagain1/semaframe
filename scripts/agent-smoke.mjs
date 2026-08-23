@@ -726,9 +726,9 @@ try {
       initialSummary?.revision !== 0 || initialSummary?.component_count !== 0 || initialSummary?.components?.length !== 0) {
     throw new Error(`The fresh native Workspace was not an empty revision 0 workspace: ${JSON.stringify(initialWorkspace)}`);
   }
-  if (initialSummary?.spatial_graph?.version !== "3.1" ||
+  if (initialSummary?.spatial_graph?.version !== "3.2" ||
       initialSummary?.physics_validation?.version !== "2.0") {
-    throw new Error(`The Workspace summary did not advertise SSG 3.1 / Physics 2.0: ${diagnosticJson(initialSummary)}`);
+    throw new Error(`The Workspace summary did not advertise SSG 3.2 / Physics 2.0: ${diagnosticJson(initialSummary)}`);
   }
   const initialCapability = initialWorkspace.data.capability_manifest;
   const spatialManifest = initialCapability?.component_types?.find((candidate) => candidate?.typeId === "spatial-entity");
@@ -1046,7 +1046,7 @@ try {
       /get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u.test(JSON.stringify(openApi))) {
     throw new Error("Agent OpenAPI discovery document is incomplete.");
   }
-  console.log("Agent browser smoke passed: exclusive nineteen-tool Workspace MCP/OpenAPI contract, explicit approval, exact snapshot-read discovery, SSG 3.1 and physics inspect/stable-placement/settle discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
+  console.log("Agent browser smoke passed: exclusive nineteen-tool Workspace MCP/OpenAPI contract, explicit approval, exact snapshot-read discovery, SSG 3.2 and physics inspect/stable-placement/settle discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
 } catch (error) {
   const safeLogs = diagnosticText(processLogs.join(""));
   if (safeLogs.trim()) console.error(safeLogs.slice(-4_000));

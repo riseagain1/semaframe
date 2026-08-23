@@ -103,7 +103,7 @@ function statusForResult(result: WorkspaceAgentResult<unknown>): number {
   if (code === "resource_snapshot_unavailable") return 409;
   if (code === "resource_snapshot_not_readable") return 422;
   if (/stale|transaction|retry_mismatch|envelope_mismatch|session_mismatch/u.test(code)) return 409;
-  if (code === "resource_snapshot_too_large") return 413;
+  if (code === "resource_snapshot_too_large" || code === "model_inspection_too_large") return 413;
   if (/invalid|validation|unsupported/u.test(code)) return 422;
   return 500;
 }

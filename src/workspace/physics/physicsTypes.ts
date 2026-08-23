@@ -22,7 +22,7 @@ export type SpatialPhysicsConfig = Readonly<{
   enabled: boolean;
   bodyType: PhysicsBodyType;
   massKg: number;
-  /** Local offset from the resolved collider/bounds center, in meters. */
+  /** Local offset from the evaluated CAD center of mass, or otherwise the resolved collider/bounds center. */
   centerOfMass: Vec3;
   friction: number;
   restitution: number;

@@ -433,6 +433,7 @@ function resolveSpatialAnimationAction(
 const MOVABLE_SPATIAL_TYPE_IDS = new Set([
   "spatial-entity",
   "spatial-primitive",
+  "cad-part",
   "model-assembly",
 ]);
 

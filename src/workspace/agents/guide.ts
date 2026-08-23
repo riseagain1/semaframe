@@ -230,16 +230,56 @@ export const WORKSPACE_MODELING_QUICKSTART: JSONValue = Object.freeze(jsonContra
     "workspace:read", "workspace:write", "component:create", "component:update",
   ],
   units_and_authority: {
-    geometry: "All primitive dimensions are finite SI metres in props.geometry; do not encode dimensions in labels or renderer scale.",
+    geometry: "All primitive and CAD dimensions are finite SI metres. Do not encode dimensions in labels or renderer scale.",
     transform: "world3d placement is local to parent. Use attach_component/detach_component transform_mode preserve_world when changing hierarchy without visual movement.",
-    preflight: "Use inspect_workspace_space plus query_spatial_placement before committing collision-enabled geometry.",
+    preflight: "Use inspect_workspace_space plus query_spatial_placement before committing collision-enabled geometry. For a proposed CAD part, pass the complete semantic document as cad_definition; the host evaluates exact OCCT bounds read-only and accepts no caller-supplied digest or evidence.",
   },
   authoring: [
     "Create exactly one stage-3d first.",
-    "Create a model-assembly root before its spatial-primitive children.",
+    "Create a model-assembly root before its spatial-primitive or cad-part children.",
     "Copy spatial-primitive geometry/material/collision/physics defaults from its exact advertised manifest and replace complete nested objects only.",
     "Use box, sphere, cylinder, cone, capsule, or plane canonical geometry and keep primitive placement scale identity; edit dimensions through update_component props.geometry.",
+    "For editable manufacturing geometry, create cad-part and replace props.definition with a complete CadPartDefinition 1.0. The host evaluates it with OCCT and replaces definitionDigest/evaluation in the resolved atomic batch; never invent evidence.",
   ],
+  cad_part: {
+    placement_preflight: "Pass cad_definition plus the exact world3d placement to query_spatial_placement before create/update; use the same candidate with query_stable_placement when support and center-of-mass evidence is required. An invalid, empty, unsupported, or geometrically no-op document fails without changing Workspace revision or history.",
+    document: {
+      formatVersion: "1.0", partId: "mount", displayName: "Mount", units: "metre",
+      parameters: [
+        { id: "radius", name: "Radius", dimension: "length", expression: { kind: "constant", value: 0.05, dimension: "length" } },
+        { id: "thickness", name: "Thickness", dimension: "length", expression: { kind: "constant", value: 0.01, dimension: "length" } },
+      ],
+      history: [
+        {
+          id: "profile", name: "Profile", kind: "sketch",
+          sketch: {
+            plane: { originM: { x: 0, y: 0, z: 0 }, xAxis: { x: 1, y: 0, z: 0 }, yAxis: { x: 0, y: 1, z: 0 }, normal: { x: 0, y: 0, z: 1 } },
+            entities: [{ id: "circle", kind: "circle", center: { x: 0, y: 0 }, radiusM: 0.05 }],
+            loops: [{ id: "outer", entityIds: ["circle"], role: "outer" }],
+            constraints: [
+              { id: "center", kind: "fixed", point: { entityId: "circle", point: "center" }, position: { x: 0, y: 0 } },
+              { id: "radius", kind: "radius", entityId: "circle", value: { kind: "parameter", parameterId: "radius" } },
+            ],
+          },
+        },
+        {
+          id: "extrude", name: "Extrude", kind: "extrude",
+          profile: { sketchFeatureId: "profile", loopIds: ["outer"] },
+          distance: { kind: "parameter", parameterId: "thickness" },
+          operation: "new", resultBodyId: "body",
+        },
+      ],
+      activeBodyIds: ["body"],
+    },
+    evaluated_features: ["sketch", "extrude", "revolve", "boolean", "hole", "all_edges fillet", "all_edges chamfer"],
+    fail_closed_features: ["shell", "sweep", "loft", "linear_pattern", "circular_pattern"],
+    rule: "A failed or unsupported feature rejects the whole submission without changing revision, history, or the last valid CAD solid. Inspect the resolved batch or component state for canonical digest and compact B-rep evidence.",
+  },
+  assemblies: {
+    version: "model-assembly@2.0.0",
+    metadata: ["partNumber", "materialName"],
+    mates: "Optional fixed, revolute, slider, or planar entries connect two descendant component IDs. CAD endpoints may add datumId or topologyRole. References outside the assembly subtree fail atomically.",
+  },
   reusable_models: {
     publish: {
       op: "publish_model", op_id: "publish_fixture", model_id: "com.example.fixture",
@@ -255,7 +295,7 @@ export const WORKSPACE_MODELING_QUICKSTART: JSONValue = Object.freeze(jsonContra
         rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
       },
     },
-    rule: "Published definitions are immutable and digest-pinned. Instances materialize as ordinary editable model-assembly and spatial-primitive components; editing an instance never mutates the definition.",
+    rule: "Published definitions are immutable and digest-pinned. Instances materialize as ordinary editable model-assembly, spatial-primitive, and cad-part components; editing an instance never mutates the definition.",
   },
 }));
 
@@ -279,7 +319,7 @@ export const WORKSPACE_REALITY_ASSET_QUICKSTART: JSONValue = Object.freeze(jsonC
   gaussian_splat_rules: {
     authority: "Every Reality Asset is engineeringAuthority visual_only. It never supplies collision, physics, CAD, stability, or feasibility truth.",
     calibration: "Choose uncalibrated, metadata-declared, or reference-distance explicitly. Target coordinates are RUB. Uncalibrated bounds are not metric.",
-    proxies: "Put editable spatial-primitive, spatial-entity, or model-assembly IDs in semanticProxyIds when engineering reasoning is required. The proxies, not the splat, own collision and physics.",
+    proxies: "Put editable spatial-primitive, cad-part, spatial-entity, or model-assembly IDs in semanticProxyIds when engineering reasoning is required. The proxies, not the splat, own collision and physics.",
     persistence: "Projects store safe content-addressed descriptors and component references, never raw bytes, local paths, source file names, upload grants, or tokens. Missing bytes render as a placeholder and require the exact same digest to relink.",
   },
 }));
@@ -339,7 +379,10 @@ Required workflow
    Published reusable models are summarized by exact model ID, semantic version,
    and digest. Call inspect_workspace_model with an exact ID and version before
    instantiate_model; its id_map_keys array is complete and must map one-to-one
-   to newly reserved component IDs.
+   to newly reserved component IDs. ModelDefinition 2.0 nodes also preserve
+   logical_node_id, part_number, and material_name. The complete result is exact,
+   bounded to 1,048,576 encoded bytes, and fails with model_inspection_too_large
+   rather than silently truncating nodes or CAD metadata.
    For spatial reasoning, call inspect_workspace_space. Its data.spatial_graph
    SemaFrame Spatial Graph projection is derived from the same authoritative Workspace revision and gives
    each 3D entity a prim path, local placement, composed world transform, asset-
@@ -392,10 +435,12 @@ Component and placement rules
   Parent/child faces may attach through their configured safety margin, but actual
   solid penetration still blocks the batch. Touching faces are allowed. Before create_component, place_component, resize,
   attach, or collision-prop changes that affect a 3D entity, call
-  query_spatial_placement with the proposed exact world3d placement and asset
-  identity. Use a returned suggestion or deliberately revise the layout; never
+  query_spatial_placement with the proposed exact world3d placement and exactly
+  one geometry source: asset identity, primitive geometry, or a complete
+  cad_definition. CAD preflight is host-evaluated with bounded OCCT work and does
+  not accept digest/evidence fields. Use a returned suggestion or deliberately revise the layout; never
   disable collision merely to force an object through another solid object.
-- Exact modeling uses spatial-primitive and model-assembly. Primitive geometry
+- Exact modeling uses spatial-primitive, cad-part, and model-assembly. Primitive geometry
   is one closed SI-metre descriptor: box sizeM; sphere radiusM; cylinder/cone
   radiusM, heightM, axis; capsule radiusM, cylinderHeightM, axis; or plane sizeM
   and normalAxis. The same descriptor drives the render mesh, analytic bounds,
@@ -406,8 +451,17 @@ Component and placement rules
   among parts of the same assembly while retaining collisions with everything
   outside it; all validates every pair; none excludes its descendants from
   collision feasibility. Never use none to conceal an external clash.
+- A cad-part is a versioned editable parameter/sketch/feature document plus
+  compact host-authored OCCT evidence. The host evaluates non-empty CAD
+  definitions before commit, overwrites forged definitionDigest/evaluation,
+  and rejects the whole batch if a feature fails. Runtime V1 evaluates
+  constraint sketches, extrude, revolve, boolean, hole, and all-edge
+  fillet/chamfer. Shell, sweep, loft, and linear/circular pattern documents are
+  reserved in the schema but fail explicitly rather than degrading to mesh.
+  Exact evidence drives rendering, bounds, cad_bounds collision, physics
+  volume, SSG 3.2, persistence, reusable models, and AP242 handoff.
 - publish_model captures only a model-assembly subtree containing registered
-  model-assembly and spatial-primitive nodes. Definitions are immutable,
+  model-assembly, spatial-primitive, and cad-part nodes. Definitions are immutable,
   semantic-versioned, digest-pinned, bounded to 256 nodes, and persisted with
   project history. Call inspect_workspace_model to get its exact node IDs, then
   reserve the same number of fresh IDs and submit instantiate_model with an
@@ -426,7 +480,7 @@ Component and placement rules
   complete safe descriptor if inspect_workspace omitted it; its
   binary_availability remains host_local_unknown to Agents.
 - A Gaussian splat is always engineeringAuthority visual_only. It contributes
-  calibrated visual bounds to SSG 3.1 but never a collider, rigid body, support
+  calibrated visual bounds to SSG 3.2 but never a collider, rigid body, support
   surface, CAD solid, or feasibility result. Choose uncalibrated,
   metadata-declared, or reference-distance calibration explicitly and map the
   source coordinate system to RUB. When engineering reasoning is needed, create
@@ -608,7 +662,7 @@ Component and placement rules
   Playback requires both the spatial entity and stage-3d to be visible.
   Hiding or collapsing either one atomically stops active playback; hiding a
   Stage stops every active spatial entity in stable component-ID order.
-  Latest spatial-entity, spatial-primitive, and model-assembly manifests also
+  Latest spatial-entity, spatial-primitive, cad-part, and model-assembly manifests also
   expose move_to. Its closed input is { target: { space: "world3d", position,
   rotation } }; the action preserves the component's existing scale, requires
   component:update in addition to component:invoke, and may be reached through

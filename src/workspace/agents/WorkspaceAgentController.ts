@@ -169,6 +169,8 @@ export type InspectWorkspaceModelData = Readonly<{
   workspace_revision: number;
   registry_digest: string;
   model_definition: JSONValue;
+  complete: true;
+  response_limit_bytes: typeof WORKSPACE_MODEL_INSPECTION_MAX_BYTES;
 }>;
 
 export type InspectWorkspaceAssetData = Readonly<{
@@ -758,12 +760,24 @@ export class WorkspaceAgentController {
         workspace_revision: inspection.revision,
         registry_digest: inspection.registryDigest,
         model_definition: structuredClone(inspection.modelDefinition),
+        complete: true as const,
+        response_limit_bytes: WORKSPACE_MODEL_INSPECTION_MAX_BYTES as typeof WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
       });
-      if (encodedBytes(result) > WORKSPACE_MODEL_INSPECTION_MAX_BYTES) {
+      const responseBytes = encodedBytes(result);
+      if (responseBytes > WORKSPACE_MODEL_INSPECTION_MAX_BYTES) {
         throw new WorkspaceEngineError(
           "model_inspection_too_large",
           "Published model inspection exceeds the public response limit",
-          { retryable: false },
+          {
+            retryable: false,
+            details: {
+              model_id: modelId,
+              version,
+              encoded_response_bytes: responseBytes,
+              max_response_bytes: WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+              truncation_performed: false,
+            },
+          },
         );
       }
       return result;

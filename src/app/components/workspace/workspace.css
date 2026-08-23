@@ -866,6 +866,21 @@
 .workspace-inspector__model-ref { display: grid; gap: 5px; margin: 9px 0; padding: 8px; border: 1px solid rgba(104,213,255,.14); border-radius: 8px; background: rgba(104,213,255,.05); }
 .workspace-inspector__model-ref > div { min-width: 0; }
 .workspace-inspector__model-ref dd { overflow-wrap: anywhere; font: .68rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.workspace-inspector__cad-evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 9px 0 11px; }
+.workspace-inspector__cad-evidence > div { min-width: 0; padding: 8px; border: 1px solid rgba(104, 213, 255, .18); border-radius: 8px; background: rgba(104, 213, 255, .055); }
+.workspace-inspector__cad-evidence dt { color: #8f9caf; font-size: .62rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.workspace-inspector__cad-evidence dd { margin: 3px 0 0; color: #e8f9ff; font-size: .7rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.workspace-inspector__cad-empty { margin: 9px 0 11px; padding: 9px; color: #c8d4e4; border: 1px dashed rgba(104, 213, 255, .27); border-radius: 8px; background: rgba(104, 213, 255, .04); font-size: .72rem; line-height: 1.45; }
+.workspace-inspector__feature-tree { display: grid; gap: 5px; margin: 12px 0; padding: 0; list-style: none; }
+.workspace-inspector__feature-tree li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-width: 0; padding: 7px 8px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 7px; background: rgba(255, 255, 255, .025); }
+.workspace-inspector__feature-tree li > span { display: grid; place-items: center; width: 20px; height: 20px; color: #9fe7ff; border-radius: 50%; background: rgba(104, 213, 255, .12); font-size: .62rem; font-variant-numeric: tabular-nums; }
+.workspace-inspector__feature-tree strong { min-width: 0; overflow: hidden; color: #edf5ff; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-inspector__feature-tree small { color: #8795a9; font-size: .62rem; text-transform: capitalize; }
+.workspace-inspector__feature-tree .is-suppressed { opacity: .55; }
+.workspace-inspector__cad-advanced { margin-top: 10px; padding: 8px; border: 1px solid rgba(255, 255, 255, .1); border-radius: 8px; }
+.workspace-inspector__cad-advanced summary { cursor: pointer; color: #dce8f6; font-size: .73rem; font-weight: 700; }
+.workspace-inspector__cad-advanced textarea { box-sizing: border-box; width: 100%; min-height: 220px; padding: 8px; color: #d9f4ff; border: 1px solid rgba(255, 255, 255, .14); border-radius: 7px; background: #0e141d; resize: vertical; font: 600 .64rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.workspace-inspector__cad-advanced button { width: 100%; margin-top: 7px; }
 
 .workspace-a11y-label {
   position: absolute;

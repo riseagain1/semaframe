@@ -26,6 +26,7 @@ function normalDescription(manifest: ComponentManifest): string {
   if (manifest.typeId === "video-player") return "Play YouTube, Vimeo, or direct HTTPS media";
   if (manifest.typeId === "web-panel") return "Embed an HTTPS website after explicit approval";
   if (manifest.typeId === "data-panel") return "Display JSON, CSV, RSS, or Atom feed data";
+  if (manifest.typeId === "cad-part") return "Build an editable OCCT B-rep from dimensions and ordered features";
   if (manifest.typeId === "model-assembly") return "Collect editable 3D parts under one transform root";
   return `${manifest.allowedPlacements.join(" · ")} · ${manifest.trustTier}`;
 }
@@ -71,7 +72,9 @@ export function buildWorkspaceComponentCatalog(
       trustTier: manifest.trustTier,
       configureOnCreate: manifest.typeId === "video-player"
         || manifest.typeId === "web-panel"
+        || manifest.typeId === "cad-part"
         || manifest.typeId === "model-assembly",
+      ...(manifest.typeId === "cad-part" ? { badge: "Exact CAD" } : {}),
     }];
   });
 }

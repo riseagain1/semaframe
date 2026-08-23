@@ -9,6 +9,7 @@ export type WorkspaceSpatialComponentKind =
   | "stage"
   | "asset"
   | "primitive"
+  | "cad"
   | "assembly"
   | "reality";
 
@@ -20,6 +21,8 @@ export function spatialComponentKind(typeId: string): WorkspaceSpatialComponentK
       return "asset";
     case "spatial-primitive":
       return "primitive";
+    case "cad-part":
+      return "cad";
     case "model-assembly":
       return "assembly";
     case "gaussian-splat":
@@ -38,7 +41,7 @@ export function isSpatialRenderTypeId(typeId: string): boolean {
 /** Components whose own geometry may be authoritative for collision/physics. */
 export function isPhysicalSpatialTypeId(typeId: string): boolean {
   const kind = spatialComponentKind(typeId);
-  return kind === "asset" || kind === "primitive";
+  return kind === "asset" || kind === "primitive" || kind === "cad";
 }
 
 /** Reality captures are visual evidence and can never be physical authority. */

@@ -11,6 +11,10 @@ import {
   evaluateParametricGeometry,
   type ParametricPrimitive,
 } from "../modeling/parametricGeometry";
+import {
+  parseCadEvaluationEvidence,
+  parseCadPartDefinition,
+} from "../modeling/cad";
 import type { WorkspaceState } from "../state/workspaceState";
 import { isSpatialRenderTypeId } from "./spatialComponentKinds";
 import { effectiveSpatialPhysicsConfig } from "../physics";
@@ -30,6 +34,7 @@ import {
   type SpatialResolvedCollision,
   type SpatialResolvedCollisionPart,
   type SpatialParametricMaterialSummary,
+  type SpatialCadGeometrySummary,
   type SpatialTransform,
   type SemaFrameSpatialGraphNode,
   type SemaFrameSpatialGraphSnapshot,
@@ -246,7 +251,7 @@ function localBoundsCenter(asset: AssetRecord): Vec3 {
 type LocalBoundsSource = Readonly<{
   center: Vec3;
   size: Vec3;
-  source: "asset_bounds" | "parametric_bounds";
+  source: "asset_bounds" | "parametric_bounds" | "cad_bounds";
 }>;
 
 function localBoundsForAsset(asset: AssetRecord): LocalBoundsSource {
@@ -359,6 +364,7 @@ function isSpatialComponent(component: ComponentInstance | undefined): component
 
 function spatialNodeKind(component: ComponentInstance): SemaFrameSpatialGraphNode["nodeKind"] {
   if (component.type.typeId === "spatial-primitive") return "primitive";
+  if (component.type.typeId === "cad-part") return "cad";
   if (component.type.typeId === "model-assembly") return "assembly";
   if (component.type.typeId === "gaussian-splat") return "reality";
   return "asset";
@@ -429,6 +435,29 @@ function parametricMaterialSummary(value: unknown): SpatialParametricMaterialSum
     opacity: value.opacity,
     emissiveColor: value.emissiveColor,
     emissiveIntensity: value.emissiveIntensity,
+  };
+}
+
+function cadGeometrySummary(component: ComponentInstance): SpatialCadGeometrySummary | undefined {
+  if (component.type.typeId !== "cad-part" || component.props.evaluation === null) return undefined;
+  const definition = parseCadPartDefinition(component.props.definition);
+  if (!definition.activeBodyIds.length) return undefined;
+  const evidence = parseCadEvaluationEvidence(component.props.evaluation, definition);
+  const volumeM3 = evidence.bodies.reduce((sum, body) => sum + body.volumeM3, 0);
+  const centerOfMassM = evidence.bodies.reduce((weighted, body) => add(
+    weighted,
+    scale(body.centerOfMassM, body.volumeM3),
+  ), { x: 0, y: 0, z: 0 });
+  return {
+    definitionDigest: evidence.definitionDigest,
+    evaluatorVersion: evidence.evaluatorVersion,
+    exactness: evidence.exactness,
+    bodyCount: evidence.bodies.length,
+    localBounds: structuredClone(evidence.overallBounds),
+    volumeM3,
+    surfaceAreaM2: evidence.bodies.reduce((sum, body) => sum + body.surfaceAreaM2, 0),
+    centerOfMassM: scale(centerOfMassM, 1 / volumeM3),
+    diagnostics: structuredClone(evidence.diagnostics),
   };
 }
 
@@ -673,6 +702,82 @@ function createSpatialNodes(state: Readonly<WorkspaceState>): MutableNode[] {
           massKg: physics.massKg,
           massSource: "explicit",
           geometryVolumeM3: evaluated.volumeM3 * Math.abs(
+            transform.scale.x * transform.scale.y * transform.scale.z,
+          ),
+          centerOfMass: physics.centerOfMass,
+          friction: physics.friction,
+          restitution: physics.restitution,
+          gravityScale: physics.gravityScale,
+          stabilityMode: physics.stabilityMode,
+          constraintCount: physics.constraints.length,
+        },
+        relations: [],
+      }];
+    }
+
+    if (nodeKind === "cad") {
+      const cad = cadGeometrySummary(component);
+      if (!cad) {
+        return [{
+          id: component.id,
+          primPath: componentPrimPath(component, state.components),
+          label: component.label,
+          ...(parentId ? { parentId } : {}),
+          nodeKind,
+          entityKind: "cad-part",
+          assemblyAncestry: ancestry,
+          visibility: component.visibility,
+          localPlacement: structuredClone(component.placement),
+          worldTransform: transform,
+          worldBounds: pointBounds(transform.position),
+          physics: {
+            enabled: physics.enabled,
+            bodyType: physics.bodyType,
+            massKg: physics.massKg,
+            massSource: "explicit",
+            centerOfMass: physics.centerOfMass,
+            friction: physics.friction,
+            restitution: physics.restitution,
+            gravityScale: physics.gravityScale,
+            stabilityMode: physics.stabilityMode,
+            constraintCount: physics.constraints.length,
+          },
+          relations: [],
+        }];
+      }
+      const localBounds: LocalBoundsSource = {
+        center: cad.localBounds.center,
+        size: cad.localBounds.size,
+        source: "cad_bounds",
+      };
+      const collision = component.visibility === "visible"
+        ? resolvedCollision(localBounds, transform, spatialCollisionConfigFromProps(component.props))
+        : undefined;
+      const visualBounds = resolvedCollision(localBounds, transform, {
+        ...DEFAULT_SPATIAL_COLLISION,
+        role: "trigger",
+        margin: 0,
+      })!;
+      return [{
+        id: component.id,
+        primPath: componentPrimPath(component, state.components),
+        label: component.label,
+        ...(parentId ? { parentId } : {}),
+        nodeKind,
+        entityKind: "cad-part",
+        cad,
+        assemblyAncestry: ancestry,
+        visibility: component.visibility,
+        localPlacement: structuredClone(component.placement),
+        worldTransform: transform,
+        worldBounds: visualBounds.aabb,
+        ...(collision ? { collision } : {}),
+        physics: {
+          enabled: physics.enabled,
+          bodyType: physics.bodyType,
+          massKg: physics.massKg,
+          massSource: "explicit",
+          geometryVolumeM3: cad.volumeM3 * Math.abs(
             transform.scale.x * transform.scale.y * transform.scale.z,
           ),
           centerOfMass: physics.centerOfMass,
@@ -1048,15 +1153,58 @@ export function cloneStateWithSpatialCandidate(
   const candidateId = existing?.id ?? CANDIDATE_ID;
   const hasGeometry = candidate.geometry !== undefined;
   const hasAssetIdentity = candidate.assetId !== undefined || candidate.entityKind !== undefined;
+  const hasCad = candidate.cad !== undefined;
   if (hasGeometry && hasAssetIdentity) {
     throw new TypeError("A parametric candidate cannot also declare assetId or entityKind");
+  }
+  if (hasCad && (hasGeometry || hasAssetIdentity)) {
+    throw new TypeError("A placement candidate must use exactly one of CAD, parametric, or asset identity geometry");
+  }
+  if (existing && hasCad && existing.type.typeId !== "cad-part") {
+    throw new TypeError(`Component ${existing.id} is not a CAD placement candidate`);
   }
   const collision = candidate.collision
     ?? (existing ? spatialCollisionConfigFromProps(existing.props) : DEFAULT_SPATIAL_COLLISION);
   if (!collision) throw new TypeError("Candidate collision configuration is invalid");
 
   let component: ComponentInstance;
-  if (existing?.type.typeId === "spatial-primitive" || (!existing && hasGeometry)) {
+  if (existing?.type.typeId === "cad-part") {
+    if (hasGeometry || hasAssetIdentity) {
+      throw new TypeError("A CAD part candidate keeps its evaluated feature document and cannot replace it with asset or primitive geometry");
+    }
+    component = {
+      ...existing,
+      placement: structuredClone(candidate.placement),
+      props: {
+        ...existing.props,
+        ...(candidate.cad ? {
+          definition: structuredClone(candidate.cad.definition) as unknown as JSONObject,
+          definitionDigest: candidate.cad.evaluation.definitionDigest,
+          evaluation: structuredClone(candidate.cad.evaluation) as unknown as JSONObject,
+        } : {}),
+        collision: structuredClone(collision) as unknown as JSONObject,
+      },
+    };
+  } else if (!existing && candidate.cad) {
+    component = {
+      id: candidateId,
+      type: { typeId: "cad-part", version: "candidate", digest: "candidate" },
+      label: candidate.cad.definition.displayName,
+      props: {
+        definition: structuredClone(candidate.cad.definition) as unknown as JSONObject,
+        definitionDigest: candidate.cad.evaluation.definitionDigest,
+        evaluation: structuredClone(candidate.cad.evaluation) as unknown as JSONObject,
+        collision: structuredClone(collision) as unknown as JSONObject,
+      },
+      durableState: {},
+      placement: structuredClone(candidate.placement),
+      bindings: [],
+      tags: [],
+      visibility: "visible",
+      locks: { placement: false, resize: false, visualEffects: false, props: false, deletion: false, actions: false },
+      provenance: { createdRevision: state.revision, createdBy: "agent" },
+    };
+  } else if (existing?.type.typeId === "spatial-primitive" || (!existing && hasGeometry)) {
     if (hasAssetIdentity) throw new TypeError("A parametric candidate cannot declare assetId or entityKind");
     const geometryInput = candidate.geometry ?? existing?.props.geometry;
     if (!geometryInput) throw new TypeError("A new parametric candidate requires geometry");
@@ -1086,8 +1234,8 @@ export function cloneStateWithSpatialCandidate(
       provenance: { createdRevision: state.revision, createdBy: "agent" },
     };
   } else {
-    if (hasGeometry) {
-      throw new TypeError("Closed geometry can only create or update a spatial-primitive candidate");
+    if (hasGeometry || hasCad) {
+      throw new TypeError("Closed geometry can only create or update a matching spatial-primitive or CAD candidate");
     }
     if (existing && existing.type.typeId !== "spatial-entity") {
       throw new TypeError(`Component ${existing.id} is not a spatial placement candidate`);

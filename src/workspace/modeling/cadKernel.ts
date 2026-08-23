@@ -3,9 +3,16 @@ import type {
   Shape3D,
   ShapeMesh,
 } from "replicad";
+import {
+  CadPartEvaluationError,
+  evaluateCadPartWithRuntime,
+  type CadPartDefinitionV1,
+  type CadPartEvaluationOptions,
+  type CadPartEvaluationResultV1,
+} from "./cad";
 
 /** Version of the stable SemaFrame browser-CAD contract. */
-export const CAD_KERNEL_CONTRACT_VERSION = 1 as const;
+export const CAD_KERNEL_CONTRACT_VERSION = 2 as const;
 
 /**
  * Hard caps applied before work is admitted and again before results escape
@@ -110,6 +117,8 @@ export type CadTessellationOptions = CadOperationOptions & Readonly<{
   angularDeflectionRad?: number;
 }>;
 
+export type CadPartKernelEvaluationOptions = CadOperationOptions & CadPartEvaluationOptions;
+
 /** Bounded, indexed triangle mesh suitable for Three.js BufferGeometry. */
 export type CadIndexedMesh = Readonly<{
   positions: Float32Array;
@@ -158,6 +167,7 @@ export type CadKernelErrorCode =
   | "boolean_failed"
   | "transform_failed"
   | "tessellation_failed"
+  | "cad_part_evaluation_failed"
   | "step_export_failed"
   | "aborted"
   | "operation_timeout"
@@ -208,6 +218,10 @@ export interface CadKernel {
     options?: CadOperationOptions,
   ): Promise<CadMassProperties>;
   tessellate(shape: CadShapeHandle, options?: CadTessellationOptions): Promise<CadIndexedMesh>;
+  evaluatePart(
+    definition: CadPartDefinitionV1,
+    options?: CadPartKernelEvaluationOptions,
+  ): Promise<CadPartEvaluationResultV1>;
   exportStep(
     shape: CadShapeHandle,
     name?: string,
@@ -738,6 +752,40 @@ class OpenCascadeCadKernel implements CadKernel {
         groups: Object.freeze(raw.faceGroups.map((group) => Object.freeze({ ...group }))),
         bounds,
       });
+    });
+  }
+
+  async evaluatePart(
+    definition: CadPartDefinitionV1,
+    options: CadPartKernelEvaluationOptions = {},
+  ): Promise<CadPartEvaluationResultV1> {
+    const operation = "evaluate_part";
+    assertRecord(options, operation, "options");
+    assertOnlyKeys(
+      options,
+      ["signal", "budgetMs", "linearDeflectionM", "angularDeflectionRad", "includeMeshes"],
+      operation,
+      "options",
+    );
+    const operationOptions: CadOperationOptions = {
+      signal: options.signal,
+      budgetMs: options.budgetMs,
+    };
+    return this.execute(operation, operationOptions, () => {
+      try {
+        return evaluateCadPartWithRuntime(this.runtime, definition, options);
+      } catch (error) {
+        if (error instanceof CadPartEvaluationError) {
+          const feature = error.featureId ? ` at feature ${error.featureId}` : "";
+          fail(
+            "cad_part_evaluation_failed",
+            operation,
+            `CAD part evaluation failed${feature}: ${error.message}`,
+            error,
+          );
+        }
+        throw error;
+      }
     });
   }
 

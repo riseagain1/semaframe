@@ -23,6 +23,10 @@ import {
   parametricGeometryDigest,
   parseParametricPrimitive,
 } from "../modeling/parametricGeometry";
+import {
+  cadPartDefinitionDigest,
+  parseCadPartDefinition,
+} from "../modeling/cad";
 import type { ParametricRenderMaterial } from "../../renderer/sceneRenderTypes";
 import { ThreeRenderer } from "../../renderer/ThreeRenderer";
 import type { RealityMeasurementEvent } from "../../renderer/reality";
@@ -397,6 +401,49 @@ function toEntity(
         kind: "parametric",
         definition,
         digest: parametricGeometryDigest(definition),
+        material,
+        castShadow: component.props.castShadow !== false,
+        receiveShadow: component.props.receiveShadow !== false,
+      },
+      ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
+      tags: [...component.tags],
+      locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
+    };
+  }
+  if (component.type.typeId === "cad-part") {
+    const definition = parseCadPartDefinition(component.props.definition);
+    const definitionDigest = cadPartDefinitionDigest(definition);
+    const persistedDigest = typeof component.props.definitionDigest === "string"
+      ? component.props.definitionDigest
+      : "";
+    if (persistedDigest !== definitionDigest) {
+      throw new Error(`CAD part ${component.id} definition digest does not match its document.`);
+    }
+    const material = parametricMaterial(component.props.material);
+    return {
+      id: component.id,
+      kind: "primitive",
+      assetId: `cad:${definition.partId}`,
+      label: component.label,
+      transform: {
+        position: { ...placement.position },
+        rotation: { ...placement.rotation },
+        scale: { ...placement.scale },
+      },
+      appearance: {
+        color: material.baseColor,
+        opacity: component.visibility === "visible" ? material.opacity * visualEffects.opacity : 0,
+        emissiveColor: material.emissiveColor,
+        emissiveIntensity: material.emissiveIntensity + visualEffects.emissive.intensity,
+        glowColor: visualEffects.glow.color,
+        glowIntensity: visualEffects.glow.intensity,
+        glowSpread: visualEffects.glow.spread,
+      },
+      state: { type: "generic", properties: {} },
+      renderGeometry: {
+        kind: "cad",
+        definition,
+        definitionDigest,
         material,
         castShadow: component.props.castShadow !== false,
         receiveShadow: component.props.receiveShadow !== false,

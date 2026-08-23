@@ -1,4 +1,7 @@
-import { DEFAULT_COMPONENT_VISUAL_EFFECTS } from "../components/componentTypes";
+import {
+  DEFAULT_COMPONENT_VISUAL_EFFECTS,
+  bindablePropsForManifest,
+} from "../components/componentTypes";
 import { DEFAULT_COMPONENT_REGISTRY } from "../components/ComponentRegistry";
 import type {
   BillboardPlacement,
@@ -272,6 +275,7 @@ export function toRenderSnapshot(input: WorkspaceRenderSnapshot | WorkspaceState
           ...(contract ? {
             propsSchema: contract.propsSchema,
             writableProps: contract.writableProps,
+            bindableProps: contract.bindableProps,
           } : {}),
         };
       }),
@@ -297,12 +301,26 @@ export function toRenderSnapshot(input: WorkspaceRenderSnapshot | WorkspaceState
 function bindingContract(
   component: WorkspaceRenderComponent,
   recipes: readonly ComponentRecipe[],
-): Readonly<{ propsSchema: ComponentRecipe["propsSchema"]; writableProps: readonly string[] }> | undefined {
+): Readonly<{
+  propsSchema: ComponentRecipe["propsSchema"];
+  writableProps: readonly string[];
+  bindableProps: readonly string[];
+}> | undefined {
   const recipe = recipeForComponent(component, recipes);
-  if (recipe) return { propsSchema: recipe.propsSchema, writableProps: recipe.writableProps };
+  if (recipe) {
+    return {
+      propsSchema: recipe.propsSchema,
+      writableProps: recipe.writableProps,
+      bindableProps: recipe.writableProps,
+    };
+  }
   const manifest = DEFAULT_COMPONENT_REGISTRY.get(component.type.typeId, component.type.version);
   if (!manifest || manifest.digest !== component.type.digest) return undefined;
-  return { propsSchema: manifest.propsSchema, writableProps: manifest.writableProps };
+  return {
+    propsSchema: manifest.propsSchema,
+    writableProps: manifest.writableProps,
+    bindableProps: bindablePropsForManifest(manifest),
+  };
 }
 
 export function recipeForComponent(

@@ -15,6 +15,7 @@ import {
   type SpatialPoint2,
   type SemaFrameSpatialGraphNode,
 } from "../spatial";
+import { isPhysicalSpatialTypeId } from "../spatial/spatialComponentKinds";
 import type { WorkspaceState } from "../state/workspaceState";
 import { effectiveSpatialPhysicsConfig } from "./physicsConfig";
 import {
@@ -305,7 +306,12 @@ export function buildPhysicsValidationReport(state: Readonly<WorkspaceState>): P
   for (const node of nodes) {
     const component = state.components.get(node.id)!;
     const physics = effectiveSpatialPhysicsConfig(component.props);
-    const baseCenter = node.collision?.aabb.center ?? node.worldBounds.center;
+    const baseCenter = node.cad
+      ? add(node.worldTransform.position, rotate(
+        node.worldTransform.rotationQuaternion,
+        multiply(node.cad.centerOfMassM, node.worldTransform.scale),
+      ))
+      : node.collision?.aabb.center ?? node.worldBounds.center;
     const centerOfMassWorld = add(baseCenter, rotate(
       node.worldTransform.rotationQuaternion,
       multiply(physics.centerOfMass, node.worldTransform.scale),
@@ -721,7 +727,7 @@ export function queryStablePlacement(state: Readonly<WorkspaceState>, candidate:
 
 export function enforcedPhysicsIssues(state: Readonly<WorkspaceState>): readonly PhysicsIssue[] {
   const hasEnforcedPhysics = [...state.components.values()].some((component) => {
-    if (component.type.typeId !== "spatial-entity" && component.type.typeId !== "spatial-primitive") return false;
+    if (!isPhysicalSpatialTypeId(component.type.typeId)) return false;
     const physics = effectiveSpatialPhysicsConfig(component.props);
     return physics.enabled && (physics.stabilityMode === "enforce" || physics.constraints.length > 0);
   });

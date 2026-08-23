@@ -11,7 +11,7 @@ describe("universal component registry", () => {
     expect(BUILTIN_COMPONENT_TYPE_IDS).toEqual([
       "stage-3d", "spatial-entity", "group", "panel", "text", "image",
       "video-player", "web-panel", "data-panel", "annotation", "timer", "checklist", "chart", "table", "document", "button",
-      "spatial-primitive", "model-assembly", "gaussian-splat",
+      "spatial-primitive", "model-assembly", "cad-part", "gaussian-splat",
     ]);
     const rebuilt = new ComponentRegistry([...DEFAULT_COMPONENT_REGISTRY.list()].reverse());
     expect(rebuilt.digest).toBe(DEFAULT_COMPONENT_REGISTRY.digest);
@@ -22,12 +22,16 @@ describe("universal component registry", () => {
     // while spatial-entity adds collision-aware 1.3, physics-aware 1.4,
     // master-switch 1.5, and movable 1.6 contracts. Exact primitives and
     // model assemblies gain move_to in pinned 1.1 contracts.
-    expect(rebuilt.list()).toHaveLength(55);
+    expect(rebuilt.list()).toHaveLength(57);
     for (const typeId of BUILTIN_COMPONENT_TYPE_IDS) {
       const expectedVersion = typeId === "spatial-entity"
         ? "1.6.0"
-        : ["spatial-primitive", "model-assembly"].includes(typeId)
+        : typeId === "model-assembly"
+          ? "2.0.0"
+        : typeId === "spatial-primitive"
           ? "1.1.0"
+          : typeId === "cad-part"
+            ? "1.0.0"
           : typeId === "gaussian-splat"
           ? "1.0.0"
           : "1.2.0";
@@ -85,6 +89,24 @@ describe("universal component registry", () => {
       collisionPolicy: "external_only",
       modelRef: { modelId: "fixture-a", version: "1.0.0", digest: "sha256:abc" },
     })).not.toThrow();
+
+    const cadPart = DEFAULT_COMPONENT_REGISTRY.require("cad-part");
+    expect(cadPart.allowedPlacements).toEqual(["world3d"]);
+    expect(cadPart.resizePolicy.world3d).toEqual({ kind: "none", mode: "none" });
+    expect(cadPart.writableProps).toEqual(expect.arrayContaining([
+      "definition", "definitionDigest", "evaluation", "partNumber", "materialName",
+    ]));
+    expect(cadPart.bindableProps).toEqual([
+      "partNumber", "materialName", "material", "castShadow", "receiveShadow",
+    ]);
+    expect(cadPart.bindableProps).not.toEqual(expect.arrayContaining([
+      "definition", "definitionDigest", "evaluation",
+    ]));
+    expect(cadPart.defaultProps).toMatchObject({
+      definition: { formatVersion: "1.0", activeBodyIds: [] },
+      definitionDigest: expect.stringMatching(/^fnv1a32:[0-9a-f]{8}$/u),
+      evaluation: null,
+    });
 
   });
 
