@@ -43,6 +43,77 @@ function batchFor(
   };
 }
 
+function applyCurrentBatch(
+  store: WorkspaceStore,
+  requestId: string,
+  operations: readonly WorkspaceOperation[],
+): void {
+  const state = store.getState();
+  store.apply({
+    protocol_version: "1.3",
+    request_id: requestId,
+    workspace_id: state.workspaceId,
+    input_revision: state.revision,
+    base_workspace_revision: state.revision,
+    registry_digest: state.registryDigest,
+    mode: "commit",
+    operations: [...structuredClone(operations)],
+  });
+}
+
+function publishedCadModel(cadPartCount = 1): WorkspaceStore {
+  const store = new WorkspaceStore();
+  const stage = store.getComponentManifest("stage-3d")!;
+  const assembly = store.getComponentManifest("model-assembly", "2.0.0")!;
+  const cadPart = store.getComponentManifest("cad-part")!;
+  const world = (x: number) => ({
+    space: "world3d" as const,
+    position: { x, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  });
+  applyCurrentBatch(store, "author_cad_model", [{
+    op: "create_component",
+    op_id: "stage",
+    id: "STAGE",
+    component_type: { typeId: stage.typeId, version: stage.version, digest: stage.digest },
+    placement: world(0),
+  }, {
+    op: "create_component",
+    op_id: "assembly",
+    id: "CAD_ASSEMBLY",
+    component_type: { typeId: assembly.typeId, version: assembly.version, digest: assembly.digest },
+    props: {
+      description: `CAD-heavy reusable assembly ${"x".repeat(1_800)}`,
+      collisionPolicy: "external_only",
+      partNumber: "ASM-ROOT-001",
+      materialName: "Assembly steel",
+      mates: [],
+    },
+    placement: world(0),
+  }, ...Array.from({ length: cadPartCount }, (_, index): WorkspaceOperation => ({
+    op: "create_component",
+    op_id: `cad_part_${index}`,
+    id: `CAD_PART_${String(index).padStart(3, "0")}`,
+    component_type: { typeId: cadPart.typeId, version: cadPart.version, digest: cadPart.digest },
+    props: {
+      partNumber: `CAD-${String(index).padStart(3, "0")}-${"P".repeat(100)}`,
+      materialName: `Machined alloy ${"M".repeat(220)}`,
+    },
+    placement: world(index + 1),
+    parent_id: "CAD_ASSEMBLY",
+  }))]);
+  applyCurrentBatch(store, "publish_cad_model", [{
+    op: "publish_model",
+    op_id: "publish_cad",
+    model_id: "com.semaframe.agent-cad",
+    version: "2.0.0",
+    display_name: "Agent CAD assembly",
+    root_id: "CAD_ASSEMBLY",
+  }]);
+  return store;
+}
+
 function timerCreate(
   store: WorkspaceStore,
   id: string,
@@ -102,6 +173,71 @@ function defaultCreatePlacement(manifest: AdvertisedComponentType, index = 0): C
 }
 
 describe("WorkspaceStoreEngineAdapter", () => {
+  it("preserves ModelDefinition V2 logical and manufacturing metadata in exact model inspection", async () => {
+    const adapter = adapterFor(publishedCadModel());
+    const inspection = await adapter.inspectModel(
+      "com.semaframe.agent-cad",
+      "2.0.0",
+      principal(["workspace:read"]),
+    );
+    const model = inspection.modelDefinition as {
+      format_version: string;
+      id_map_keys: string[];
+      nodes: Array<Record<string, unknown>>;
+    };
+
+    expect(model.format_version).toBe("2.0");
+    expect(model.id_map_keys).toEqual(["CAD_ASSEMBLY", "CAD_PART_000"]);
+    expect(model.nodes).toEqual([
+      expect.objectContaining({
+        node_id: "CAD_ASSEMBLY",
+        logical_node_id: "CAD_ASSEMBLY",
+        part_number: "ASM-ROOT-001",
+        material_name: "Assembly steel",
+      }),
+      expect.objectContaining({
+        node_id: "CAD_PART_000",
+        logical_node_id: "CAD_PART_000",
+        part_number: expect.stringMatching(/^CAD-000-/u),
+        material_name: expect.stringMatching(/^Machined alloy/u),
+      }),
+    ]);
+  });
+
+  it("rejects an oversized CAD-heavy model inspection exactly without truncating nodes or metadata", async () => {
+    const store = publishedCadModel(16);
+    const responseLimit = 8_192;
+    const adapter = adapterFor(store, { maxModelInspectionBytes: responseLimit });
+    const revision = store.getRevision();
+
+    await expect(adapter.inspectModel(
+      "com.semaframe.agent-cad",
+      "2.0.0",
+      principal(["workspace:read"]),
+    )).rejects.toMatchObject({
+      code: "model_inspection_too_large",
+      options: {
+        retryable: false,
+        details: {
+          model_id: "com.semaframe.agent-cad",
+          version: "2.0.0",
+          encoded_view_bytes: expect.any(Number),
+          max_response_bytes: responseLimit,
+          wrapper_reserve_bytes: 2_048,
+          truncation_performed: false,
+        },
+      },
+    });
+    expect(store.getRevision()).toBe(revision);
+
+    const complete = await adapterFor(store).inspectModel(
+      "com.semaframe.agent-cad",
+      "2.0.0",
+      principal(["workspace:read"]),
+    );
+    expect((complete.modelDefinition as { id_map_keys: string[] }).id_map_keys).toHaveLength(17);
+  });
+
   it("prepares exact revision/registry envelopes, unique reservations, and bounded manifests", async () => {
     const store = new WorkspaceStore();
     const adapter = adapterFor(store);
@@ -125,7 +261,7 @@ describe("WorkspaceStoreEngineAdapter", () => {
       protocol_version: "1.3",
       registry_digest: store.getRegistryDigest(),
       allowed_operations: WORKSPACE_OPERATION_NAMES,
-      component_type_count: 19,
+      component_type_count: 20,
       connector_types: expect.arrayContaining([
         expect.objectContaining({
           connectorType: "inline.snapshot",
@@ -1235,5 +1371,7 @@ describe("WorkspaceStoreEngineAdapter", () => {
   it("fails closed when configured byte ceilings cannot hold even the public header", () => {
     const adapter = adapterFor(new WorkspaceStore(), { maxCapabilityBytes: 1, maxSummaryBytes: 1 });
     expect(() => adapter.getState()).toThrow(WorkspaceEngineError);
+    expect(() => adapterFor(new WorkspaceStore(), { maxModelInspectionBytes: 2_048 }))
+      .toThrow(/model.*wrapper reserve/i);
   });
 });

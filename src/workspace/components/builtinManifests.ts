@@ -14,6 +14,10 @@ import {
   PARAMETRIC_PRIMITIVE_JSON_SCHEMA,
   type ParametricPrimitive,
 } from "../modeling/parametricGeometry";
+import {
+  cadPartDefinitionDigest,
+  defaultCadPartDefinition,
+} from "../modeling/cad";
 
 type ManifestInput = Omit<ComponentManifest, "digest" | "trustTier" | "requiredPermissions" | "resizePolicy"> & {
   requiredPermissions?: string[];
@@ -891,6 +895,73 @@ const spatialPrimitive = modernManifest({
   events: structuredClone(visibilityEvents),
 });
 
+const defaultCadDefinition = defaultCadPartDefinition();
+
+/**
+ * The manifest keeps the CAD document and its compact OCCT evidence in the
+ * authoritative Workspace. Deep feature semantics and digest agreement are
+ * validated by WorkspaceStore; the JSON schema supplies the closed top-level
+ * contract and bounded common spatial controls.
+ */
+const cadPart = modernManifest({
+  typeId: "cad-part",
+  version: "1.0.0",
+  displayName: "Parametric CAD Part",
+  allowedPlacements: ["world3d"],
+  resizePolicy: noResizePolicies(["world3d"]),
+  propsSchema: objectSchema({
+    definition: { type: "object" },
+    definitionDigest: { type: "string", pattern: "^fnv1a32:[0-9a-f]{8}$" },
+    evaluation: { oneOf: [{ type: "null" }, { type: "object" }] },
+    partNumber: { type: "string", maxLength: 128 },
+    materialName: { type: "string", maxLength: 256 },
+    material: parametricMaterialSchema,
+    collision: currentSpatialCollisionSchema(),
+    physics: currentSpatialPhysicsSchema(),
+    castShadow: { type: "boolean" },
+    receiveShadow: { type: "boolean" },
+  }, [
+    "definition", "definitionDigest", "evaluation", "partNumber", "materialName",
+    "material", "collision", "physics", "castShadow", "receiveShadow",
+  ]),
+  durableStateSchema: emptyObjectSchema,
+  defaultProps: {
+    definition: structuredClone(defaultCadDefinition) as unknown as JSONObject,
+    definitionDigest: cadPartDefinitionDigest(defaultCadDefinition),
+    evaluation: null,
+    partNumber: "",
+    materialName: "",
+    material: structuredClone(BUILTIN_PARAMETRIC_MATERIAL_DEFAULT),
+    collision: structuredClone(DEFAULT_SPATIAL_COLLISION) as unknown as JSONObject,
+    physics: structuredClone(DEFAULT_SPATIAL_PHYSICS) as unknown as JSONObject,
+    castShadow: true,
+    receiveShadow: true,
+  },
+  defaultDurableState: {},
+  writableProps: [
+    "definition", "definitionDigest", "evaluation", "partNumber", "materialName",
+    "material", "collision", "physics", "castShadow", "receiveShadow",
+  ],
+  // CAD document/evidence fields are an atomic host-evaluated unit, while
+  // physical semantics stay canonical. Bindings may only project metadata and
+  // presentation-safe appearance fields in V1.
+  bindableProps: [
+    "partNumber", "materialName", "material", "castShadow", "receiveShadow",
+  ],
+  actions: {
+    ...structuredClone(visibilityActions),
+    move_to: {
+      inputSchema: structuredClone(moveToInputSchema),
+      effectClass: "semantic",
+      requiredPermissions: ["component:update"],
+    },
+  },
+  events: {
+    ...structuredClone(visibilityEvents),
+    moved: structuredClone(movedEventSchema),
+  },
+});
+
 const modelAssembly = modernManifest({
   typeId: "model-assembly",
   version: "1.0.0",
@@ -918,6 +989,63 @@ const modelAssembly = modernManifest({
   writableProps: ["description", "collisionPolicy", "modelRef"],
   actions: structuredClone(visibilityActions),
   events: structuredClone(visibilityEvents),
+});
+
+const cadMateEndpointSchema = objectSchema({
+  componentId: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$" },
+  datumId: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z][A-Za-z0-9._:-]*$" },
+  topologyRole: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z][A-Za-z0-9._:/-]*$" },
+}, ["componentId"]);
+
+const cadAssemblyMateSchema = objectSchema({
+  id: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z][A-Za-z0-9._:-]*$" },
+  kind: { enum: ["fixed", "revolute", "slider", "planar"] },
+  a: cadMateEndpointSchema,
+  b: cadMateEndpointSchema,
+  offsetM: { type: "number", minimum: -1_000, maximum: 1_000 },
+  angleRad: { type: "number", minimum: -6.283185307179586, maximum: 6.283185307179586 },
+  enabled: { type: "boolean" },
+}, ["id", "kind", "a", "b", "offsetM", "angleRad", "enabled"]);
+
+/**
+ * Assembly v2 adds stable manufacturing identity and semantic mate metadata.
+ * The original 1.0 manifest remains registered verbatim for replaying saved
+ * projects and command history with its pinned digest.
+ */
+const modelAssemblyV2 = modernManifest({
+  ...(() => {
+    const { digest: _digest, version: _version, ...content } = modelAssembly;
+    return content;
+  })(),
+  version: "2.0.0",
+  propsSchema: objectSchema({
+    description: { type: "string", maxLength: 2_000 },
+    collisionPolicy: { enum: ["external_only", "all", "none"] },
+    modelRef: modelReferenceSchema,
+    partNumber: { type: "string", maxLength: 128 },
+    materialName: { type: "string", maxLength: 256 },
+    mates: { type: "array", maxItems: 128, items: cadAssemblyMateSchema },
+  }, ["description", "collisionPolicy"]),
+  defaultProps: {
+    description: "",
+    collisionPolicy: "external_only",
+    partNumber: "",
+    materialName: "",
+    mates: [],
+  },
+  writableProps: ["description", "collisionPolicy", "modelRef", "partNumber", "materialName", "mates"],
+  actions: {
+    ...structuredClone(visibilityActions),
+    move_to: {
+      inputSchema: structuredClone(moveToInputSchema),
+      effectClass: "semantic",
+      requiredPermissions: ["component:update"],
+    },
+  },
+  events: {
+    ...structuredClone(visibilityEvents),
+    moved: structuredClone(movedEventSchema),
+  },
 });
 
 const gaussianSplat = modernManifest({
@@ -968,7 +1096,9 @@ const gaussianSplat = modernManifest({
 
 const MODELING_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.freeze([
   spatialPrimitive,
+  cadPart,
   modelAssembly,
+  modelAssemblyV2,
   gaussianSplat,
 ]);
 

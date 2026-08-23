@@ -42,7 +42,7 @@ describe("Workspace Agent SemaFrame Spatial Graph", () => {
         workspace_revision: 1,
         spatial_graph: {
           format: "semaframe-spatial-graph",
-          version: "3.1",
+          version: "3.2",
           mode: "full",
           stage: {
             component_id: "STAGE",

@@ -9,8 +9,10 @@ import type {
 } from "../components/componentTypes";
 import { deterministicDigest } from "../components/manifestDigest";
 
-export const MODEL_DEFINITION_FORMAT_VERSION = "1.0" as const;
-export const MODEL_DEFINITION_GENERATOR_VERSION = "1.0.0" as const;
+export const LEGACY_MODEL_DEFINITION_FORMAT_VERSION = "1.0" as const;
+export const LEGACY_MODEL_DEFINITION_GENERATOR_VERSION = "1.0.0" as const;
+export const MODEL_DEFINITION_FORMAT_VERSION = "2.0" as const;
+export const MODEL_DEFINITION_GENERATOR_VERSION = "2.0.0" as const;
 export const MAX_MODEL_DEFINITION_NODES = 256;
 
 export type ModelDefinitionRef = Readonly<{
@@ -19,7 +21,7 @@ export type ModelDefinitionRef = Readonly<{
   digest: string;
 }>;
 
-export type ModelDefinitionNode = Readonly<{
+export type ModelDefinitionNodeV1 = Readonly<{
   nodeId: string;
   sourceComponentId: string;
   parentNodeId?: string;
@@ -33,17 +35,37 @@ export type ModelDefinitionNode = Readonly<{
   visualEffects?: ComponentVisualEffects;
 }>;
 
-export type ModelDefinition = Readonly<{
-  formatVersion: typeof MODEL_DEFINITION_FORMAT_VERSION;
+export type ModelDefinitionNodeV2 = ModelDefinitionNodeV1 & Readonly<{
+  /** Stable within one published model version and independent of instance IDs. */
+  logicalNodeId: string;
+  /** Optional manufacturing-facing identity retained in the CAD handoff sidecar. */
+  partNumber?: string;
+  materialName?: string;
+}>;
+
+export type ModelDefinitionNode = ModelDefinitionNodeV1 | ModelDefinitionNodeV2;
+
+type ModelDefinitionBase<Node extends ModelDefinitionNode> = Readonly<{
   modelId: string;
   version: string;
   digest: string;
   displayName: string;
   rootNodeId: string;
-  nodes: readonly ModelDefinitionNode[];
+  nodes: readonly Node[];
   sourceRevision: number;
+}>;
+
+export type ModelDefinitionV1 = ModelDefinitionBase<ModelDefinitionNodeV1> & Readonly<{
+  formatVersion: typeof LEGACY_MODEL_DEFINITION_FORMAT_VERSION;
+  generatorVersion: typeof LEGACY_MODEL_DEFINITION_GENERATOR_VERSION;
+}>;
+
+export type ModelDefinitionV2 = ModelDefinitionBase<ModelDefinitionNodeV2> & Readonly<{
+  formatVersion: typeof MODEL_DEFINITION_FORMAT_VERSION;
   generatorVersion: typeof MODEL_DEFINITION_GENERATOR_VERSION;
 }>;
+
+export type ModelDefinition = ModelDefinitionV1 | ModelDefinitionV2;
 
 export class ModelDefinitionError extends Error {
   constructor(message: string, readonly code: string) {
@@ -53,6 +75,7 @@ export class ModelDefinitionError extends Error {
 }
 
 const MODEL_ID_PATTERN = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
+const COMPONENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u;
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/u;
 
 function assertModelIdentity(modelId: string, version: string, displayName: string): void {
@@ -83,8 +106,25 @@ function worldPlacement(value: ComponentPlacement, id: string): World3DPlacement
   return structuredClone(value);
 }
 
-function definitionContent(definition: Omit<ModelDefinition, "digest">): Omit<ModelDefinition, "digest"> {
+function definitionContent<T extends Omit<ModelDefinition, "digest">>(definition: T): T {
   return structuredClone(definition);
+}
+
+function assemblyHasCadSemantics(component: ComponentInstance): boolean {
+  if (component.type.typeId !== "model-assembly") return false;
+  return (Array.isArray(component.props.mates) && component.props.mates.length > 0)
+    || optionalNonEmptyString(component.props.partNumber, 128) !== undefined
+    || optionalNonEmptyString(component.props.materialName, 256) !== undefined;
+}
+
+function modelUsesV2(components: readonly ComponentInstance[]): boolean {
+  return components.some((component) => component.type.typeId === "cad-part" || assemblyHasCadSemantics(component));
+}
+
+function optionalNonEmptyString(value: unknown, maximum: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= maximum ? normalized : undefined;
 }
 
 export type CreateModelDefinitionInput = Readonly<{
@@ -127,7 +167,9 @@ export function createModelDefinition(
         "model_too_many_nodes",
       );
     }
-    if (component.type.typeId !== "model-assembly" && component.type.typeId !== "spatial-primitive") {
+    if (component.type.typeId !== "model-assembly"
+      && component.type.typeId !== "spatial-primitive"
+      && component.type.typeId !== "cad-part") {
       throw new ModelDefinitionError(
         `Unsupported model component type ${component.type.typeId}`,
         "unsupported_model_component",
@@ -140,7 +182,8 @@ export function createModelDefinition(
   visit(root);
 
   const included = new Set(ordered.map((component) => component.id));
-  const nodes: ModelDefinitionNode[] = ordered.map((component) => ({
+  const useV2 = modelUsesV2(ordered);
+  const commonNodes: ModelDefinitionNodeV1[] = ordered.map((component) => ({
     nodeId: component.id,
     sourceComponentId: component.id,
     ...(component.parentId && included.has(component.parentId) ? { parentNodeId: component.parentId } : {}),
@@ -153,7 +196,31 @@ export function createModelDefinition(
     visibility: component.visibility,
     ...(component.visualEffects ? { visualEffects: structuredClone(component.visualEffects) } : {}),
   }));
-  const content: Omit<ModelDefinition, "digest"> = {
+  if (!useV2) {
+    const content: Omit<ModelDefinitionV1, "digest"> = {
+      formatVersion: LEGACY_MODEL_DEFINITION_FORMAT_VERSION,
+      modelId: input.modelId,
+      version: input.version,
+      displayName: input.displayName.trim(),
+      rootNodeId: root.id,
+      nodes: commonNodes,
+      sourceRevision: input.sourceRevision,
+      generatorVersion: LEGACY_MODEL_DEFINITION_GENERATOR_VERSION,
+    };
+    return Object.freeze({ ...content, digest: deterministicDigest(definitionContent(content)) });
+  }
+  const nodes: ModelDefinitionNodeV2[] = commonNodes.map((node) => {
+    const source = components.get(node.sourceComponentId);
+    const partNumber = optionalNonEmptyString(source?.props.partNumber, 128);
+    const materialName = optionalNonEmptyString(source?.props.materialName, 256);
+    return {
+      ...node,
+      logicalNodeId: node.nodeId,
+      ...(partNumber ? { partNumber } : {}),
+      ...(materialName ? { materialName } : {}),
+    };
+  });
+  const content: Omit<ModelDefinitionV2, "digest"> = {
     formatVersion: MODEL_DEFINITION_FORMAT_VERSION,
     modelId: input.modelId,
     version: input.version,
@@ -176,17 +243,38 @@ export function modelDefinitionRef(definition: ModelDefinition): ModelDefinition
 
 export function assertModelDefinition(definition: ModelDefinition): void {
   assertModelIdentity(definition.modelId, definition.version, definition.displayName);
-  if (definition.formatVersion !== MODEL_DEFINITION_FORMAT_VERSION
-    || definition.generatorVersion !== MODEL_DEFINITION_GENERATOR_VERSION) {
+  const isV1 = definition.formatVersion === LEGACY_MODEL_DEFINITION_FORMAT_VERSION
+    && definition.generatorVersion === LEGACY_MODEL_DEFINITION_GENERATOR_VERSION;
+  const isV2 = definition.formatVersion === MODEL_DEFINITION_FORMAT_VERSION
+    && definition.generatorVersion === MODEL_DEFINITION_GENERATOR_VERSION;
+  if (!isV1 && !isV2) {
     throw new ModelDefinitionError("Unsupported model definition generator or format", "unsupported_model_definition");
   }
   if (!definition.nodes.length || definition.nodes.length > MAX_MODEL_DEFINITION_NODES) {
     throw new ModelDefinitionError("Model definition node count is invalid", "invalid_model_nodes");
   }
   const byId = new Map<string, ModelDefinitionNode>();
+  const logicalIds = new Set<string>();
   for (const node of definition.nodes) {
     if (byId.has(node.nodeId)) throw new ModelDefinitionError(`Duplicate model node ${node.nodeId}`, "duplicate_model_node");
     worldPlacement(node.placement, node.nodeId);
+    if (isV2) {
+      if (!("logicalNodeId" in node) || !COMPONENT_ID_PATTERN.test(node.logicalNodeId)) {
+        throw new ModelDefinitionError(`Model node ${node.nodeId} has an invalid logical ID`, "invalid_model_logical_id");
+      }
+      if (logicalIds.has(node.logicalNodeId)) {
+        throw new ModelDefinitionError(`Duplicate logical model node ${node.logicalNodeId}`, "duplicate_model_logical_id");
+      }
+      logicalIds.add(node.logicalNodeId);
+      if (node.partNumber !== undefined && (!node.partNumber.trim() || node.partNumber.length > 128)) {
+        throw new ModelDefinitionError(`Model node ${node.nodeId} has an invalid part number`, "invalid_model_part_number");
+      }
+      if (node.materialName !== undefined && (!node.materialName.trim() || node.materialName.length > 256)) {
+        throw new ModelDefinitionError(`Model node ${node.nodeId} has an invalid material name`, "invalid_model_material");
+      }
+    } else if ("logicalNodeId" in node || "partNumber" in node || "materialName" in node) {
+      throw new ModelDefinitionError(`Legacy model node ${node.nodeId} contains V2 metadata`, "invalid_legacy_model_node");
+    }
     byId.set(node.nodeId, node);
   }
   if (!byId.has(definition.rootNodeId)) throw new ModelDefinitionError("Model root node is missing", "missing_model_root");
@@ -218,6 +306,29 @@ export type InstantiateModelInput = Readonly<{
   createdBy: "user" | "agent" | "system" | "migration";
 }>;
 
+function rewriteAssemblyReferences(
+  node: ModelDefinitionNode,
+  idMap: Readonly<Record<string, string>>,
+): JSONObject {
+  const props = structuredClone(node.props);
+  if (node.componentType.typeId !== "model-assembly" || !Array.isArray(props.mates)) return props;
+  props.mates = props.mates.map((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+    const mate = structuredClone(candidate) as JSONObject;
+    for (const endpoint of ["a", "b"] as const) {
+      const raw = mate[endpoint];
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const value = structuredClone(raw) as JSONObject;
+      if (typeof value.componentId === "string" && idMap[value.componentId]) {
+        value.componentId = idMap[value.componentId]!;
+      }
+      mate[endpoint] = value;
+    }
+    return mate;
+  });
+  return props;
+}
+
 /** Materialize a digest-pinned definition as ordinary editable Workspace components. */
 export function instantiateModelDefinition(
   definition: ModelDefinition,
@@ -237,7 +348,9 @@ export function instantiateModelDefinition(
   return definition.nodes.map((node): ComponentInstance => {
     const id = input.idMap[node.nodeId]!;
     const isRoot = node.nodeId === definition.rootNodeId;
-    const props = structuredClone(node.props);
+    const props = definition.formatVersion === MODEL_DEFINITION_FORMAT_VERSION
+      ? rewriteAssemblyReferences(node, input.idMap)
+      : structuredClone(node.props);
     if (isRoot) props.modelRef = structuredClone(ref) as unknown as JSONObject;
     return {
       id,

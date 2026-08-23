@@ -52,6 +52,11 @@ import {
   type RealityMeasurementPoint,
   type RealitySplatInstanceDescriptor,
 } from "./reality";
+import {
+  createCadWorkerKernel,
+  type CadKernel,
+} from "../workspace/modeling";
+import type { CadPartEvaluationResultV1 } from "../workspace/modeling/cad";
 
 export type ThreeRendererOptions = {
   getSceneState?: () => Readonly<SceneState>;
@@ -132,6 +137,8 @@ export class ThreeRenderer implements RendererAdapter {
   private navigationBoundsRadius = 2;
   private realityRuntime: RealitySplatRuntime | null = null;
   private readonly realityLoads = new Map<EntityId, AbortController>();
+  private cadKernelPromise: Promise<CadKernel> | null = null;
+  private readonly cadEvaluationCache = new Map<string, Promise<CadPartEvaluationResultV1>>();
   private realityMeasurementSession: RealityMeasurementSession | null = null;
   private realityMeasurementOverlay: THREE.Group | null = null;
   private realityMeasurementSequence = 0;
@@ -591,6 +598,10 @@ export class ThreeRenderer implements RendererAdapter {
     this.realityLoads.clear();
     this.realityRuntime?.dispose();
     this.realityRuntime = null;
+    const cadKernel = this.cadKernelPromise;
+    this.cadKernelPromise = null;
+    this.cadEvaluationCache.clear();
+    if (cadKernel) void cadKernel.then((kernel) => kernel.dispose()).catch(() => undefined);
     for (const [id, root] of this.entities) this.disposeManagedEntity(id, root);
     this.entities.clear();
     if (this.environmentRoot) disposeObject(this.environmentRoot);
@@ -689,6 +700,17 @@ export class ThreeRenderer implements RendererAdapter {
       }
       if (this.disposed || controller.signal.aborted) {
         this.disposeManagedEntity(entity.id, root);
+        return root;
+      }
+      root.userData.renderIdentity = identity;
+      this.entityLayer.add(root);
+      this.entities.set(entity.id, root);
+      return root;
+    }
+    if (entity.renderGeometry?.kind === "cad") {
+      const root = await this.createCadEntity(entity);
+      if (this.disposed) {
+        disposeObject(root);
         return root;
       }
       root.userData.renderIdentity = identity;
@@ -795,6 +817,99 @@ export class ThreeRenderer implements RendererAdapter {
       });
       return createRealityPlaceholder(entity, geometry, message);
     }
+  }
+
+  private cadKernel(): Promise<CadKernel> {
+    this.cadKernelPromise ??= createCadWorkerKernel();
+    return this.cadKernelPromise;
+  }
+
+  private evaluateCadEntity(entity: EntityState): Promise<CadPartEvaluationResultV1> {
+    const source = entity.renderGeometry;
+    if (source?.kind !== "cad") throw new Error("CAD evaluation requires a CAD render source.");
+    const cached = this.cadEvaluationCache.get(source.definitionDigest);
+    if (cached) return cached;
+    const evaluation = this.cadKernel()
+      .then((kernel) => kernel.evaluatePart(source.definition, {
+        linearDeflectionM: 0.0005,
+        angularDeflectionRad: 0.15,
+        budgetMs: 30_000,
+      }))
+      .catch(async (error) => {
+        this.cadEvaluationCache.delete(source.definitionDigest);
+        const failedKernel = this.cadKernelPromise;
+        this.cadKernelPromise = null;
+        if (failedKernel) await failedKernel.then((kernel) => kernel.dispose()).catch(() => undefined);
+        throw error;
+      });
+    this.cadEvaluationCache.set(source.definitionDigest, evaluation);
+    while (this.cadEvaluationCache.size > 16) {
+      const oldest = this.cadEvaluationCache.keys().next().value as string | undefined;
+      if (oldest === undefined || oldest === source.definitionDigest) break;
+      this.cadEvaluationCache.delete(oldest);
+    }
+    return evaluation;
+  }
+
+  private async createCadEntity(entity: EntityState): Promise<ProceduralEntity> {
+    const source = entity.renderGeometry;
+    if (source?.kind !== "cad") throw new Error("CAD render identity requires a CAD document.");
+    const root = new THREE.Group() as ProceduralEntity;
+    root.name = `entity:${entity.id}`;
+    root.userData.entityId = entity.id;
+    root.userData.cadDefinitionDigest = source.definitionDigest;
+    if (!source.definition.activeBodyIds.length) {
+      root.add(createCadPlaceholderMesh(entity.id, "empty"));
+      root.traverse((object) => { object.userData.entityId = entity.id; });
+      return root;
+    }
+    try {
+      const result = await this.evaluateCadEntity(entity);
+      for (const body of result.meshes) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.BufferAttribute(body.mesh.positions, 3));
+        geometry.setAttribute("normal", new THREE.BufferAttribute(body.mesh.normals, 3));
+        geometry.setIndex(new THREE.BufferAttribute(body.mesh.indices, 1));
+        geometry.computeBoundingSphere();
+        const material = new THREE.MeshStandardMaterial({
+          color: source.material.baseColor,
+          metalness: source.material.metallic,
+          roughness: source.material.roughness,
+          transparent: source.material.opacity < 1,
+          opacity: source.material.opacity,
+          depthWrite: source.material.opacity >= 1,
+          emissive: source.material.emissiveColor,
+          emissiveIntensity: source.material.emissiveIntensity,
+        });
+        material.userData.defaultColor = material.color.getHex();
+        const primaryMaterials = root.userData.primaryMaterials as THREE.MeshStandardMaterial[] | undefined;
+        root.userData.primaryMaterials = [...(primaryMaterials ?? []), material];
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = `cad:body:${body.bodyId}`;
+        mesh.castShadow = source.castShadow;
+        mesh.receiveShadow = source.receiveShadow;
+        mesh.userData.entityId = entity.id;
+        mesh.userData.cadBodyId = body.bodyId;
+        mesh.userData.cadFaceGroups = body.mesh.groups.map((group) => ({ ...group }));
+        root.add(mesh);
+      }
+      root.userData.cadEvaluationEvidence = structuredClone(result.evidence);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "CAD part could not be evaluated.";
+      root.add(createCadPlaceholderMesh(entity.id, "failed"));
+      root.userData.cadEvaluationError = message;
+      this.options.onStatus?.({
+        kind: "asset-fallback",
+        assetId: entity.assetId,
+        note: {
+          code: "asset_load_failed",
+          entityId: entity.id,
+          message: `CAD evaluation failed: ${message}`,
+        },
+      });
+    }
+    root.traverse((object) => { object.userData.entityId = entity.id; });
+    return root;
   }
 
   private prepareRealityRoot(entity: EntityState, root: ProceduralEntity): ProceduralEntity {
@@ -1731,6 +1846,9 @@ export class ThreeRenderer implements RendererAdapter {
 function entityRenderIdentity(entity: EntityState): string {
   if (entity.renderGeometry?.kind === "assembly") return "assembly";
   if (entity.renderGeometry?.kind === "parametric") return "parametric";
+  if (entity.renderGeometry?.kind === "cad") {
+    return cadEntityRenderIdentity(entity.renderGeometry);
+  }
   if (entity.renderGeometry?.kind === "reality") {
     const asset = entity.renderGeometry.asset;
     const signs = entity.renderGeometry.sourceAxisSigns;
@@ -1739,6 +1857,29 @@ function entityRenderIdentity(entity: EntityState): string {
       : "reality:unlinked";
   }
   return `asset:${entity.kind}:${entity.assetId}`;
+}
+
+/**
+ * CAD meshes may reuse cached tessellation only while their complete visual
+ * construction contract is unchanged. Material and shadow edits therefore
+ * replace the Three.js root without re-running OCCT for the same definition.
+ */
+export function cadEntityRenderIdentity(
+  source: Extract<NonNullable<EntityState["renderGeometry"]>, { kind: "cad" }>,
+): string {
+  const material = source.material;
+  return [
+    "cad",
+    source.definitionDigest,
+    material.baseColor,
+    material.metallic,
+    material.roughness,
+    material.opacity,
+    material.emissiveColor,
+    material.emissiveIntensity,
+    source.castShadow ? 1 : 0,
+    source.receiveShadow ? 1 : 0,
+  ].join(":");
 }
 
 function realityInstance(entity: EntityState): RealitySplatInstanceDescriptor {
@@ -1757,6 +1898,32 @@ function realityInstance(entity: EntityState): RealitySplatInstanceDescriptor {
     opacity: entity.appearance.opacity ?? 1,
     quality: geometry.quality,
   };
+}
+
+function createCadPlaceholderMesh(
+  entityId: string,
+  state: "empty" | "failed",
+): THREE.Object3D {
+  const group = new THREE.Group();
+  group.name = `cad:placeholder:${state}`;
+  const geometry = new THREE.BoxGeometry(0.24, 0.16, 0.2);
+  const shell = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({
+      color: state === "failed" ? 0xff6b7a : 0x68d5ff,
+      transparent: true,
+      opacity: 0.08,
+      depthWrite: false,
+    }),
+  );
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry),
+    new THREE.LineBasicMaterial({ color: state === "failed" ? 0xff6b7a : 0x68d5ff }),
+  );
+  shell.userData.entityId = entityId;
+  edges.userData.entityId = entityId;
+  group.add(shell, edges);
+  return group;
 }
 
 function createRealityPlaceholder(

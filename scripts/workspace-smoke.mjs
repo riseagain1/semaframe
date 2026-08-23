@@ -319,8 +319,8 @@ function assertWorkspaceProject(serialized) {
   if (!desk || !spatialComponents.some((component) => component.label === "Presenter")) {
     throw new Error("Saved Workspace project did not preserve both mixed-demo 3D components.");
   }
-  if (project.protocolVersion !== "1.3" || project.workspaceSchemaVersion !== "1.3") {
-    throw new Error("Saved Workspace project did not use the Reality-aware Protocol and Schema 1.3 envelope.");
+  if (project.protocolVersion !== "1.3" || project.workspaceSchemaVersion !== "1.4") {
+    throw new Error("Saved Workspace project did not use the Protocol 1.3 / Project Schema 1.4 envelope.");
   }
   if (video?.placement?.size?.width !== 640 || video?.placement?.size?.height !== 408) {
     throw new Error("Saved Workspace project did not preserve the human-resized video player geometry.");

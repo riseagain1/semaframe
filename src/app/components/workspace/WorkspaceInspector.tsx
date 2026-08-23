@@ -9,6 +9,7 @@ import type {
   ComponentResizePolicy,
   ComponentVisualEffects,
   JSONObject,
+  JSONValue,
   World3DPlacement,
 } from "../../../workspace/components";
 import type { ComponentActionRequest, WorkspaceRenderComponent } from "../../../workspace/renderer/contracts";
@@ -24,9 +25,21 @@ import {
 import {
   deriveParametricBounds,
   parseParametricPrimitive,
+  parseCadAssemblyMates,
+  createCadWorkerKernel,
   type ParametricAxis,
   type ParametricPrimitive,
 } from "../../../workspace/modeling";
+import {
+  CAD_PART_DEFINITION_FORMAT_VERSION,
+  DEFAULT_CAD_SKETCH_PLANE,
+  cadLengthExpression,
+  cadPartDefinitionDigest,
+  parseCadEvaluationEvidence,
+  parseCadPartDefinition,
+  type CadEvaluationEvidenceV1,
+  type CadPartDefinitionV1,
+} from "../../../workspace/modeling/cad";
 import {
   REALITY_COORDINATE_SYSTEMS,
   parseRealityAssetCalibration,
@@ -39,6 +52,10 @@ export type WorkspaceComponentUpdateRequest = Readonly<{
   label?: string;
   props: JSONObject;
 }>;
+
+export type WorkspaceCadPartEvaluator = (
+  definition: CadPartDefinitionV1,
+) => Promise<CadEvaluationEvidenceV1>;
 
 export type WorkspaceComponentResizeRequest = Readonly<{
   componentId: string;
@@ -92,6 +109,8 @@ export type WorkspaceInspectorProps = Readonly<{
   onSelectComponent?: (componentId: string) => void;
   descendantCount?: number;
   onDeleteComponent?: (componentId: string) => boolean | void;
+  /** Test/host seam; normal callers use the bounded CAD Worker. */
+  evaluateCadPart?: WorkspaceCadPartEvaluator;
 }>;
 
 export function WorkspaceInspector({
@@ -116,6 +135,7 @@ export function WorkspaceInspector({
   onSelectComponent,
   descendantCount = 0,
   onDeleteComponent,
+  evaluateCadPart,
 }: WorkspaceInspectorProps) {
   if (!component) {
     return (
@@ -172,6 +192,13 @@ export function WorkspaceInspector({
       {component.type.typeId === "spatial-primitive" && (
         <ParametricPrimitiveInspectorEditor component={component} onUpdate={onUpdate} />
       )}
+      {component.type.typeId === "cad-part" && (
+        <CadPartInspectorEditor
+          component={component}
+          onUpdate={onUpdate}
+          evaluateCadPart={evaluateCadPart}
+        />
+      )}
       {component.type.typeId === "model-assembly" && (
         <ModelAssemblyInspectorEditor component={component} onUpdate={onUpdate} />
       )}
@@ -185,16 +212,21 @@ export function WorkspaceInspector({
           onUpdate={onUpdate}
         />
       )}
-      {(component.type.typeId === "spatial-entity" || component.type.typeId === "spatial-primitive")
+      {(component.type.typeId === "spatial-entity"
+        || component.type.typeId === "spatial-primitive"
+        || component.type.typeId === "cad-part")
         && Boolean(component.props.collision) && (
         <CollisionInspectorEditor component={component} onUpdate={onUpdate} />
       )}
-      {(component.type.typeId === "spatial-entity" || component.type.typeId === "spatial-primitive")
+      {(component.type.typeId === "spatial-entity"
+        || component.type.typeId === "spatial-primitive"
+        || component.type.typeId === "cad-part")
         && Boolean(component.props.physics) && (
         <PhysicsInspectorEditor component={component} onUpdate={onUpdate} report={physicsReport} />
       )}
       {(component.type.typeId === "spatial-primitive"
-        || component.type.typeId === "spatial-entity") && (
+        || component.type.typeId === "spatial-entity"
+        || component.type.typeId === "cad-part") && (
         <section className="workspace-inspector__model-actions" aria-label="Model assembly actions">
           <h3>Model</h3>
           <p className="workspace-inspector__hint">
@@ -219,6 +251,7 @@ export function WorkspaceInspector({
       )}
       {(component.type.typeId === "spatial-primitive"
         || component.type.typeId === "spatial-entity"
+        || component.type.typeId === "cad-part"
         || component.type.typeId === "model-assembly"
         || component.type.typeId === "gaussian-splat") && (
         <ComponentLifecycleEditor
@@ -650,6 +683,276 @@ function ParametricPrimitiveInspectorEditor({
   </section>;
 }
 
+function cadParameterLength(
+  definition: CadPartDefinitionV1,
+  parameterId: string,
+  fallback: number,
+): number {
+  const parameter = definition.parameters.find((candidate) => candidate.id === parameterId);
+  return parameter?.expression.kind === "constant"
+    && parameter.expression.dimension === "length"
+    && Number.isFinite(parameter.expression.value)
+    ? parameter.expression.value
+    : fallback;
+}
+
+/**
+ * A fully constrained, editable starter part for the human CAD surface. The
+ * dimensions remain named parameters, while an optional through-hole remains
+ * a distinct feature in history instead of being baked into a mesh.
+ */
+export function createRectangularCadPlateDefinition(input: Readonly<{
+  partId: string;
+  displayName: string;
+  widthM: number;
+  depthM: number;
+  thicknessM: number;
+  holeDiameterM?: number;
+}>): CadPartDefinitionV1 {
+  const { widthM, depthM, thicknessM } = input;
+  const holeDiameterM = input.holeDiameterM ?? 0;
+  if (![widthM, depthM, thicknessM, holeDiameterM].every(Number.isFinite)
+    || widthM < 1e-6 || widthM > 1_000
+    || depthM < 1e-6 || depthM > 1_000
+    || thicknessM < 1e-6 || thicknessM > 1_000
+    || holeDiameterM < 0 || holeDiameterM >= Math.min(widthM, depthM)) {
+    throw new Error("Plate dimensions must be 0.000001–1000 m, and the optional hole must be smaller than both planar dimensions.");
+  }
+  const halfWidth = widthM / 2;
+  const halfDepth = depthM / 2;
+  const parameterRef = (parameterId: string) => ({
+    kind: "parameter" as const,
+    parameterId,
+  });
+  const history: CadPartDefinitionV1["history"][number][] = [{
+    id: "base_sketch",
+    name: "Base sketch",
+    kind: "sketch",
+    sketch: {
+      plane: DEFAULT_CAD_SKETCH_PLANE,
+      entities: [
+        { id: "bottom", kind: "line", start: { x: -halfWidth, y: -halfDepth }, end: { x: halfWidth, y: -halfDepth } },
+        { id: "right", kind: "line", start: { x: halfWidth, y: -halfDepth }, end: { x: halfWidth, y: halfDepth } },
+        { id: "top", kind: "line", start: { x: halfWidth, y: halfDepth }, end: { x: -halfWidth, y: halfDepth } },
+        { id: "left", kind: "line", start: { x: -halfWidth, y: halfDepth }, end: { x: -halfWidth, y: -halfDepth } },
+      ],
+      loops: [{ id: "outer", entityIds: ["bottom", "right", "top", "left"], role: "outer" }],
+      constraints: [
+        { id: "anchor", kind: "fixed", point: { entityId: "bottom", point: "start" }, position: { x: -halfWidth, y: -halfDepth } },
+        { id: "join_br", kind: "coincident", first: { entityId: "bottom", point: "end" }, second: { entityId: "right", point: "start" } },
+        { id: "join_rt", kind: "coincident", first: { entityId: "right", point: "end" }, second: { entityId: "top", point: "start" } },
+        { id: "join_tl", kind: "coincident", first: { entityId: "top", point: "end" }, second: { entityId: "left", point: "start" } },
+        { id: "join_lb", kind: "coincident", first: { entityId: "left", point: "end" }, second: { entityId: "bottom", point: "start" } },
+        { id: "bottom_horizontal", kind: "horizontal", entityId: "bottom" },
+        { id: "top_horizontal", kind: "horizontal", entityId: "top" },
+        { id: "right_vertical", kind: "vertical", entityId: "right" },
+        { id: "left_vertical", kind: "vertical", entityId: "left" },
+        { id: "plate_width", kind: "length", entityId: "bottom", value: parameterRef("width") },
+        { id: "plate_depth", kind: "length", entityId: "right", value: parameterRef("depth") },
+      ],
+    },
+  }, {
+    id: "base_extrude",
+    name: "Base extrude",
+    kind: "extrude",
+    profile: { sketchFeatureId: "base_sketch", loopIds: ["outer"] },
+    distance: parameterRef("thickness"),
+    operation: "new",
+    resultBodyId: "body",
+  }];
+  if (holeDiameterM > 0) {
+    history.push({
+      id: "center_hole",
+      name: "Center through-hole",
+      kind: "hole",
+      targetBodyId: "body",
+      resultBodyId: "body",
+      centerM: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 },
+      diameter: parameterRef("hole_diameter"),
+      throughAll: true,
+    });
+  }
+  return parseCadPartDefinition({
+    formatVersion: CAD_PART_DEFINITION_FORMAT_VERSION,
+    partId: input.partId,
+    displayName: input.displayName,
+    units: "metre",
+    parameters: [
+      { id: "width", name: "Width", dimension: "length", expression: cadLengthExpression(widthM) },
+      { id: "depth", name: "Depth", dimension: "length", expression: cadLengthExpression(depthM) },
+      { id: "thickness", name: "Thickness", dimension: "length", expression: cadLengthExpression(thicknessM) },
+      ...(holeDiameterM > 0 ? [{
+        id: "hole_diameter",
+        name: "Hole diameter",
+        dimension: "length" as const,
+        expression: cadLengthExpression(holeDiameterM),
+      }] : []),
+    ],
+    history,
+    activeBodyIds: ["body"],
+  });
+}
+
+async function evaluateCadPartInWorker(
+  definition: CadPartDefinitionV1,
+): Promise<CadEvaluationEvidenceV1> {
+  const kernel = await createCadWorkerKernel();
+  try {
+    const result = await kernel.evaluatePart(definition, {
+      linearDeflectionM: 0.0005,
+      angularDeflectionRad: 0.15,
+      budgetMs: 30_000,
+    });
+    return parseCadEvaluationEvidence(result.evidence, definition);
+  } finally {
+    await kernel.dispose();
+  }
+}
+
+function CadPartInspectorEditor({
+  component,
+  onUpdate,
+  evaluateCadPart,
+}: Readonly<{
+  component: WorkspaceRenderComponent;
+  onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
+  evaluateCadPart?: WorkspaceCadPartEvaluator;
+}>) {
+  const formId = useId();
+  const definition = parseCadPartDefinition(component.props.definition);
+  const evidence = component.props.evaluation === null
+    ? undefined
+    : parseCadEvaluationEvidence(component.props.evaluation, definition);
+  const signature = JSON.stringify({
+    definition,
+    partNumber: component.props.partNumber,
+    materialName: component.props.materialName,
+    evidence,
+  });
+  const existingHole = definition.history.find((feature) => feature.kind === "hole");
+  const [displayName, setDisplayName] = useState(definition.displayName);
+  const [width, setWidth] = useState(String(cadParameterLength(definition, "width", evidence?.overallBounds.size.x ?? 0.6)));
+  const [depth, setDepth] = useState(String(cadParameterLength(definition, "depth", evidence?.overallBounds.size.y ?? 0.4)));
+  const [thickness, setThickness] = useState(String(cadParameterLength(definition, "thickness", evidence?.overallBounds.size.z ?? 0.08)));
+  const [holeDiameter, setHoleDiameter] = useState(String(existingHole ? cadParameterLength(definition, "hole_diameter", 0.08) : 0));
+  const [partNumber, setPartNumber] = useState(stringValue(component.props.partNumber));
+  const [materialName, setMaterialName] = useState(stringValue(component.props.materialName));
+  const [rawDefinition, setRawDefinition] = useState(JSON.stringify(definition, null, 2));
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string>();
+  const runRef = useRef(0);
+
+  useEffect(() => {
+    runRef.current += 1;
+    setDisplayName(definition.displayName);
+    setWidth(String(cadParameterLength(definition, "width", evidence?.overallBounds.size.x ?? 0.6)));
+    setDepth(String(cadParameterLength(definition, "depth", evidence?.overallBounds.size.y ?? 0.4)));
+    setThickness(String(cadParameterLength(definition, "thickness", evidence?.overallBounds.size.z ?? 0.08)));
+    setHoleDiameter(String(existingHole ? cadParameterLength(definition, "hole_diameter", 0.08) : 0));
+    setPartNumber(stringValue(component.props.partNumber));
+    setMaterialName(stringValue(component.props.materialName));
+    setRawDefinition(JSON.stringify(definition, null, 2));
+    setPending(false);
+    setError(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [component.id, signature]);
+
+  const locked = component.locks.props || !onUpdate;
+  const evaluateAndCommit = async (nextDefinition: CadPartDefinitionV1): Promise<void> => {
+    if (locked || pending) return;
+    const run = runRef.current + 1;
+    runRef.current = run;
+    setPending(true);
+    setError(undefined);
+    try {
+      const evaluator = evaluateCadPart ?? evaluateCadPartInWorker;
+      const nextEvidence = parseCadEvaluationEvidence(await evaluator(nextDefinition), nextDefinition);
+      if (run !== runRef.current) return;
+      const applied = onUpdate?.({
+        componentId: component.id,
+        props: {
+          definition: structuredClone(nextDefinition) as unknown as JSONObject,
+          definitionDigest: cadPartDefinitionDigest(nextDefinition),
+          evaluation: structuredClone(nextEvidence) as unknown as JSONObject,
+          partNumber: partNumber.trim(),
+          materialName: materialName.trim(),
+        },
+      });
+      if (applied === false) throw new Error("The evaluated CAD part could not be committed to this Workspace.");
+      setRawDefinition(JSON.stringify(nextDefinition, null, 2));
+    } catch (caught) {
+      if (run === runRef.current) {
+        setError(caught instanceof Error ? caught.message : "The CAD feature history could not be evaluated.");
+      }
+    } finally {
+      if (run === runRef.current) setPending(false);
+    }
+  };
+
+  const applyStarter = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    try {
+      const next = createRectangularCadPlateDefinition({
+        partId: definition.partId,
+        displayName: displayName.trim() || definition.displayName,
+        widthM: Number(width),
+        depthM: Number(depth),
+        thicknessM: Number(thickness),
+        holeDiameterM: Number(holeDiameter),
+      });
+      void evaluateAndCommit(next);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The starter part dimensions are invalid.");
+    }
+  };
+
+  const applyRawDefinition = () => {
+    try {
+      void evaluateAndCommit(parseCadPartDefinition(JSON.parse(rawDefinition) as unknown));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The CAD document JSON is invalid.");
+    }
+  };
+
+  return <section className="workspace-inspector__modeling workspace-inspector__cad" aria-labelledby={`${formId}-heading`}>
+    <h3 id={`${formId}-heading`}>Editable CAD part</h3>
+    <p className="workspace-inspector__hint">
+      Named SI parameters and ordered features are evaluated as exact OCCT B-rep. A failed feature never replaces the last valid part.
+    </p>
+    {evidence ? <dl className="workspace-inspector__cad-evidence" aria-label="CAD evaluation evidence">
+      <div><dt>Status</dt><dd>Valid B-rep</dd></div>
+      <div><dt>Bodies</dt><dd>{evidence.bodies.length}</dd></div>
+      <div><dt>Volume</dt><dd>{evidence.bodies.reduce((sum, body) => sum + body.volumeM3, 0).toPrecision(6)} m³</dd></div>
+      <div><dt>Bounds</dt><dd>{evidence.overallBounds.size.x.toPrecision(4)} × {evidence.overallBounds.size.y.toPrecision(4)} × {evidence.overallBounds.size.z.toPrecision(4)} m</dd></div>
+    </dl> : <p className="workspace-inspector__cad-empty">No solid yet. Build the starter plate or evaluate an advanced feature document.</p>}
+    <form onSubmit={applyStarter} noValidate>
+      <label htmlFor={`${formId}-cad-name`}><span>Part name</span><input id={`${formId}-cad-name`} type="text" maxLength={256} value={displayName} disabled={locked || pending} onChange={(event) => setDisplayName(event.target.value)} /></label>
+      <fieldset><legend>Starter plate · exact metres</legend>
+        <label htmlFor={`${formId}-cad-width`}><span>Width</span><input id={`${formId}-cad-width`} aria-label="CAD plate width (m)" type="number" min="0.000001" max="1000" step="0.001" value={width} disabled={locked || pending} onChange={(event) => setWidth(event.target.value)} /></label>
+        <label htmlFor={`${formId}-cad-depth`}><span>Depth</span><input id={`${formId}-cad-depth`} aria-label="CAD plate depth (m)" type="number" min="0.000001" max="1000" step="0.001" value={depth} disabled={locked || pending} onChange={(event) => setDepth(event.target.value)} /></label>
+        <label htmlFor={`${formId}-cad-thickness`}><span>Thickness</span><input id={`${formId}-cad-thickness`} aria-label="CAD plate thickness (m)" type="number" min="0.000001" max="1000" step="0.001" value={thickness} disabled={locked || pending} onChange={(event) => setThickness(event.target.value)} /></label>
+        <label htmlFor={`${formId}-cad-hole`}><span>Center hole · 0 off</span><input id={`${formId}-cad-hole`} aria-label="CAD plate hole diameter (m)" type="number" min="0" max="1000" step="0.001" value={holeDiameter} disabled={locked || pending} onChange={(event) => setHoleDiameter(event.target.value)} /></label>
+      </fieldset>
+      <label htmlFor={`${formId}-cad-part-number`}><span>Part number</span><input id={`${formId}-cad-part-number`} type="text" maxLength={128} value={partNumber} disabled={locked || pending} onChange={(event) => setPartNumber(event.target.value)} /></label>
+      <label htmlFor={`${formId}-cad-material-name`}><span>Material name</span><input id={`${formId}-cad-material-name`} type="text" maxLength={256} value={materialName} disabled={locked || pending} onChange={(event) => setMaterialName(event.target.value)} /></label>
+      <button type="submit" disabled={locked || pending}>{pending ? "Evaluating exact B-rep…" : "Build and apply starter part"}</button>
+    </form>
+    <ol className="workspace-inspector__feature-tree" aria-label="CAD feature history">
+      {definition.history.map((feature, index) => <li key={feature.id} className={feature.suppressed ? "is-suppressed" : undefined}>
+        <span>{index + 1}</span><strong>{feature.name}</strong><small>{feature.kind.replaceAll("_", " ")}{feature.suppressed ? " · suppressed" : ""}</small>
+      </li>)}
+    </ol>
+    <details className="workspace-inspector__cad-advanced">
+      <summary>Advanced feature document</summary>
+      <p className="workspace-inspector__hint">Edit the versioned definition directly for revolve, boolean, hole, all-edge fillet, or all-edge chamfer. Unsupported features fail explicitly.</p>
+      <textarea aria-label="CAD feature document JSON" rows={16} value={rawDefinition} disabled={locked || pending} spellCheck={false} onChange={(event) => setRawDefinition(event.target.value)} />
+      <button type="button" disabled={locked || pending} onClick={applyRawDefinition}>Evaluate JSON and apply</button>
+    </details>
+    {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
+  </section>;
+}
+
 function ModelAssemblyInspectorEditor({
   component,
   onUpdate,
@@ -664,22 +967,56 @@ function ModelAssemblyInspectorEditor({
     component.props.collisionPolicy === "all" || component.props.collisionPolicy === "none"
       ? component.props.collisionPolicy : "external_only",
   );
+  const supportsCadAssembly = Number(component.type.version.split(".")[0]) >= 2;
+  const [partNumber, setPartNumber] = useState(stringValue(component.props.partNumber));
+  const [materialName, setMaterialName] = useState(stringValue(component.props.materialName));
+  const [mates, setMates] = useState(JSON.stringify(Array.isArray(component.props.mates) ? component.props.mates : [], null, 2));
+  const [error, setError] = useState<string>();
   useEffect(() => {
     setDisplayName(component.label);
     setDescription(stringValue(component.props.description));
     setCollisionPolicy(component.props.collisionPolicy === "all" || component.props.collisionPolicy === "none"
       ? component.props.collisionPolicy : "external_only");
-  }, [component.id, component.label, component.props.collisionPolicy, component.props.description]);
+    setPartNumber(stringValue(component.props.partNumber));
+    setMaterialName(stringValue(component.props.materialName));
+    setMates(JSON.stringify(Array.isArray(component.props.mates) ? component.props.mates : [], null, 2));
+    setError(undefined);
+  }, [
+    component.id,
+    component.label,
+    component.props.collisionPolicy,
+    component.props.description,
+    component.props.materialName,
+    component.props.mates,
+    component.props.partNumber,
+  ]);
   const locked = component.locks.props || !onUpdate;
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const label = displayName.trim();
     if (!label) return;
-    onUpdate?.({
+    let parsedMates;
+    try {
+      parsedMates = supportsCadAssembly ? parseCadAssemblyMates(JSON.parse(mates) as unknown) : undefined;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Assembly mates must be valid JSON.");
+      return;
+    }
+    setError(undefined);
+    const applied = onUpdate?.({
       componentId: component.id,
       label,
-      props: { description: description.trim(), collisionPolicy },
+      props: {
+        description: description.trim(),
+        collisionPolicy,
+        ...(supportsCadAssembly ? {
+          partNumber: partNumber.trim(),
+          materialName: materialName.trim(),
+          mates: structuredClone(parsedMates) as unknown as JSONValue,
+        } : {}),
+      },
     });
+    if (applied === false) setError("Assembly metadata or mate endpoints could not be applied.");
   };
   const modelRef = recordValue(component.props.modelRef);
   return <section className="workspace-inspector__modeling" aria-labelledby={`${formId}-heading`}>
@@ -689,6 +1026,13 @@ function ModelAssemblyInspectorEditor({
       <label htmlFor={`${formId}-name`}><span>Display name</span><input id={`${formId}-name`} type="text" maxLength={500} value={displayName} disabled={locked} onChange={(event) => setDisplayName(event.target.value)} /></label>
       <label htmlFor={`${formId}-description`}><span>Description</span><textarea id={`${formId}-description`} maxLength={2_000} value={description} disabled={locked} onChange={(event) => setDescription(event.target.value)} /></label>
       <label htmlFor={`${formId}-collision-policy`}><span>Collision policy</span><select id={`${formId}-collision-policy`} value={collisionPolicy} disabled={locked} onChange={(event) => setCollisionPolicy(event.target.value as typeof collisionPolicy)}><option value="external_only">External only</option><option value="all">All descendants</option><option value="none">No assembly collision</option></select></label>
+      {supportsCadAssembly && <>
+        <label htmlFor={`${formId}-assembly-part-number`}><span>Assembly number</span><input id={`${formId}-assembly-part-number`} type="text" maxLength={128} value={partNumber} disabled={locked} onChange={(event) => setPartNumber(event.target.value)} /></label>
+        <label htmlFor={`${formId}-assembly-material`}><span>Material / specification</span><input id={`${formId}-assembly-material`} type="text" maxLength={256} value={materialName} disabled={locked} onChange={(event) => setMaterialName(event.target.value)} /></label>
+        <label htmlFor={`${formId}-assembly-mates`}><span>Semantic mates</span><textarea id={`${formId}-assembly-mates`} aria-label="Assembly mates JSON" rows={8} value={mates} disabled={locked} spellCheck={false} onChange={(event) => setMates(event.target.value)} /></label>
+        <p className="workspace-inspector__hint">Fixed, revolute, slider, and planar mates reference child component IDs plus optional CAD datum/topology roles.</p>
+      </>}
+      {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
       <button type="submit" disabled={locked || !displayName.trim()}>Apply model settings</button>
     </form>
     {modelRef && <dl className="workspace-inspector__model-ref" aria-label="Published model reference"><div><dt>Model</dt><dd>{stringValue(modelRef.modelId)}</dd></div><div><dt>Version</dt><dd>{stringValue(modelRef.version)}</dd></div><div><dt>Digest</dt><dd>{stringValue(modelRef.digest)}</dd></div></dl>}
@@ -1084,11 +1428,26 @@ function CollisionInspectorEditor({
       catch { return undefined; }
     })()
     : undefined;
+  const cadBounds = component.type.typeId === "cad-part" && component.props.evaluation !== null
+    ? (() => {
+      try {
+        const parsed = parseCadEvaluationEvidence(
+          component.props.evaluation,
+          parseCadPartDefinition(component.props.definition),
+        );
+        return parsed.overallBounds;
+      } catch {
+        return undefined;
+      }
+    })()
+    : undefined;
   const scale = component.placement.space === "world3d"
     ? component.placement.scale
     : { x: 1, y: 1, z: 1 };
   const parsedMargin = Number(margin);
-  const canonicalBounds = parametricBounds
+  const canonicalBounds = cadBounds
+    ? { width: cadBounds.size.x, height: cadBounds.size.y, depth: cadBounds.size.z }
+    : parametricBounds
     ? { width: parametricBounds.size.x, height: parametricBounds.size.y, depth: parametricBounds.size.z }
     : asset?.bounds;
   const effectiveSize = shape === "asset_bounds" && canonicalBounds && Number.isFinite(parsedMargin)
@@ -1161,7 +1520,11 @@ function CollisionInspectorEditor({
         </label>
         <label htmlFor={`${formId}-shape`}><span>Shape</span>
           <select id={`${formId}-shape`} value={shape} disabled={locked} onChange={(event) => setShape(event.target.value as typeof shape)}>
-            <option value="asset_bounds">{component.type.typeId === "spatial-primitive" ? "Geometry bounds" : "Asset bounds"}</option>
+            <option value="asset_bounds">{component.type.typeId === "cad-part"
+              ? "Exact CAD bounds"
+              : component.type.typeId === "spatial-primitive"
+                ? "Geometry bounds"
+                : "Asset bounds"}</option>
             <option value="box">Explicit box</option>
             <option value="compound">Compound boxes</option>
           </select>
@@ -1198,6 +1561,7 @@ function PhysicsInspectorEditor({
   const parsed = parseSpatialPhysicsConfig(component.props.physics) ?? DEFAULT_SPATIAL_PHYSICS;
   const signature = JSON.stringify(parsed);
   const supportsMasterSwitch = component.type.typeId === "spatial-primitive"
+    || component.type.typeId === "cad-part"
     || Number(component.type.version.split(".")[0]) > 1
     || (Number(component.type.version.split(".")[0]) === 1 && Number(component.type.version.split(".")[1]) >= 5);
   const [enabled, setEnabled] = useState(parsed.enabled);

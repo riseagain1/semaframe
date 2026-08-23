@@ -106,7 +106,7 @@ describe("SemaFrame Spatial Graph spatial index", () => {
     const snapshot = buildSemaFrameSpatialGraph(store.getState());
     expect(snapshot).toMatchObject({
       format: "semaframe-spatial-graph",
-      version: "3.1",
+      version: "3.2",
       workspaceRevision: 1,
       coordinateSystem: { units: "meters", upAxis: "+Y", forwardAxis: "+Z" },
       stage: {

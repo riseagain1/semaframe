@@ -129,6 +129,16 @@ function validateManifestShape(manifest: ComponentManifest): void {
   if (new Set(manifest.writableProps).size !== manifest.writableProps.length) {
     throw new ComponentRegistryError(`Duplicate writable prop in ${manifest.typeId}`, "invalid_manifest");
   }
+  const bindableProps = manifest.bindableProps ?? manifest.writableProps;
+  if (new Set(bindableProps).size !== bindableProps.length) {
+    throw new ComponentRegistryError(`Duplicate bindable prop in ${manifest.typeId}`, "invalid_manifest");
+  }
+  if (bindableProps.some((property) => !manifest.writableProps.includes(property))) {
+    throw new ComponentRegistryError(
+      `Bindable props must also be writable in ${manifest.typeId}`,
+      "invalid_manifest",
+    );
+  }
   const policySpaces = Object.keys(manifest.resizePolicy);
   if (
     manifest.allowedPlacements.some((placement) => !manifest.resizePolicy[placement])

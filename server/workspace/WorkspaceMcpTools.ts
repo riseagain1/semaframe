@@ -7,6 +7,7 @@ import {
 import * as z from "zod/v4";
 import {
   WORKSPACE_AGENT_GUIDE,
+  WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
@@ -422,7 +423,7 @@ export function registerWorkspaceTools(
     "inspect_workspace_model",
     {
       title: "Inspect one published parametric model",
-      description: "Reads an exact digest-pinned reusable model definition, including all node IDs required to construct instantiate_model.id_map. This is read-only and never reserves component IDs.",
+      description: `Reads one complete digest-pinned reusable model definition, including all node IDs required to construct instantiate_model.id_map and ModelDefinition 2.0 logical/manufacturing metadata. This is read-only and never reserves component IDs. The complete result is capped at ${WORKSPACE_MODEL_INSPECTION_MAX_BYTES} encoded bytes; an oversized result fails with model_inspection_too_large and is never truncated.`,
       inputSchema: z.strictObject({
         ...sessionFields,
         model_id: z.string().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u),
@@ -579,7 +580,17 @@ export function registerWorkspaceTools(
   const componentIdSchema = z.string().min(1).max(256);
   const assetIdSchema = z.string().min(1).max(256);
   const entityKindSchema = z.enum(["character", "animal", "prop", "structure", "effect", "primitive"]);
-  // The union makes geometry-vs-asset identity visible in tools/list instead
+  const cadSemanticIdSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u);
+  const cadDefinitionSchema = z.strictObject({
+    formatVersion: z.literal("1.0"),
+    partId: cadSemanticIdSchema,
+    displayName: z.string().min(1).max(256),
+    units: z.literal("metre"),
+    parameters: z.array(z.unknown()).max(256),
+    history: z.array(z.unknown()).max(256),
+    activeBodyIds: z.array(cadSemanticIdSchema).max(64),
+  });
+  // The union makes CAD-vs-parametric-vs-asset identity visible in tools/list instead
   // of relying only on the controller's authoritative fail-closed check.
   const spatialCandidateSchema = z.union([
     z.strictObject({ ...spatialCandidateBase, component_id: componentIdSchema }),
@@ -592,14 +603,16 @@ export function registerWorkspaceTools(
       entity_kind: entityKindSchema,
     }),
     z.strictObject({ ...spatialCandidateBase, component_id: componentIdSchema, geometry: parametricPrimitiveSchema }),
+    z.strictObject({ ...spatialCandidateBase, component_id: componentIdSchema, cad_definition: cadDefinitionSchema }),
     z.strictObject({ ...spatialCandidateBase, asset_id: assetIdSchema, entity_kind: entityKindSchema }),
     z.strictObject({ ...spatialCandidateBase, geometry: parametricPrimitiveSchema }),
+    z.strictObject({ ...spatialCandidateBase, cad_definition: cadDefinitionSchema }),
   ]);
   server.registerTool(
     "query_spatial_placement",
     {
       title: "Preflight a collision-aware 3D placement",
-      description: "Checks a proposed asset or exact parametric primitive placement against authoritative geometry, explicit-box, or compound colliders without mutating the Workspace. For a new primitive pass geometry instead of asset_id/entity_kind. Returns conflicts and deterministic nearby placement suggestions.",
+      description: "Checks a proposed asset, exact parametric primitive, or bounded semantic CAD definition against authoritative geometry, explicit-box, or compound colliders without mutating the Workspace. Pass geometry for a new primitive or cad_definition for a new/updated CAD part; the host evaluates CAD with OCCT and accepts no caller-supplied evidence. Returns conflicts and deterministic nearby placement suggestions.",
       inputSchema: z.strictObject({
         ...sessionFields,
         candidate: spatialCandidateSchema,
@@ -635,7 +648,7 @@ export function registerWorkspaceTools(
     "query_stable_placement",
     {
       title: "Preflight a stable physical placement",
-      description: "Checks a proposed spatial placement against collision, finite-Stage bounds, grounded support, constraints, and center-of-mass stability, returning deterministic corrections without mutation.",
+      description: "Checks a proposed asset, primitive, or host-evaluated cad_definition against collision, finite-Stage bounds, grounded support, constraints, and center-of-mass stability, returning deterministic corrections without mutation.",
       inputSchema: z.strictObject({ ...sessionFields, candidate: spatialCandidateSchema }),
       outputSchema: workspaceMcpResultSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -865,7 +878,7 @@ function statusForCode(code: string): number {
   if (code === "resource_snapshot_unavailable") return 409;
   if (code === "resource_snapshot_not_readable") return 422;
   if (/stale|transaction|retry_mismatch|envelope_mismatch/u.test(code)) return 409;
-  if (code === "resource_snapshot_too_large") return 413;
+  if (code === "resource_snapshot_too_large" || code === "model_inspection_too_large") return 413;
   if (/invalid|validation|unsupported/u.test(code)) return 422;
   return 500;
 }

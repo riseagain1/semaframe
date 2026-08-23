@@ -73,7 +73,7 @@ describe("Reality Layer Workspace integration", () => {
     expect(findBlockingSpatialCollisions(store.getState())).toEqual([]);
 
     const graph = buildSemaFrameSpatialGraph(store.getState());
-    expect(graph.version).toBe("3.1");
+    expect(graph.version).toBe("3.2");
     const reality = graph.nodes.find((node) => node.id === "POLE_SCAN");
     const proxy = graph.nodes.find((node) => node.id === "POLE_PROXY");
     expect(reality).toMatchObject({

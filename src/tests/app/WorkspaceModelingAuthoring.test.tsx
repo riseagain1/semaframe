@@ -5,9 +5,18 @@ import {
   WorkspaceComponentLibrary,
   WorkspaceInspector,
   buildWorkspaceComponentCatalog,
+  createRectangularCadPlateDefinition,
 } from "../../app/components/workspace";
 import { DEFAULT_COMPONENT_REGISTRY } from "../../workspace/components";
 import type { WorkspaceRenderComponent } from "../../workspace/renderer";
+import {
+  CAD_EVALUATION_EVIDENCE_FORMAT_VERSION,
+  CAD_PART_EVALUATOR_VERSION,
+  CAD_SKETCH_SOLVER_VERSION,
+  cadPartDefinitionDigest,
+  type CadEvaluationEvidenceV1,
+  type CadPartDefinitionV1,
+} from "../../workspace/modeling/cad";
 
 afterEach(cleanup);
 
@@ -38,6 +47,60 @@ function primitiveComponent(): WorkspaceRenderComponent {
   };
 }
 
+function cadComponent(): WorkspaceRenderComponent {
+  const manifest = DEFAULT_COMPONENT_REGISTRY.require("cad-part");
+  return {
+    id: "CMP_CAD",
+    type: { typeId: manifest.typeId, version: manifest.version, digest: manifest.digest },
+    label: "Machined plate",
+    props: structuredClone(manifest.defaultProps),
+    durableState: {},
+    placement: {
+      space: "world3d",
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+    tags: [],
+    visibility: "visible",
+    locks: {
+      placement: false,
+      resize: false,
+      visualEffects: false,
+      props: false,
+      deletion: false,
+      actions: false,
+    },
+  };
+}
+
+function cadEvidence(definition: CadPartDefinitionV1): CadEvaluationEvidenceV1 {
+  const bounds = {
+    min: { x: -0.3, y: -0.2, z: 0 },
+    max: { x: 0.3, y: 0.2, z: 0.08 },
+    size: { x: 0.6, y: 0.4, z: 0.08 },
+    center: { x: 0, y: 0, z: 0.04 },
+  };
+  return {
+    formatVersion: CAD_EVALUATION_EVIDENCE_FORMAT_VERSION,
+    definitionDigest: cadPartDefinitionDigest(definition),
+    evaluatorVersion: CAD_PART_EVALUATOR_VERSION,
+    sketchSolverVersion: CAD_SKETCH_SOLVER_VERSION,
+    exactness: "brep",
+    status: "valid",
+    bodies: [{
+      bodyId: "body",
+      bounds,
+      volumeM3: 0.0192,
+      surfaceAreaM2: 0.352,
+      centerOfMassM: { x: 0, y: 0, z: 0.04 },
+      valid: true,
+    }],
+    overallBounds: bounds,
+    diagnostics: [],
+  };
+}
+
 describe("parametric modeling authoring", () => {
   it("expands the exact primitive manifest into six presets and includes editable assemblies", async () => {
     const user = userEvent.setup();
@@ -47,6 +110,10 @@ describe("parametric modeling authoring", () => {
     });
     expect(catalog.filter((item) => item.typeId === "spatial-primitive")).toHaveLength(6);
     expect(catalog.some((item) => item.typeId === "model-assembly")).toBe(true);
+    expect(catalog.find((item) => item.typeId === "cad-part")).toMatchObject({
+      configureOnCreate: true,
+      badge: "Exact CAD",
+    });
 
     render(<WorkspaceComponentLibrary items={catalog} onCreate={onCreate} />);
     await user.click(screen.getByRole("button", { name: /Capsule.*Exact radius/i }));
@@ -56,6 +123,64 @@ describe("parametric modeling authoring", () => {
         geometry: { kind: "capsule", radiusM: 0.25, cylinderHeightM: 0.5, axis: "y" },
       },
     });
+  });
+
+  it("evaluates and commits a human-authored CAD feature document atomically", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn(() => true);
+    const evaluateCadPart = vi.fn(async (definition: CadPartDefinitionV1) => cadEvidence(definition));
+    render(<WorkspaceInspector
+      component={cadComponent()}
+      onUpdate={onUpdate}
+      evaluateCadPart={evaluateCadPart}
+    />);
+
+    await user.clear(screen.getByRole("spinbutton", { name: "CAD plate width (m)" }));
+    await user.type(screen.getByRole("spinbutton", { name: "CAD plate width (m)" }), "0.6");
+    await user.clear(screen.getByRole("spinbutton", { name: "CAD plate depth (m)" }));
+    await user.type(screen.getByRole("spinbutton", { name: "CAD plate depth (m)" }), "0.4");
+    await user.clear(screen.getByRole("spinbutton", { name: "CAD plate thickness (m)" }));
+    await user.type(screen.getByRole("spinbutton", { name: "CAD plate thickness (m)" }), "0.08");
+    await user.click(screen.getByRole("button", { name: "Build and apply starter part" }));
+
+    expect(evaluateCadPart).toHaveBeenCalledTimes(1);
+    const evaluatedDefinition = evaluateCadPart.mock.calls[0]?.[0];
+    expect(evaluatedDefinition?.history.map((feature) => feature.kind)).toEqual(["sketch", "extrude"]);
+    expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      componentId: "CMP_CAD",
+      props: expect.objectContaining({
+        definitionDigest: cadPartDefinitionDigest(evaluatedDefinition!),
+        evaluation: expect.objectContaining({ exactness: "brep", status: "valid" }),
+      }),
+    }));
+  });
+
+  it("keeps the last valid CAD state when evaluation fails", async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<WorkspaceInspector
+      component={cadComponent()}
+      onUpdate={onUpdate}
+      evaluateCadPart={vi.fn().mockRejectedValue(new Error("Feature center_hole produced an invalid B-rep"))}
+    />);
+    await user.click(screen.getByRole("button", { name: "Build and apply starter part" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/invalid B-rep/i);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("builds a versioned plate with a distinct through-hole feature", () => {
+    const definition = createRectangularCadPlateDefinition({
+      partId: "fixture_plate",
+      displayName: "Fixture plate",
+      widthM: 0.8,
+      depthM: 0.5,
+      thicknessM: 0.03,
+      holeDiameterM: 0.06,
+    });
+    expect(definition.history.map((feature) => feature.kind)).toEqual(["sketch", "extrude", "hole"]);
+    expect(definition.parameters.map((parameter) => parameter.id)).toEqual([
+      "width", "depth", "thickness", "hole_diameter",
+    ]);
   });
 
   it("commits exact geometry and PBR material as one closed update", async () => {

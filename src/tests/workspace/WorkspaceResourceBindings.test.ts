@@ -102,7 +102,127 @@ function chartStore(resource: WorkspaceResource, sourcePath = "$.labels", target
   return store;
 }
 
+function cadBindingResource(): WorkspaceResource {
+  const cadManifest = DEFAULT_COMPONENT_REGISTRY.require("cad-part");
+  const data = {
+    definition: structuredClone(cadManifest.defaultProps.definition),
+    definitionDigest: cadManifest.defaultProps.definitionDigest,
+    evaluation: null,
+    partNumber: "PN-FEED-42",
+  };
+  return {
+    id: "RES_cad",
+    label: "CAD metadata",
+    connectorType: "inline.snapshot",
+    connectorVersion: "1.0.0",
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["definition", "definitionDigest", "evaluation", "partNumber"],
+      properties: {
+        definition: { type: "object" },
+        definitionDigest: { type: "string" },
+        evaluation: { type: "null" },
+        partNumber: { type: "string" },
+      },
+    },
+    config: {},
+    policy: { mode: "manual", offline: "keep_last_good" },
+    snapshot: {
+      data,
+      contentHash: deterministicDigest(data),
+      retrievedAt: "2026-08-23T01:02:03.000Z",
+      stale: false,
+      provenance: [],
+    },
+    status: "ready",
+  };
+}
+
+function cadBindingStore(): WorkspaceStore {
+  const store = new WorkspaceStore();
+  store.apply(workspaceBatch(store, "cad_binding_setup", [{
+    op: "create_component",
+    op_id: "create_stage",
+    id: "CMP_STAGE",
+    component_type: DEFAULT_COMPONENT_REGISTRY.ref("stage-3d"),
+    placement: {
+      space: "world3d",
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  }, {
+    op: "create_component",
+    op_id: "create_cad_part",
+    id: "CMP_CAD",
+    component_type: DEFAULT_COMPONENT_REGISTRY.ref("cad-part"),
+    placement: {
+      space: "world3d",
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    },
+  }, {
+    op: "upsert_resource",
+    op_id: "upsert_cad_metadata",
+    resource: cadBindingResource(),
+  }]));
+  return store;
+}
+
 describe("secure Workspace snapshot bindings", () => {
+  it("rejects snapshot and live bindings to every host-managed CAD document field", () => {
+    for (const targetProp of ["definition", "definitionDigest", "evaluation"] as const) {
+      for (const mode of ["snapshot", "live"] as const) {
+        const store = cadBindingStore();
+        const revision = store.getRevision();
+        expect(() => store.apply(workspaceBatch(store, `forbidden_${targetProp}_${mode}`, [{
+          op: "bind_resource",
+          op_id: `bind_${targetProp}_${mode}`,
+          binding: {
+            kind: "resource_binding",
+            id: `BIND_${targetProp}_${mode}`,
+            resourceId: "RES_cad",
+            componentId: "CMP_CAD",
+            targetProp,
+            sourcePath: `$.${targetProp}`,
+            mode,
+            transform: { kind: "identity" },
+            enabled: true,
+          },
+        }]))).toThrow(new RegExp(`Property ${targetProp} is not bindable on cad-part`, "u"));
+        expect(store.getRevision()).toBe(revision);
+        expect(store.getState().connections.size).toBe(0);
+      }
+    }
+  });
+
+  it("keeps presentation-safe CAD metadata bindable without mutating canonical props", () => {
+    const store = cadBindingStore();
+    store.apply(workspaceBatch(store, "bind_cad_part_number", [{
+      op: "bind_resource",
+      op_id: "bind_part_number",
+      binding: {
+        kind: "resource_binding",
+        id: "BIND_part_number",
+        resourceId: "RES_cad",
+        componentId: "CMP_CAD",
+        targetProp: "partNumber",
+        sourcePath: "$.partNumber",
+        mode: "snapshot",
+        transform: { kind: "identity" },
+        enabled: true,
+      },
+    }]));
+
+    expect(store.getState().components.get("CMP_CAD")?.props.partNumber).toBe("");
+    const rendered = toRenderSnapshot(store.getState());
+    expect(rendered.components.find((component) => component.id === "CMP_CAD")?.props.partNumber)
+      .toBe("PN-FEED-42");
+    expect(rendered.bindingDiagnostics).toBeUndefined();
+  });
+
   it("projects stock-like labels and series without mutating canonical props or revision", () => {
     const store = new WorkspaceStore();
     const resource = stockResource();

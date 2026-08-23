@@ -43,6 +43,9 @@ type CapabilityManifest = Readonly<{
 type ModelNodeDto = Readonly<{
   node_id: string;
   parent_node_id?: string;
+  logical_node_id?: string;
+  part_number?: string;
+  material_name?: string;
   component_type: { typeId: string; version: string; digest: string };
   props: Record<string, unknown>;
   placement: Record<string, unknown>;
@@ -192,7 +195,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
       const primitiveManifest = advertised.component_types.find(({ typeId }) => typeId === "spatial-primitive");
       expect(stageManifest).toMatchObject({ version: expect.any(String), digest: expect.any(String) });
       expect(assemblyManifest).toMatchObject({
-        version: "1.1.0",
+        version: "2.0.0",
         allowedPlacements: ["world3d"],
         defaultProps: { description: "", collisionPolicy: "external_only" },
         propsSchema: {
@@ -281,7 +284,13 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
         id: assemblyId!,
         component_type: assemblyRef,
         label: "Agent fixture",
-        props: { description: "Exact two-part fixture", collisionPolicy: "external_only" },
+        props: {
+          description: "Exact two-part fixture",
+          collisionPolicy: "external_only",
+          partNumber: "ASM-AGENT-001",
+          materialName: "Assembly steel",
+          mates: [],
+        },
         placement: world(0, 0, 0),
       }, {
         op: "create_component",
@@ -342,6 +351,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
         },
       }));
       const model = modelInspection.model_definition as ModelDefinitionDto;
+      expect(modelInspection).toMatchObject({ complete: true, response_limit_bytes: 1_048_576 });
       expect(model).toMatchObject({
         model_id: "com.semaframe.agent-fixture",
         version: "1.0.0",
@@ -350,9 +360,25 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
         node_count: 3,
         id_map_keys: [assemblyId, baseId, postId],
         nodes: [
-          expect.objectContaining({ node_id: assemblyId, component_type: assemblyRef }),
-          expect.objectContaining({ node_id: baseId, parent_node_id: assemblyId, component_type: primitiveRef }),
-          expect.objectContaining({ node_id: postId, parent_node_id: assemblyId, component_type: primitiveRef }),
+          expect.objectContaining({
+            node_id: assemblyId,
+            logical_node_id: assemblyId,
+            part_number: "ASM-AGENT-001",
+            material_name: "Assembly steel",
+            component_type: assemblyRef,
+          }),
+          expect.objectContaining({
+            node_id: baseId,
+            logical_node_id: baseId,
+            parent_node_id: assemblyId,
+            component_type: primitiveRef,
+          }),
+          expect.objectContaining({
+            node_id: postId,
+            logical_node_id: postId,
+            parent_node_id: assemblyId,
+            component_type: primitiveRef,
+          }),
         ],
       });
       const immutableBaseNode = model.nodes.find(({ node_id }) => node_id === baseId)!;
@@ -429,7 +455,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
         version: string;
         nodes: Array<Record<string, unknown>>;
       };
-      expect(space).toMatchObject({ format: "semaframe-spatial-graph", version: "3.1" });
+      expect(space).toMatchObject({ format: "semaframe-spatial-graph", version: "3.2" });
       const instanceAssembly = space.nodes.find(({ id }) => id === instanceAssemblyId)!;
       const instanceBase = space.nodes.find(({ id }) => id === instanceBaseId)!;
       const instancePost = space.nodes.find(({ id }) => id === instancePostId)!;

@@ -1,14 +1,30 @@
 import { DEFAULT_ASSET_REGISTRY } from "../../assets/AssetRegistry";
 import {
   DEFAULT_COMPONENT_VISUAL_EFFECTS,
+  bindablePropsForManifest,
   resizePolicyForPlacement,
   type ComponentInstance,
   type ComponentManifest,
   type ComponentResizePolicy,
+  type JSONObject,
 } from "../components/componentTypes";
 import { ComponentRegistryError } from "../components/ComponentRegistry";
 import { workspaceConnectorCapabilityManifest } from "../data/connectorCatalog";
 import { parseParametricPrimitive } from "../modeling/parametricGeometry";
+import {
+  CadDocumentError,
+  CadPartEvaluationError,
+  cadPartDefinitionDigest,
+  parseCadEvaluationEvidence,
+  parseCadPartDefinition,
+  type CadPartDefinitionV1,
+} from "../modeling/cad";
+import {
+  CadKernelError,
+  CAD_KERNEL_LIMITS,
+  createCadWorkerKernel,
+  type CadKernel,
+} from "../modeling";
 import {
   isCanonicalHostFeedResource,
   isCanonicalInlineSnapshotResource,
@@ -22,7 +38,10 @@ import {
   type WorkspaceOperationName,
   type WorkspacePermission,
 } from "../protocol/workspaceTypes";
-import { WorkspaceValidationError } from "../protocol/validateWorkspaceBatch";
+import {
+  validateWorkspaceCommandBatch,
+  WorkspaceValidationError,
+} from "../protocol/validateWorkspaceBatch";
 import { ComponentActionError } from "../runtime/componentActions";
 import {
   buildSemaFrameSpatialGraph,
@@ -33,6 +52,10 @@ import {
   type SpatialCollisionConfig,
   type SpatialPlacementCandidate,
 } from "../spatial";
+import {
+  isPhysicalSpatialTypeId,
+  isSpatialRenderTypeId,
+} from "../spatial/spatialComponentKinds";
 import {
   buildPhysicsValidationReport,
   parseSpatialPhysicsConfig,
@@ -56,6 +79,8 @@ import {
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
   WORKSPACE_COMPONENT_INSPECTION_WRAPPER_RESERVE_BYTES,
+  WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+  WORKSPACE_MODEL_INSPECTION_WRAPPER_RESERVE_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES,
   type JSONValue,
@@ -87,6 +112,9 @@ const MAX_SUMMARY_BYTES = 300_000;
 const MAX_CAPABILITY_BYTES = 200_000;
 const MAX_EVENT_PAGE = 200;
 const MAX_COMPACT_NODES = 800;
+const MAX_AGENT_CAD_EVALUATIONS_PER_BATCH = 8;
+const MAX_AGENT_CAD_EVALUATION_BATCH_MS = 60_000;
+const MAX_AGENT_CAD_EVALUATION_OPERATION_MS = 30_000;
 
 export const WORKSPACE_OPERATION_NAMES = [
   "define_component_recipe",
@@ -138,7 +166,10 @@ export type WorkspaceStoreEngineAdapterOptions = Readonly<{
   maxSummaryBytes?: number;
   maxCapabilityBytes?: number;
   maxComponentInspectionBytes?: number;
+  maxModelInspectionBytes?: number;
   maxResourceSnapshotBytes?: number;
+  /** Test/controlled-host seam. Production browser CAD uses a disposable Worker. */
+  cadKernelFactory?: () => Promise<CadKernel>;
 }>;
 
 type StoredPreparation = {
@@ -216,6 +247,24 @@ function spatialGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameSpatialG
           volume_m3: node.geometry.volumeM3,
           collider: node.geometry.collider,
           ...(node.geometry.material ? { material: node.geometry.material } : {}),
+        },
+      } : {}),
+      ...(node.cad ? {
+        cad: {
+          definition_digest: node.cad.definitionDigest,
+          evaluator_version: node.cad.evaluatorVersion,
+          exactness: node.cad.exactness,
+          body_count: node.cad.bodyCount,
+          local_bounds: node.cad.localBounds,
+          volume_m3: node.cad.volumeM3,
+          surface_area_m2: node.cad.surfaceAreaM2,
+          center_of_mass_m: node.cad.centerOfMassM,
+          diagnostics: node.cad.diagnostics.map((diagnostic) => ({
+            code: diagnostic.code,
+            severity: diagnostic.severity,
+            message: diagnostic.message,
+            ...(diagnostic.featureId ? { feature_id: diagnostic.featureId } : {}),
+          })),
         },
       } : {}),
       ...(node.assembly ? {
@@ -392,7 +441,11 @@ function physicsSettleForAgent(result: ReturnType<typeof simulatePhysicsSettle>)
   });
 }
 
-function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandidate {
+type ParsedSpatialPlacementCandidate = Omit<SpatialPlacementCandidate, "cad"> & Readonly<{
+  cadDefinition?: CadPartDefinitionV1;
+}>;
+
+function parseSpatialPlacementCandidate(value: unknown): ParsedSpatialPlacementCandidate {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate must be an object", {
       retryable: true,
@@ -400,7 +453,10 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
     });
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set(["component_id", "componentId", "asset_id", "assetId", "entity_kind", "entityKind", "geometry", "placement", "collision", "physics"]);
+  const allowed = new Set([
+    "component_id", "componentId", "asset_id", "assetId", "entity_kind", "entityKind",
+    "geometry", "cad_definition", "cadDefinition", "placement", "collision", "physics",
+  ]);
   if (Object.keys(record).some((key) => !allowed.has(key))) {
     throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate contains unsupported fields", { retryable: true });
   }
@@ -450,6 +506,17 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
       );
     }
   }
+  if (record.cad_definition !== undefined && record.cadDefinition !== undefined) {
+    throw new WorkspaceEngineError(
+      "invalid_spatial_candidate",
+      "candidate must not provide both cad_definition and cadDefinition",
+      { retryable: true, requiredAction: "query_spatial_placement" },
+    );
+  }
+  const rawCadDefinition = record.cad_definition ?? record.cadDefinition;
+  const cadDefinition = rawCadDefinition === undefined
+    ? undefined
+    : parseCadPartDefinition(rawCadDefinition);
   if (componentId !== undefined && (typeof componentId !== "string" || !componentId)) {
     throw new WorkspaceEngineError("invalid_spatial_candidate", "component_id must be a non-empty string", { retryable: true });
   }
@@ -459,10 +526,11 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
   if (entityKind !== undefined && (typeof entityKind !== "string" || !entityKind)) {
     throw new WorkspaceEngineError("invalid_spatial_candidate", "entity_kind must be a non-empty string", { retryable: true });
   }
-  if (geometry && (assetId !== undefined || entityKind !== undefined)) {
+  const hasAssetIdentity = assetId !== undefined || entityKind !== undefined;
+  if ([geometry !== undefined, cadDefinition !== undefined, hasAssetIdentity].filter(Boolean).length > 1) {
     throw new WorkspaceEngineError(
       "invalid_spatial_candidate",
-      "candidate.geometry is mutually exclusive with asset_id and entity_kind",
+      "candidate must use exactly one of cad_definition, geometry, or asset_id/entity_kind",
       { retryable: true, requiredAction: "query_spatial_placement" },
     );
   }
@@ -471,6 +539,7 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
     ...(assetId ? { assetId: assetId as string } : {}),
     ...(entityKind ? { entityKind: entityKind as string } : {}),
     ...(geometry ? { geometry } : {}),
+    ...(cadDefinition ? { cadDefinition } : {}),
     placement: {
       space: "world3d",
       position: vector(placementRecord.position, "candidate.placement.position", -1_000_000, 1_000_000),
@@ -481,7 +550,11 @@ function parseSpatialPlacementCandidate(value: unknown): SpatialPlacementCandida
   };
 }
 
-function parsePhysicsPlacementCandidate(value: unknown): PhysicsPlacementCandidate {
+type ParsedPhysicsPlacementCandidate = ParsedSpatialPlacementCandidate & Readonly<{
+  physics?: NonNullable<PhysicsPlacementCandidate["physics"]>;
+}>;
+
+function parsePhysicsPlacementCandidate(value: unknown): ParsedPhysicsPlacementCandidate {
   const spatial = parseSpatialPlacementCandidate(value);
   const record = value as Record<string, unknown>;
   if (record.physics === undefined) return spatial;
@@ -646,6 +719,7 @@ function manifestForAgent(manifest: ComponentManifest): JSONValue {
     defaultsRedacted: redactedDefaultFields.length > 0,
     redactedDefaultFields,
     writableProps: manifest.writableProps,
+    bindableProps: bindablePropsForManifest(manifest),
     actions: manifest.actions,
     events: manifest.events,
     requiredPermissions: manifest.requiredPermissions,
@@ -890,14 +964,10 @@ function workspaceSummary(
       format: "semaframe-spatial-graph",
       version: SEMAFRAME_SPATIAL_GRAPH_VERSION,
       workspace_revision: state.revision,
-      spatial_node_count: components.filter((component) => (
-        component.type.typeId === "spatial-entity"
-        || component.type.typeId === "spatial-primitive"
-        || component.type.typeId === "model-assembly"
-        || component.type.typeId === "gaussian-splat"
-      )).length,
+      spatial_node_count: components.filter((component) =>
+        isSpatialRenderTypeId(component.type.typeId)).length,
       collision_enabled_node_count: components.filter((component) => {
-        if (component.type.typeId !== "spatial-entity" && component.type.typeId !== "spatial-primitive") return false;
+        if (!isPhysicalSpatialTypeId(component.type.typeId)) return false;
         const collision = spatialCollisionConfigFromProps(component.props);
         return Boolean(collision?.enabled && collision.role !== "none");
       }).length,
@@ -1033,6 +1103,205 @@ function createdComponentIds(batch: unknown): string[] {
   );
 }
 
+async function openCadEvaluationKernel(
+  factory: (() => Promise<CadKernel>) | undefined,
+): Promise<CadKernel> {
+  if (factory) return factory();
+  if (typeof globalThis.Worker === "function") return createCadWorkerKernel();
+  throw new WorkspaceEngineError(
+    "cad_evaluation_unavailable",
+    "Agent CAD evaluation requires a disposable Worker in this host",
+    {
+      retryable: false,
+      details: { hard_stop_required: true, in_process_fallback_used: false },
+    },
+  );
+}
+
+async function hostEvaluateCadProps(
+  propsInput: JSONObject,
+  budgetMs: number,
+  factory: (() => Promise<CadKernel>) | undefined,
+): Promise<JSONObject> {
+  const props = structuredClone(propsInput);
+  const definition = parseCadPartDefinition(props.definition);
+  props.definition = structuredClone(definition) as unknown as JSONObject;
+  props.definitionDigest = cadPartDefinitionDigest(definition);
+  if (!definition.activeBodyIds.length) {
+    props.evaluation = null;
+    return props;
+  }
+  const kernel = await openCadEvaluationKernel(factory);
+  try {
+    const result = await kernel.evaluatePart(definition, {
+      linearDeflectionM: 0.0005,
+      angularDeflectionRad: 0.15,
+      includeMeshes: false,
+      budgetMs,
+    });
+    props.evaluation = structuredClone(result.evidence) as unknown as JSONObject;
+    return props;
+  } finally {
+    await kernel.dispose();
+  }
+}
+
+async function evaluateCadPlacementCandidate(
+  store: WorkspaceStore,
+  candidate: ParsedSpatialPlacementCandidate,
+  factory: (() => Promise<CadKernel>) | undefined,
+): Promise<SpatialPlacementCandidate> {
+  const base: SpatialPlacementCandidate = {
+    ...(candidate.componentId ? { componentId: candidate.componentId } : {}),
+    ...(candidate.assetId ? { assetId: candidate.assetId } : {}),
+    ...(candidate.entityKind ? { entityKind: candidate.entityKind } : {}),
+    ...(candidate.geometry ? { geometry: candidate.geometry } : {}),
+    placement: structuredClone(candidate.placement),
+    ...(candidate.collision ? { collision: structuredClone(candidate.collision) } : {}),
+  };
+  if (!candidate.cadDefinition) return base;
+  if (!candidate.cadDefinition.activeBodyIds.length) {
+    throw new WorkspaceEngineError(
+      "invalid_spatial_candidate",
+      "candidate.cad_definition must evaluate at least one active body",
+      { retryable: true, requiredAction: "query_spatial_placement" },
+    );
+  }
+  const manifest = store.getComponentManifest("cad-part");
+  if (!manifest) {
+    throw new WorkspaceEngineError(
+      "engine_contract_violation",
+      "The authoritative cad-part manifest is unavailable",
+    );
+  }
+  const evaluated = await hostEvaluateCadProps({
+    ...structuredClone(manifest.defaultProps),
+    definition: structuredClone(candidate.cadDefinition) as unknown as JSONObject,
+  }, MAX_AGENT_CAD_EVALUATION_OPERATION_MS, factory);
+  const definition = parseCadPartDefinition(evaluated.definition);
+  const evaluation = parseCadEvaluationEvidence(evaluated.evaluation, definition);
+  return {
+    ...base,
+    cad: { definition, evaluation },
+  };
+}
+
+function countAgentCadEvaluations(
+  state: Readonly<WorkspaceState>,
+  batch: WorkspaceCommandBatch,
+): number {
+  const componentTypes = new Map(
+    [...state.components].map(([id, component]) => [id, component.type.typeId] as const),
+  );
+  let count = 0;
+  for (const operation of batch.operations) {
+    if (operation.op === "create_component") {
+      componentTypes.set(operation.id, operation.component_type.typeId);
+      if (operation.component_type.typeId === "cad-part") count += 1;
+      continue;
+    }
+    if (operation.op === "delete_component") {
+      componentTypes.delete(operation.id);
+      continue;
+    }
+    if (operation.op !== "update_component"
+      || componentTypes.get(operation.id) !== "cad-part"
+      || operation.patch.props === undefined) continue;
+    if (operation.patch.props.definition !== undefined
+      || operation.patch.props.definitionDigest !== undefined
+      || operation.patch.props.evaluation !== undefined) count += 1;
+  }
+  return count;
+}
+
+/**
+ * External Agents author semantic CAD documents; the host is the only party
+ * that materializes their compact OCCT evidence. This keeps one invalid
+ * feature from becoming a committed revision and overwrites forged evidence.
+ */
+async function prepareAgentCadBatch(
+  store: WorkspaceStore,
+  batchInput: unknown,
+  cadKernelFactory: (() => Promise<CadKernel>) | undefined,
+): Promise<WorkspaceCommandBatch> {
+  const batch = structuredClone(validateWorkspaceCommandBatch(batchInput));
+  const current = store.getState();
+  const evaluationCount = countAgentCadEvaluations(current, batch);
+  if (evaluationCount > MAX_AGENT_CAD_EVALUATIONS_PER_BATCH) {
+    throw new WorkspaceEngineError(
+      "cad_evaluation_failed",
+      `One Workspace batch may evaluate at most ${MAX_AGENT_CAD_EVALUATIONS_PER_BATCH} CAD documents`,
+      {
+        retryable: true,
+        requiredAction: "begin_workspace_update",
+        details: {
+          evaluation_count: evaluationCount,
+          maximum_evaluations_per_batch: MAX_AGENT_CAD_EVALUATIONS_PER_BATCH,
+        },
+      },
+    );
+  }
+  const evaluationStartedAt = Date.now();
+  const nextCadBudget = (): number => {
+    const remaining = MAX_AGENT_CAD_EVALUATION_BATCH_MS - (Date.now() - evaluationStartedAt);
+    if (remaining < CAD_KERNEL_LIMITS.minimumOperationBudgetMs) {
+      throw new WorkspaceEngineError(
+        "cad_evaluation_failed",
+        `CAD evaluation exceeded the ${MAX_AGENT_CAD_EVALUATION_BATCH_MS} ms batch budget`,
+        { retryable: true, requiredAction: "begin_workspace_update" },
+      );
+    }
+    return Math.min(MAX_AGENT_CAD_EVALUATION_OPERATION_MS, remaining);
+  };
+  const componentTypes = new Map(
+    [...current.components].map(([id, component]) => [id, component.type.typeId] as const),
+  );
+  const cadProps = new Map(
+    [...current.components]
+      .filter(([, component]) => component.type.typeId === "cad-part")
+      .map(([id, component]) => [id, structuredClone(component.props)] as const),
+  );
+  for (const operation of batch.operations) {
+    if (operation.op === "create_component") {
+      componentTypes.set(operation.id, operation.component_type.typeId);
+      if (operation.component_type.typeId !== "cad-part") continue;
+      const manifest = store.getComponentManifest("cad-part", operation.component_type.version);
+      if (!manifest) continue;
+      const combined = {
+        ...structuredClone(manifest.defaultProps),
+        ...structuredClone(operation.props ?? {}),
+      };
+      const evaluated = await hostEvaluateCadProps(combined, nextCadBudget(), cadKernelFactory);
+      operation.props = structuredClone(evaluated);
+      cadProps.set(operation.id, evaluated);
+      continue;
+    }
+    if (operation.op === "delete_component") {
+      componentTypes.delete(operation.id);
+      cadProps.delete(operation.id);
+      continue;
+    }
+    if (operation.op !== "update_component"
+      || componentTypes.get(operation.id) !== "cad-part"
+      || operation.patch.props === undefined) continue;
+    const previous = cadProps.get(operation.id);
+    if (!previous) continue;
+    const combined = {
+      ...structuredClone(previous),
+      ...structuredClone(operation.patch.props),
+    };
+    const touchesDocument = operation.patch.props.definition !== undefined
+      || operation.patch.props.definitionDigest !== undefined
+      || operation.patch.props.evaluation !== undefined;
+    const next = touchesDocument
+      ? await hostEvaluateCadProps(combined, nextCadBudget(), cadKernelFactory)
+      : combined;
+    operation.patch.props = structuredClone(next);
+    cadProps.set(operation.id, next);
+  }
+  return batch;
+}
+
 /** Concrete, serialized adapter from the v1 WorkspaceStore to external agent ports. */
 export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
   private mutationTail: Promise<void> = Promise.resolve();
@@ -1045,7 +1314,9 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
   private readonly maxSummaryBytes: number;
   private readonly maxCapabilityBytes: number;
   private readonly maxComponentInspectionBytes: number;
+  private readonly maxModelInspectionBytes: number;
   private readonly maxResourceSnapshotBytes: number;
+  private readonly cadKernelFactory: (() => Promise<CadKernel>) | undefined;
 
   constructor(
     readonly store: WorkspaceStore,
@@ -1058,14 +1329,18 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     this.maxCapabilityBytes = options.maxCapabilityBytes ?? MAX_CAPABILITY_BYTES;
     this.maxComponentInspectionBytes = options.maxComponentInspectionBytes
       ?? WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES;
+    this.maxModelInspectionBytes = options.maxModelInspectionBytes
+      ?? WORKSPACE_MODEL_INSPECTION_MAX_BYTES;
     this.maxResourceSnapshotBytes = options.maxResourceSnapshotBytes
       ?? WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES;
+    this.cadKernelFactory = options.cadKernelFactory;
     for (const [name, value] of [
       ["maxSummaryComponents", this.maxSummaryComponents],
       ["maxSummaryResources", this.maxSummaryResources],
       ["maxSummaryBytes", this.maxSummaryBytes],
       ["maxCapabilityBytes", this.maxCapabilityBytes],
       ["maxComponentInspectionBytes", this.maxComponentInspectionBytes],
+      ["maxModelInspectionBytes", this.maxModelInspectionBytes],
       ["maxResourceSnapshotBytes", this.maxResourceSnapshotBytes],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive integer`);
@@ -1073,6 +1348,11 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     if (this.maxComponentInspectionBytes <= WORKSPACE_COMPONENT_INSPECTION_WRAPPER_RESERVE_BYTES) {
       throw new RangeError(
         `maxComponentInspectionBytes must exceed the ${WORKSPACE_COMPONENT_INSPECTION_WRAPPER_RESERVE_BYTES}-byte public wrapper reserve`,
+      );
+    }
+    if (this.maxModelInspectionBytes <= WORKSPACE_MODEL_INSPECTION_WRAPPER_RESERVE_BYTES) {
+      throw new RangeError(
+        `maxModelInspectionBytes must exceed the ${WORKSPACE_MODEL_INSPECTION_WRAPPER_RESERVE_BYTES}-byte public wrapper reserve`,
       );
     }
     if (this.maxResourceSnapshotBytes <= WORKSPACE_RESOURCE_SNAPSHOT_WRAPPER_RESERVE_BYTES) {
@@ -1163,6 +1443,9 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           node_id: node.nodeId,
           source_component_id: node.sourceComponentId,
           ...(node.parentNodeId ? { parent_node_id: node.parentNodeId } : {}),
+          ...("logicalNodeId" in node ? { logical_node_id: node.logicalNodeId } : {}),
+          ...("partNumber" in node && node.partNumber ? { part_number: node.partNumber } : {}),
+          ...("materialName" in node && node.materialName ? { material_name: node.materialName } : {}),
           component_type: node.componentType,
           label: node.label,
           props,
@@ -1173,7 +1456,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           ...(node.visualEffects ? { visual_effects: node.visualEffects } : {}),
         };
       });
-      return {
+      const view: WorkspaceModelDefinitionView = {
         workspaceId: state.workspaceId,
         revision: state.revision,
         registryDigest: state.registryDigest,
@@ -1191,6 +1474,30 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           nodes,
         }),
       };
+      const responseLimit = Math.min(
+        this.maxModelInspectionBytes,
+        WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+      );
+      const payloadLimit = responseLimit - WORKSPACE_MODEL_INSPECTION_WRAPPER_RESERVE_BYTES;
+      const payloadBytes = encodedBytes(view);
+      if (payloadBytes > payloadLimit) {
+        throw new WorkspaceEngineError(
+          "model_inspection_too_large",
+          `Published model ${key} exceeds the exact inspection response limit`,
+          {
+            retryable: false,
+            details: {
+              model_id: modelId,
+              version,
+              encoded_view_bytes: payloadBytes,
+              max_response_bytes: responseLimit,
+              wrapper_reserve_bytes: WORKSPACE_MODEL_INSPECTION_WRAPPER_RESERVE_BYTES,
+              truncation_performed: false,
+            },
+          },
+        );
+      }
+      return structuredClone(view);
     });
   }
 
@@ -1513,7 +1820,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           const stageChanged = [...changed].some((id) => state.components.get(id)?.type.typeId === "stage-3d");
           if (stageChanged) {
             for (const component of state.components.values()) {
-              if (component.type.typeId === "spatial-entity") changed.add(component.id);
+              if (isSpatialRenderTypeId(component.type.typeId)) changed.add(component.id);
             }
           } else {
             let expanded = true;
@@ -1545,26 +1852,60 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     candidate: unknown,
     principal: WorkspaceAgentPrincipal,
   ): Promise<WorkspaceSpatialPlacementView> {
-    return this.runSerialized(() => {
+    return this.runSerialized(async () => {
       requireAgentScope(principal, "workspace:read");
       const state = this.store.getState();
       try {
+        const parsed = parseSpatialPlacementCandidate(candidate);
+        const evaluated = await evaluateCadPlacementCandidate(
+          this.store,
+          parsed,
+          this.cadKernelFactory,
+        );
+        const check = querySpatialPlacement(state, evaluated);
         return {
           workspaceId: state.workspaceId,
           revision: state.revision,
           registryDigest: state.registryDigest,
-          placementCheck: (() => {
-            const check = querySpatialPlacement(state, parseSpatialPlacementCandidate(candidate));
-            return asJSON({
-              valid: check.valid,
-              candidate_id: check.candidateId,
-              conflicts: check.conflicts.map(spatialConflictForAgent),
-              suggested_placements: check.suggestedPlacements,
-            });
-          })(),
+          placementCheck: asJSON({
+            valid: check.valid,
+            candidate_id: check.candidateId,
+            conflicts: check.conflicts.map(spatialConflictForAgent),
+            suggested_placements: check.suggestedPlacements,
+          }),
         };
       } catch (cause) {
         if (cause instanceof WorkspaceEngineError) throw cause;
+        if (cause instanceof CadDocumentError) {
+          throw new WorkspaceEngineError(
+            "invalid_spatial_candidate",
+            cause.message,
+            {
+              retryable: true,
+              requiredAction: "query_spatial_placement",
+              details: {
+                validation_code: cause.code,
+                ...(cause.path ? { path: cause.path } : {}),
+              },
+            },
+          );
+        }
+        if (cause instanceof CadPartEvaluationError || cause instanceof CadKernelError) {
+          throw new WorkspaceEngineError(
+            "cad_evaluation_failed",
+            cause.message,
+            {
+              retryable: true,
+              requiredAction: "query_spatial_placement",
+              details: cause instanceof CadKernelError
+                ? { kernel_code: cause.code, operation: cause.operation }
+                : {
+                  validation_code: cause.code,
+                  ...(cause.featureId ? { feature_id: cause.featureId } : {}),
+                },
+            },
+          );
+        }
         throw new WorkspaceEngineError(
           "invalid_spatial_candidate",
           cause instanceof Error ? cause.message : "Spatial placement candidate is invalid",
@@ -1614,11 +1955,20 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     candidate: unknown,
     principal: WorkspaceAgentPrincipal,
   ): Promise<WorkspacePhysicsPlacementView> {
-    return this.runSerialized(() => {
+    return this.runSerialized(async () => {
       requireAgentScope(principal, "workspace:read");
       const state = this.store.getState();
       try {
-        const check = queryPhysicsStablePlacement(state, parsePhysicsPlacementCandidate(candidate));
+        const parsed = parsePhysicsPlacementCandidate(candidate);
+        const evaluated = await evaluateCadPlacementCandidate(
+          this.store,
+          parsed,
+          this.cadKernelFactory,
+        );
+        const check = queryPhysicsStablePlacement(state, {
+          ...evaluated,
+          ...(parsed.physics ? { physics: parsed.physics } : {}),
+        });
         return {
           workspaceId: state.workspaceId,
           revision: state.revision,
@@ -1643,6 +1993,28 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         };
       } catch (cause) {
         if (cause instanceof WorkspaceEngineError) throw cause;
+        if (cause instanceof CadDocumentError) {
+          throw new WorkspaceEngineError("invalid_physics_candidate", cause.message, {
+            retryable: true,
+            requiredAction: "query_stable_placement",
+            details: {
+              validation_code: cause.code,
+              ...(cause.path ? { path: cause.path } : {}),
+            },
+          });
+        }
+        if (cause instanceof CadPartEvaluationError || cause instanceof CadKernelError) {
+          throw new WorkspaceEngineError("cad_evaluation_failed", cause.message, {
+            retryable: true,
+            requiredAction: "query_stable_placement",
+            details: cause instanceof CadKernelError
+              ? { kernel_code: cause.code, operation: cause.operation }
+              : {
+                validation_code: cause.code,
+                ...(cause.featureId ? { feature_id: cause.featureId } : {}),
+              },
+          });
+        }
         throw new WorkspaceEngineError(
           "invalid_physics_candidate",
           cause instanceof Error ? cause.message : "Physics placement candidate is invalid",
@@ -1770,7 +2142,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     batch: unknown,
     principal: WorkspaceAgentPrincipal,
   ): Promise<WorkspaceCommitReceipt> {
-    return this.runSerialized(() => {
+    return this.runSerialized(async () => {
       const known = this.preparations.get(prepared.envelope.request_id);
       if (!known || known.fingerprint !== stableJson(prepared)) {
         throw new WorkspaceEngineError(
@@ -1817,8 +2189,9 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         );
       }
       try {
+        const hostBatch = await prepareAgentCadBatch(this.store, batch, this.cadKernelFactory);
         const commit = this.store.applyDetailed(
-          batch as WorkspaceCommandBatch,
+          hostBatch,
           authorizationFor(principal),
         );
         const resolvedBatch = {
@@ -1934,6 +2307,26 @@ function summarizeDelta(delta: {
 
 function mapStoreError(cause: unknown): WorkspaceEngineError {
   if (cause instanceof WorkspaceEngineError) return cause;
+  if (cause instanceof CadDocumentError || cause instanceof CadPartEvaluationError) {
+    return new WorkspaceEngineError("cad_evaluation_failed", cause.message, {
+      retryable: true,
+      requiredAction: "begin_workspace_update",
+      details: {
+        validation_code: cause.code,
+        ...(cause instanceof CadDocumentError && cause.path ? { path: cause.path } : {}),
+        ...(cause instanceof CadPartEvaluationError && cause.featureId
+          ? { feature_id: cause.featureId }
+          : {}),
+      },
+    });
+  }
+  if (cause instanceof CadKernelError) {
+    return new WorkspaceEngineError("cad_evaluation_failed", cause.message, {
+      retryable: true,
+      requiredAction: "begin_workspace_update",
+      details: { kernel_code: cause.code, operation: cause.operation },
+    });
+  }
   if (cause instanceof StaleWorkspaceRevisionError) {
     return new WorkspaceEngineError(cause.code, cause.message, {
       retryable: true,

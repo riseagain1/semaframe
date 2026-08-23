@@ -9,6 +9,7 @@ import {
   type CadKernel,
   type CadMassProperties,
   type CadOperationOptions,
+  type CadPartKernelEvaluationOptions,
   type CadShapeHandle,
   type CadSphereInput,
   type CadStepExport,
@@ -16,6 +17,10 @@ import {
   type CadTransform,
   type CadValidationResult,
 } from "./cadKernel";
+import type {
+  CadPartDefinitionV1,
+  CadPartEvaluationResultV1,
+} from "./cad";
 import type {
   CadWorkerArguments,
   CadWorkerMethod,
@@ -78,6 +83,18 @@ function wireTessellationOptions(
     budgetMs: options.budgetMs,
     linearDeflectionM: options.linearDeflectionM,
     angularDeflectionRad: options.angularDeflectionRad,
+  };
+}
+
+function wirePartEvaluationOptions(
+  options: CadPartKernelEvaluationOptions | undefined,
+): CadPartKernelEvaluationOptions | undefined {
+  if (options === undefined) return undefined;
+  return {
+    budgetMs: options.budgetMs,
+    linearDeflectionM: options.linearDeflectionM,
+    angularDeflectionRad: options.angularDeflectionRad,
+    includeMeshes: options.includeMeshes,
   };
 }
 
@@ -161,6 +178,13 @@ class WorkerCadKernel implements CadKernel {
     options?: CadTessellationOptions,
   ): Promise<CadIndexedMesh> {
     return this.send("tessellate", [shape, wireTessellationOptions(options)], options);
+  }
+
+  evaluatePart(
+    definition: CadPartDefinitionV1,
+    options?: CadPartKernelEvaluationOptions,
+  ): Promise<CadPartEvaluationResultV1> {
+    return this.send("evaluatePart", [definition, wirePartEvaluationOptions(options)], options);
   }
 
   exportStep(

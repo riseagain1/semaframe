@@ -5,10 +5,91 @@ import {
   WorkspaceProjectSerializer,
   workspaceStateDigest,
 } from "../../workspace/persistence";
+import {
+  MODELING_WORKSPACE_PROTOCOL_VERSION,
+  MODELING_WORKSPACE_SCHEMA_VERSION,
+  REALITY_WORKSPACE_SCHEMA_VERSION,
+  WORKSPACE_PROTOCOL_VERSION,
+  WORKSPACE_SCHEMA_VERSION,
+} from "../../workspace/protocol";
 import { WorkspaceStore } from "../../workspace/state";
 import { workspaceBatch } from "./helpers";
 
 describe("Workspace Project 1.0 persistence", () => {
+  it("keeps protocol 1.3 while normalizing project schema 1.3 to 1.4", () => {
+    expect(WORKSPACE_PROTOCOL_VERSION).toBe("1.3");
+    expect(WORKSPACE_SCHEMA_VERSION).toBe("1.4");
+
+    const serializer = new WorkspaceProjectSerializer();
+    const current = serializer.fromStore("schema_1_4", new WorkspaceStore());
+    expect(current).toMatchObject({
+      protocolVersion: "1.3",
+      workspaceSchemaVersion: "1.4",
+      checkpoint: { protocolVersion: "1.3", workspaceSchemaVersion: "1.4" },
+      workspace: { protocolVersion: "1.3", workspaceSchemaVersion: "1.4" },
+    });
+
+    const schema13 = structuredClone(current) as unknown as {
+      workspaceSchemaVersion: string;
+      checkpoint: { workspaceSchemaVersion: string };
+      workspace: { workspaceSchemaVersion: string };
+    };
+    schema13.workspaceSchemaVersion = REALITY_WORKSPACE_SCHEMA_VERSION;
+    schema13.checkpoint.workspaceSchemaVersion = REALITY_WORKSPACE_SCHEMA_VERSION;
+    schema13.workspace.workspaceSchemaVersion = REALITY_WORKSPACE_SCHEMA_VERSION;
+
+    const migrated = serializer.deserialize(schema13);
+    expect(migrated).toMatchObject({
+      protocolVersion: "1.3",
+      workspaceSchemaVersion: "1.4",
+      checkpoint: { protocolVersion: "1.3", workspaceSchemaVersion: "1.4" },
+      workspace: { protocolVersion: "1.3", workspaceSchemaVersion: "1.4" },
+    });
+    expect(JSON.parse(serializer.serialize(migrated))).toMatchObject({
+      protocolVersion: "1.3",
+      workspaceSchemaVersion: "1.4",
+    });
+  });
+
+  it("retains the released 1.2 project migration path when saving as schema 1.4", () => {
+    const serializer = new WorkspaceProjectSerializer();
+    const schema12 = structuredClone(
+      serializer.fromStore("schema_1_2", new WorkspaceStore()),
+    ) as unknown as {
+      protocolVersion: string;
+      workspaceSchemaVersion: string;
+      checkpoint: {
+        protocolVersion: string;
+        workspaceSchemaVersion: string;
+        realityAssets?: unknown;
+      };
+      workspace: {
+        protocolVersion: string;
+        workspaceSchemaVersion: string;
+        realityAssets?: unknown;
+      };
+    };
+    schema12.protocolVersion = MODELING_WORKSPACE_PROTOCOL_VERSION;
+    schema12.workspaceSchemaVersion = MODELING_WORKSPACE_SCHEMA_VERSION;
+    for (const snapshot of [schema12.checkpoint, schema12.workspace]) {
+      snapshot.protocolVersion = MODELING_WORKSPACE_PROTOCOL_VERSION;
+      snapshot.workspaceSchemaVersion = MODELING_WORKSPACE_SCHEMA_VERSION;
+      // Reality Assets were introduced by Workspace 1.3, so a released 1.2
+      // file legitimately has no catalog field at all.
+      delete snapshot.realityAssets;
+    }
+
+    const migrated = serializer.deserialize(schema12);
+    expect(migrated).toMatchObject({
+      protocolVersion: "1.3",
+      workspaceSchemaVersion: "1.4",
+      checkpoint: { protocolVersion: "1.3", workspaceSchemaVersion: "1.4" },
+      workspace: { protocolVersion: "1.3", workspaceSchemaVersion: "1.4" },
+    });
+    expect(migrated.checkpoint.realityAssets).toEqual([]);
+    expect(migrated.workspace.realityAssets).toEqual([]);
+  });
+
   it("round-trips normalized Maps, history, resources, bindings, IDs and event cursors", () => {
     const store = new WorkspaceStore({ clock: () => 500 });
     store.apply(workspaceBatch(store, "setup", [{

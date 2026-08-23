@@ -3,6 +3,7 @@ import { DEFAULT_COMPONENT_REGISTRY, deterministicDigest } from "../../workspace
 import { WorkspaceProjectSerializer } from "../../workspace/persistence";
 import {
   WORKSPACE_PROTOCOL_VERSION,
+  WORKSPACE_SCHEMA_VERSION,
   prepareComponentRecipe,
   type WorkspaceOperation,
 } from "../../workspace/protocol";
@@ -143,8 +144,8 @@ describe("Workspace resize migration", () => {
     expect(() => serializer.deserialize(mixedVersion)).toThrow(/versions disagree/);
 
     const migrated = serializer.deserialize(legacy);
-    expect(migrated.protocolVersion).toBe("1.3");
-    expect(migrated.workspaceSchemaVersion).toBe("1.3");
+    expect(migrated.protocolVersion).toBe(WORKSPACE_PROTOCOL_VERSION);
+    expect(migrated.workspaceSchemaVersion).toBe(WORKSPACE_SCHEMA_VERSION);
     const reopened = serializer.openStore(migrated);
     expect(reopened.getState().components.get("CMP_000001")).toMatchObject({
       type: oldRef,

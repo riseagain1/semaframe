@@ -94,6 +94,7 @@ import {
   type WorkspaceRenderComponent,
 } from "../workspace/renderer/contracts";
 import {
+  verifyWorkspaceProjectCadEvidence,
   WorkspaceProjectSerializer,
   type WorkspaceProjectFile,
 } from "../workspace/persistence";
@@ -115,10 +116,12 @@ import { buildPhysicsValidationReport } from "../workspace/physics";
 import { buildSemaFrameSpatialGraph } from "../workspace/spatial";
 import {
   deriveParametricBounds,
+  createModelDefinitionCadHandoffPackageInWorker,
   exportModelDefinitionCsgArtifactInWorker,
   exportModelDefinitionToStep,
   exportParametricModelToUsda,
   modelDefinitionCsgCompatibility,
+  modelDefinitionCadHandoffCompatibility,
   modelDefinitionStepCompatibility,
   modelDefinitionRef,
   modelDefinitionToOpenUsdDocument,
@@ -742,6 +745,7 @@ export default function App() {
         }
         const raw = await file.text();
         const project = workspaceSerializerRef.current.deserialize(raw);
+        await verifyWorkspaceProjectCadEvidence(project);
         const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
         const restoredName = file.name.replace(/\.semaframe\.json$|\.json$/i, "");
         await stopAgentForProjectChange("project_opened");
@@ -799,6 +803,7 @@ export default function App() {
         const recovered = JSON.parse(raw) as { version?: number; projectName?: string; project?: WorkspaceProjectFile };
         if (recovered.version !== 1 || !recovered.project) throw new Error("Recovery snapshot is incomplete or retired.");
         const project = workspaceSerializerRef.current.deserialize(recovered.project);
+        await verifyWorkspaceProjectCadEvidence(project);
         const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
         await stopAgentForProjectChange("recovery_restored");
         workspaceStoreRef.current = nextWorkspaceStore;
@@ -1691,6 +1696,44 @@ export default function App() {
     });
     if (!result.started) {
       notice(`${result.activeLabel} is already running. Wait for it to finish before starting STEP export.`, "warning");
+      return false;
+    }
+    return result.value;
+  }, [notice]);
+
+  const exportWorkspaceModelCadHandoff = useCallback(async (
+    requested: ModelDefinition,
+  ): Promise<boolean> => {
+    const result = await workspaceModelExportGateRef.current.run("CAD handoff export", async () => {
+      try {
+        const key = `${requested.modelId}@${requested.version}`;
+        const definition = workspaceStoreRef.current?.getState().modelDefinitions.get(key);
+        if (!definition || definition.digest !== requested.digest) {
+          throw new Error(`${key} is no longer the published model shown in this panel.`);
+        }
+        const compatibility = modelDefinitionCadHandoffCompatibility(definition);
+        if (!compatibility.supported) {
+          throw new Error(compatibility.reason ?? "This model is outside the exact CAD handoff subset.");
+        }
+        const exported = await createModelDefinitionCadHandoffPackageInWorker(definition);
+        downloadArtifact(
+          `${definition.modelId}-${definition.version}`,
+          "cad-handoff.zip",
+          [binaryBlobPart(exported.archive.bytes)],
+          exported.archive.mediaType,
+        );
+        notice(
+          `Exported verified AP242 CAD handoff · ${exported.report.export.partCount} separate solid${exported.report.export.partCount === 1 ? "" : "s"} · OCCT round-trip passed.`,
+          "success",
+        );
+        return true;
+      } catch (error) {
+        notice(`Couldn’t export CAD handoff: ${friendlyError(error)}`, "error");
+        return false;
+      }
+    });
+    if (!result.started) {
+      notice(`${result.activeLabel} is already running. Wait for it to finish before starting CAD handoff export.`, "warning");
       return false;
     }
     return result.value;
@@ -2831,7 +2874,7 @@ export default function App() {
       .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
   }, [selectedComponentId, workspace]);
   const workspaceRealityProxyOptions = useMemo(() => [...workspace.components.values()]
-    .filter((component) => ["spatial-primitive", "spatial-entity", "model-assembly"].includes(component.type.typeId)
+    .filter((component) => ["spatial-primitive", "cad-part", "spatial-entity", "model-assembly"].includes(component.type.typeId)
       && component.placement.space === "world3d"
       && component.id !== selectedComponentId)
     .map((component) => ({ id: component.id, label: component.label }))
@@ -2868,6 +2911,7 @@ export default function App() {
     const included = new Map([...workspace.components].filter(([, component]) =>
       component.type.typeId === "stage-3d"
       || component.type.typeId === "model-assembly"
+      || component.type.typeId === "cad-part"
       || component.type.typeId === "spatial-primitive"
       || component.type.typeId === "spatial-entity"
       || component.type.typeId === "gaussian-splat"));
@@ -2946,13 +2990,25 @@ export default function App() {
     unavailableReason: (definition) => modelDefinitionCsgCompatibility(definition).reason
       ?? "This model is outside the OBJ export subset.",
   }, {
+    id: "cad-handoff",
+    label: "CAD package",
+    onExport: exportWorkspaceModelCadHandoff,
+    isAvailable: (definition) => modelDefinitionCadHandoffCompatibility(definition).supported,
+    unavailableReason: (definition) => modelDefinitionCadHandoffCompatibility(definition).reason
+      ?? "This model is outside the exact CAD handoff subset.",
+  }, {
     id: "cad-step",
     label: "STEP",
     onExport: exportWorkspaceModelStep,
     isAvailable: (definition) => modelDefinitionStepCompatibility(definition).supported,
     unavailableReason: (definition) => modelDefinitionStepCompatibility(definition).reason
       ?? "This model is outside the STEP v1 subset.",
-  }], [exportWorkspaceModel, exportWorkspaceModelMesh, exportWorkspaceModelStep]);
+  }], [
+    exportWorkspaceModel,
+    exportWorkspaceModelCadHandoff,
+    exportWorkspaceModelMesh,
+    exportWorkspaceModelStep,
+  ]);
   const bindingDiagnostics = workspaceSnapshot.bindingDiagnostics ?? [];
   const workspaceBindingTargets = useMemo(() => workspaceSnapshot.components.flatMap((component) => {
     const manifest = workspaceStoreRef.current?.getComponentManifest(component.type.typeId, component.type.version);

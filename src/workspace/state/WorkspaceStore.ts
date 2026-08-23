@@ -32,6 +32,7 @@ import {
   type JSONObject,
   type JSONValue,
   type World3DPlacement,
+  bindablePropsForManifest,
   resizePolicyForPlacement,
 } from "../components/componentTypes";
 import { stableStringify } from "../components/manifestDigest";
@@ -66,7 +67,13 @@ import {
   instantiateModelDefinition,
   modelDefinitionKey,
 } from "../modeling/modelDefinitions";
+import { assertCadAssemblyMates } from "../modeling/cadAssembly";
 import { parseParametricPrimitive } from "../modeling/parametricGeometry";
+import {
+  cadPartDefinitionDigest,
+  parseCadEvaluationEvidence,
+  parseCadPartDefinition,
+} from "../modeling/cad";
 import {
   LEGACY_WORKSPACE_PROTOCOL_VERSION,
   LEGACY_WORKSPACE_SCHEMA_VERSION,
@@ -75,6 +82,7 @@ import {
   MAX_WORKSPACE_OPERATIONS,
   PREVIOUS_WORKSPACE_PROTOCOL_VERSION,
   PREVIOUS_WORKSPACE_SCHEMA_VERSION,
+  REALITY_WORKSPACE_SCHEMA_VERSION,
   WORKSPACE_PROTOCOL_VERSION,
   WORKSPACE_SCHEMA_VERSION,
   type WorkspaceActor,
@@ -245,6 +253,7 @@ const WORKSPACE_SPATIAL_ENTITY_KINDS = new Set([
 const MOVABLE_SPATIAL_TYPE_IDS = new Set([
   "spatial-entity",
   "spatial-primitive",
+  "cad-part",
   "model-assembly",
 ]);
 
@@ -438,6 +447,44 @@ function assertSpatialAssetProps(manifest: ComponentManifest, props: JSONObject)
     throw new WorkspaceStoreError(
       `Asset ${asset.assetId} has kind ${asset.kind}; spatial entity declares ${String(entityKind)}`,
       "asset_kind_mismatch",
+    );
+  }
+}
+
+function assertCadPartProps(manifest: ComponentManifest, props: JSONObject): void {
+  if (manifest.typeId !== "cad-part") return;
+  try {
+    const definition = parseCadPartDefinition(props.definition);
+    const digest = cadPartDefinitionDigest(definition);
+    if (props.definitionDigest !== digest) {
+      throw new WorkspaceStoreError(
+        `CAD definition digest mismatch: expected ${digest}`,
+        "cad_definition_digest_mismatch",
+      );
+    }
+    if (definition.activeBodyIds.length === 0) {
+      if (props.evaluation !== null) {
+        throw new WorkspaceStoreError(
+          "An empty CAD document cannot retain stale evaluation evidence",
+          "cad_evidence_mismatch",
+        );
+      }
+      return;
+    }
+    if (props.evaluation === null || props.evaluation === undefined) {
+      throw new WorkspaceStoreError(
+        "A non-empty CAD document requires matching OCCT evaluation evidence in the same atomic update",
+        "cad_evaluation_required",
+      );
+    }
+    parseCadEvaluationEvidence(props.evaluation, definition);
+  } catch (error) {
+    if (error instanceof WorkspaceStoreError) throw error;
+    throw new WorkspaceStoreError(
+      error instanceof Error ? error.message : String(error),
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code: unknown }).code)
+        : "invalid_cad_part",
     );
   }
 }
@@ -1037,6 +1084,7 @@ export function migrateWorkspaceStateToCurrent(
     input.workspaceSchemaVersion !== LEGACY_WORKSPACE_SCHEMA_VERSION
     && input.workspaceSchemaVersion !== PREVIOUS_WORKSPACE_SCHEMA_VERSION
     && input.workspaceSchemaVersion !== MODELING_WORKSPACE_SCHEMA_VERSION
+    && input.workspaceSchemaVersion !== REALITY_WORKSPACE_SCHEMA_VERSION
     && input.workspaceSchemaVersion !== WORKSPACE_SCHEMA_VERSION
   ) {
     throw new WorkspaceStoreError(
@@ -1044,9 +1092,25 @@ export function migrateWorkspaceStateToCurrent(
       "schema_version_mismatch",
     );
   }
-  if (input.protocolVersion !== input.workspaceSchemaVersion) {
+  const supportedVersionPair = (
+    input.protocolVersion === LEGACY_WORKSPACE_PROTOCOL_VERSION
+      && input.workspaceSchemaVersion === LEGACY_WORKSPACE_SCHEMA_VERSION
+  ) || (
+    input.protocolVersion === PREVIOUS_WORKSPACE_PROTOCOL_VERSION
+      && input.workspaceSchemaVersion === PREVIOUS_WORKSPACE_SCHEMA_VERSION
+  ) || (
+    input.protocolVersion === MODELING_WORKSPACE_PROTOCOL_VERSION
+      && input.workspaceSchemaVersion === MODELING_WORKSPACE_SCHEMA_VERSION
+  ) || (
+    input.protocolVersion === WORKSPACE_PROTOCOL_VERSION
+      && (
+        input.workspaceSchemaVersion === REALITY_WORKSPACE_SCHEMA_VERSION
+        || input.workspaceSchemaVersion === WORKSPACE_SCHEMA_VERSION
+      )
+  );
+  if (!supportedVersionPair) {
     throw new WorkspaceStoreError(
-      `Workspace protocol ${input.protocolVersion} and schema ${input.workspaceSchemaVersion} do not match`,
+      `Workspace protocol ${input.protocolVersion} and schema ${input.workspaceSchemaVersion} are not a supported pair`,
       "schema_version_mismatch",
     );
   }
@@ -1922,6 +1986,7 @@ export class WorkspaceStore {
         registry.assertProps(operation.component_type, props);
         normalizeWebPanelProps(manifest, props);
         assertSpatialAssetProps(manifest, props);
+        assertCadPartProps(manifest, props);
         assertRealityAssetComponentProps(state, manifest, operation.id, props);
         registry.assertDurableState(operation.component_type, durableState);
         if (operation.parent_id && !state.components.has(operation.parent_id)) {
@@ -1985,6 +2050,7 @@ export class WorkspaceStore {
           registry.assertProps(component.type, props);
           normalizeWebPanelProps(manifest, props);
           assertSpatialAssetProps(manifest, props);
+          assertCadPartProps(manifest, props);
           assertRealityAssetComponentProps(state, manifest, component.id, props);
           if (manifest.typeId === "web-panel" && operation.patch.props.sourceUrl !== undefined) {
             operation.patch.props.sourceUrl = props.sourceUrl;
@@ -2465,8 +2531,11 @@ export class WorkspaceStore {
             "resize_requires_resize_component",
           );
         }
-        if (!manifest.writableProps.includes(operation.binding.targetProp)) {
-          throw new WorkspaceStoreError(`Property ${operation.binding.targetProp} is not writable on ${manifest.typeId}`, "property_not_writable");
+        if (!bindablePropsForManifest(manifest).includes(operation.binding.targetProp)) {
+          throw new WorkspaceStoreError(
+            `Property ${operation.binding.targetProp} is not bindable on ${manifest.typeId}`,
+            "property_not_bindable",
+          );
         }
         this.assertResourceBindingProjectable(state, component, manifest, operation.binding);
         state.connections.set(operation.binding.id, structuredClone(operation.binding));
@@ -2809,6 +2878,7 @@ export class WorkspaceStore {
       registry.assertProps(component.type, component.props);
       normalizeWebPanelProps(manifest, component.props);
       assertSpatialAssetProps(manifest, component.props);
+      assertCadPartProps(manifest, component.props);
       assertRealityAssetComponentProps(state, manifest, component.id, component.props);
       if (component.type.typeId === "spatial-entity") {
         if (component.props.collision !== undefined && !spatialCollisionConfigFromProps(component.props)) {
@@ -2831,6 +2901,18 @@ export class WorkspaceStore {
           throw new WorkspaceStoreError(
             error instanceof Error ? error.message : String(error),
             "invalid_parametric_geometry",
+          );
+        }
+      }
+      if (component.type.typeId === "model-assembly" && component.props.mates !== undefined) {
+        try {
+          assertCadAssemblyMates(state.components, component);
+        } catch (error) {
+          throw new WorkspaceStoreError(
+            error instanceof Error ? error.message : String(error),
+            error && typeof error === "object" && "code" in error
+              ? String((error as { code: unknown }).code)
+              : "invalid_assembly_mates",
           );
         }
       }
@@ -2933,7 +3015,12 @@ export class WorkspaceStore {
           "resize_requires_resize_component",
         );
       }
-      if (!manifest.writableProps.includes(connection.targetProp)) throw new WorkspaceStoreError(`Binding ${connection.id} targets non-writable prop`, "property_not_writable");
+      if (!bindablePropsForManifest(manifest).includes(connection.targetProp)) {
+        throw new WorkspaceStoreError(
+          `Binding ${connection.id} targets non-bindable prop ${connection.targetProp}`,
+          "property_not_bindable",
+        );
+      }
       return;
     }
     const source = state.components.get(connection.sourceComponentId);
@@ -2992,6 +3079,7 @@ export class WorkspaceStore {
         props: component.props,
         propsSchema: manifest.propsSchema,
         writableProps: manifest.writableProps,
+        bindableProps: bindablePropsForManifest(manifest),
       }],
       resources: new Map([[resource.id, resource]]),
       connections: new Map([[validationBinding.id, validationBinding]]),

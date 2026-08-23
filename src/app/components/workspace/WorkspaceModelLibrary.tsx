@@ -158,7 +158,7 @@ export function WorkspaceModelLibrary({
       <header><strong>Models</strong><span>{definitions.length}</span></header>
       {onCreateExample && <section className="workspace-model-example" aria-labelledby="workspace-model-example-heading">
         <h3 id="workspace-model-example-heading">Start with a complete model</h3>
-        <p>Create a dimensioned workbench assembly, publish it as a reusable definition, then try USDA, STL, OBJ, or STEP export.</p>
+        <p>Create a dimensioned assembly, publish it as a reusable definition, then export OpenUSD, mesh solids, STEP, or a complete CAD handoff package.</p>
         <button type="button" disabled={disabled} onClick={onCreateExample}>Create parametric workbench</button>
       </section>}
       {hierarchyItems.length > 0 && <section className="workspace-model-hierarchy" aria-labelledby="workspace-model-hierarchy-heading">
@@ -186,6 +186,8 @@ export function WorkspaceModelLibrary({
                 ? "Stage"
                 : item.typeId === "model-assembly"
                   ? "Assembly"
+                  : item.typeId === "cad-part"
+                    ? "Editable CAD part"
                   : item.typeId === "spatial-primitive"
                     ? "Parametric part"
                     : "Asset"}</small>

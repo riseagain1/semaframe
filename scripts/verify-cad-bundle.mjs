@@ -37,7 +37,10 @@ try {
       rollupOptions: {
         // Normal application mode is intentional. Vite library mode uses a
         // different asset naming policy and is not SemaFrame's deployment.
-        input: resolve(workspaceRoot, "src/workspace/modeling/cadWorkerClient.ts"),
+        input: {
+          cad: resolve(workspaceRoot, "src/workspace/modeling/cadWorkerClient.ts"),
+          handoff: resolve(workspaceRoot, "src/workspace/modeling/cadHandoffWorkerClient.ts"),
+        },
       },
     },
   });
@@ -45,6 +48,7 @@ try {
   const files = await filesBelow(outputDirectory);
   const wasmFiles = files.filter(({ relative }) => relative.endsWith(".wasm"));
   const workerFiles = files.filter(({ relative }) => /cadKernel\.worker-[\w-]+\.js$/u.test(relative));
+  const handoffWorkerFiles = files.filter(({ relative }) => /cadHandoff\.worker-[\w-]+\.js$/u.test(relative));
 
   invariant(wasmFiles.length === 1, `expected one external WASM asset, found ${wasmFiles.length}`);
   invariant(
@@ -57,11 +61,16 @@ try {
   );
   invariant(workerFiles.length === 1, `expected one CAD Worker chunk, found ${workerFiles.length}`);
   invariant(
+    handoffWorkerFiles.length === 1,
+    `expected one CAD handoff Worker chunk, found ${handoffWorkerFiles.length}`,
+  );
+  invariant(
     workerFiles[0].bytes < 2_000_000,
     `CAD Worker is ${workerFiles[0].bytes} bytes; OCCT WASM was probably inlined`,
   );
 
   const workerSource = await readFile(workerFiles[0].absolute, "utf8");
+  const handoffWorkerSource = await readFile(handoffWorkerFiles[0].absolute, "utf8");
   invariant(
     !workerSource.includes("data:application/wasm;base64,"),
     "CAD Worker contains an inlined WASM data URL",
@@ -70,9 +79,17 @@ try {
     workerSource.includes(wasmFiles[0].relative.split("/").at(-1)),
     "CAD Worker does not reference the emitted fingerprinted WASM asset",
   );
+  invariant(
+    handoffWorkerFiles[0].bytes < 2_000_000,
+    `CAD handoff Worker is ${handoffWorkerFiles[0].bytes} bytes; OCCT WASM was probably inlined`,
+  );
+  invariant(
+    !handoffWorkerSource.includes("data:application/wasm;base64,"),
+    "CAD handoff Worker contains an inlined WASM data URL",
+  );
 
   console.log(
-    `CAD bundle verified: ${workerFiles[0].relative} (${workerFiles[0].bytes} bytes), ${wasmFiles[0].relative} (${wasmFiles[0].bytes} bytes)`,
+    `CAD bundle verified: ${workerFiles[0].relative} (${workerFiles[0].bytes} bytes), ${handoffWorkerFiles[0].relative} (${handoffWorkerFiles[0].bytes} bytes), ${wasmFiles[0].relative} (${wasmFiles[0].bytes} bytes)`,
   );
 } finally {
   await rm(outputDirectory, { recursive: true, force: true });

@@ -1,8 +1,12 @@
 import type { ComponentPlacement, Vec3 } from "../components/componentTypes";
+import type {
+  CadEvaluationEvidenceV1,
+  CadPartDefinitionV1,
+} from "../modeling/cad";
 import type { ModelDefinitionRef } from "../modeling/modelDefinitions";
 import type { ParametricCollider, ParametricPrimitive } from "../modeling/parametricGeometry";
 
-export const SEMAFRAME_SPATIAL_GRAPH_VERSION = "3.1" as const;
+export const SEMAFRAME_SPATIAL_GRAPH_VERSION = "3.2" as const;
 export const MAX_WORKSPACE_SPATIAL_NODES = 2_000;
 
 export type SpatialCollisionRole = "solid" | "trigger" | "none";
@@ -54,7 +58,7 @@ export type SpatialBounds = Readonly<{
 
 export type SpatialResolvedCollisionPart = Readonly<{
   id: string;
-  source: "asset_bounds" | "parametric_bounds" | "explicit_box" | "compound_part";
+  source: "asset_bounds" | "parametric_bounds" | "cad_bounds" | "explicit_box" | "compound_part";
   center: Vec3;
   halfExtents: Vec3;
   axes: readonly [Vec3, Vec3, Vec3];
@@ -65,7 +69,7 @@ export type SpatialResolvedCollision = Readonly<{
   enabled: boolean;
   role: SpatialCollisionRole;
   shape: "box" | "compound";
-  source: "asset_bounds" | "parametric_bounds" | "explicit_box" | "compound";
+  source: "asset_bounds" | "parametric_bounds" | "cad_bounds" | "explicit_box" | "compound";
   margin: number;
   parts: readonly SpatialResolvedCollisionPart[];
   /** Backwards-compatible envelope fields; exact tests use parts. */
@@ -106,6 +110,25 @@ export type SpatialParametricGeometrySummary = Readonly<{
   material?: SpatialParametricMaterialSummary;
 }>;
 
+/** Exact compact evidence from the OCCT evaluation of one editable CAD document. */
+export type SpatialCadGeometrySummary = Readonly<{
+  definitionDigest: string;
+  evaluatorVersion: string;
+  exactness: "brep";
+  bodyCount: number;
+  localBounds: SpatialBounds;
+  volumeM3: number;
+  surfaceAreaM2: number;
+  /** Volume-weighted local center of mass from the evaluated OCCT solids. */
+  centerOfMassM: Vec3;
+  diagnostics: readonly Readonly<{
+    code: string;
+    severity: "info" | "warning" | "error";
+    message: string;
+    featureId?: string;
+  }>[];
+}>;
+
 export type SpatialRealitySummary = Readonly<{
   assetId?: string;
   digest?: string;
@@ -127,10 +150,11 @@ export type SemaFrameSpatialGraphNode = Readonly<{
   primPath: string;
   label: string;
   parentId?: string;
-  nodeKind: "asset" | "primitive" | "assembly" | "reality";
+  nodeKind: "asset" | "primitive" | "cad" | "assembly" | "reality";
   assetId?: string;
   entityKind: string;
   geometry?: SpatialParametricGeometrySummary;
+  cad?: SpatialCadGeometrySummary;
   assembly?: SpatialAssemblySummary;
   reality?: SpatialRealitySummary;
   assemblyAncestry: readonly SpatialAssemblyAncestor[];
@@ -192,6 +216,11 @@ export type SpatialPlacementCandidate = Readonly<{
   assetId?: string;
   entityKind?: string;
   geometry?: ParametricPrimitive;
+  /** Host-evaluated, compact CAD input; external callers provide only the definition. */
+  cad?: Readonly<{
+    definition: CadPartDefinitionV1;
+    evaluation: CadEvaluationEvidenceV1;
+  }>;
   placement: ComponentPlacement;
   collision?: SpatialCollisionConfig;
 }>;

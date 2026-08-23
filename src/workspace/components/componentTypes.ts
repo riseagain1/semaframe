@@ -236,10 +236,23 @@ export type ComponentManifest = {
   defaultProps: JSONObject;
   defaultDurableState: JSONObject;
   writableProps: string[];
+  /**
+   * Props that resource projections may override without mutating canonical
+   * component state. Defaults to writableProps when omitted. Host-managed
+   * atomic fields should remain writable for authored updates but be omitted
+   * here.
+   */
+  bindableProps?: string[];
   actions: Record<string, ComponentActionManifest>;
   events: Record<string, JSONSchema>;
   requiredPermissions: string[];
 };
+
+export function bindablePropsForManifest(
+  manifest: Pick<ComponentManifest, "writableProps" | "bindableProps">,
+): readonly string[] {
+  return manifest.bindableProps ?? manifest.writableProps;
+}
 
 export type ComponentLocks = {
   placement: boolean;

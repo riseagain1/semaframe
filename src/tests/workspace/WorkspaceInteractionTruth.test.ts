@@ -451,7 +451,7 @@ describe("truthful built-in interactions", () => {
       op_id: "upgrade_bound_panel",
       id: "BOUND_PANEL",
       component_type: registry.ref("panel"),
-    }]))).toThrow(/non-writable prop/i);
+    }]))).toThrow(/non-bindable prop/i);
     expect(store.getRevision()).toBe(revision);
     expect(store.getState().components.get("BOUND_PANEL")?.type)
       .toEqual(registry.ref("panel", "1.2.0"));

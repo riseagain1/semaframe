@@ -12,7 +12,9 @@ import type {
   CadTransform,
   CadValidationResult,
   CadKernelErrorCode,
+  CadPartKernelEvaluationOptions,
 } from "./cadKernel";
+import type { CadPartDefinitionV1, CadPartEvaluationResultV1 } from "./cad";
 
 export type CadWorkerMethod =
   | "init"
@@ -24,6 +26,7 @@ export type CadWorkerMethod =
   | "validate"
   | "measure"
   | "tessellate"
+  | "evaluatePart"
   | "exportStep"
   | "release"
   | "dispose";
@@ -43,6 +46,7 @@ export type CadWorkerArguments = Readonly<{
   validate: readonly [CadShapeHandle, CadOperationOptions?];
   measure: readonly [CadShapeHandle, number?, CadOperationOptions?];
   tessellate: readonly [CadShapeHandle, CadTessellationOptions?];
+  evaluatePart: readonly [CadPartDefinitionV1, CadPartKernelEvaluationOptions?];
   exportStep: readonly [CadShapeHandle, string?, CadOperationOptions?];
   release: readonly [CadShapeHandle];
   dispose: readonly [];
@@ -58,6 +62,7 @@ export type CadWorkerResults = Readonly<{
   validate: CadValidationResult;
   measure: CadMassProperties;
   tessellate: CadIndexedMesh;
+  evaluatePart: CadPartEvaluationResultV1;
   exportStep: CadStepExport;
   release: undefined;
   dispose: undefined;

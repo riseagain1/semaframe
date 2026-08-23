@@ -24,6 +24,7 @@ export type ResourceBindingDiagnosticCode =
   | "stale_snapshot"
   | "duplicate_target"
   | "target_not_writable"
+  | "target_not_bindable"
   | "missing_component_schema"
   | "source_path_not_found"
   | "invalid_transform"
@@ -45,6 +46,7 @@ export type ResourceBindingComponent = Readonly<{
   props: Readonly<JSONObject>;
   propsSchema?: JSONSchema;
   writableProps?: readonly string[];
+  bindableProps?: readonly string[];
 }>;
 
 export type ResourceBindingResolution = Readonly<{
@@ -302,11 +304,12 @@ export function resolveWorkspaceResourceBindings(input: Readonly<{
       ));
       continue;
     }
-    if (component.writableProps && !component.writableProps.includes(binding.targetProp)) {
+    const bindableProps = component.bindableProps ?? component.writableProps;
+    if (bindableProps && !bindableProps.includes(binding.targetProp)) {
       diagnostics.push(diagnostic(
         binding,
-        "target_not_writable",
-        `Property ${binding.targetProp} is not writable on ${binding.componentId}`,
+        "target_not_bindable",
+        `Property ${binding.targetProp} is not bindable on ${binding.componentId}`,
       ));
       continue;
     }

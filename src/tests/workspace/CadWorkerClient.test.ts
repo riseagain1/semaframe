@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { CadKernelError } from "../../workspace/modeling/cadKernel";
+import { defaultCadPartDefinition } from "../../workspace/modeling/cad";
 import {
   type CadWorkerFactory,
   createCadWorkerKernel,
@@ -17,8 +18,10 @@ class FakeWorker {
   onmessageerror: ((event: MessageEvent) => void) | null = null;
   terminated = false;
   ignoreAfterInitialization = false;
+  readonly requests: CadWorkerRequest[] = [];
 
   postMessage(request: CadWorkerRequest): void {
+    this.requests.push(request);
     if (this.terminated) throw new Error("worker terminated");
     if (request.method !== "init" && this.ignoreAfterInitialization) return;
     queueMicrotask(() => {
@@ -76,5 +79,28 @@ describe("CAD worker hard-stop boundary", () => {
     ));
     expect(error.code).toBe("operation_timeout");
     expect(worker.terminated).toBe(true);
+  });
+
+  it("wires CAD part evaluation without cloning AbortSignal into the worker", async () => {
+    const worker = new FakeWorker();
+    const kernel = await createCadWorkerKernel({ workerFactory: factory(worker) });
+    const controller = new AbortController();
+    await kernel.evaluatePart(defaultCadPartDefinition(), {
+      signal: controller.signal,
+      budgetMs: 1_000,
+      linearDeflectionM: 0.01,
+      angularDeflectionRad: 0.1,
+      includeMeshes: false,
+    });
+
+    const request = worker.requests.find((candidate) => candidate.method === "evaluatePart");
+    expect(request?.args[1]).toEqual({
+      budgetMs: 1_000,
+      linearDeflectionM: 0.01,
+      angularDeflectionRad: 0.1,
+      includeMeshes: false,
+    });
+    expect(request?.args[1]).not.toHaveProperty("signal");
+    await kernel.dispose();
   });
 });

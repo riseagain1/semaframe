@@ -80,6 +80,8 @@ async function dispatch(request: CadWorkerRequest): Promise<unknown> {
       return kernel.measure(...request.args as Parameters<CadKernel["measure"]>);
     case "tessellate":
       return kernel.tessellate(...request.args as Parameters<CadKernel["tessellate"]>);
+    case "evaluatePart":
+      return kernel.evaluatePart(...request.args as Parameters<CadKernel["evaluatePart"]>);
     case "exportStep":
       return kernel.exportStep(...request.args as Parameters<CadKernel["exportStep"]>);
     case "release":
@@ -101,13 +103,24 @@ workerScope.onmessage = (event): void => {
         method: request.method,
         value: value as never,
       };
-      const transfer = request.method === "tessellate" && value !== null && typeof value === "object"
-        ? [
+      let transfer: Transferable[] | undefined;
+      if (request.method === "tessellate" && value !== null && typeof value === "object") {
+        transfer = [
           (value as { positions: Float32Array }).positions.buffer,
           (value as { normals: Float32Array }).normals.buffer,
           (value as { indices: Uint32Array }).indices.buffer,
-        ]
-        : undefined;
+        ];
+      } else if (request.method === "evaluatePart" && value !== null && typeof value === "object") {
+        transfer = (value as { meshes: readonly { mesh: {
+          positions: Float32Array;
+          normals: Float32Array;
+          indices: Uint32Array;
+        } }[] }).meshes.flatMap(({ mesh }) => [
+          mesh.positions.buffer,
+          mesh.normals.buffer,
+          mesh.indices.buffer,
+        ]);
+      }
       workerScope.postMessage(response, transfer);
     },
     (error: unknown) => {

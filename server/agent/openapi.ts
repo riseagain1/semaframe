@@ -1,5 +1,6 @@
 import workspaceProtocolSchema from "../../src/workspace/protocol/workspaceProtocol.schema.json";
 import {
+  WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
@@ -557,7 +558,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/models/inspect": {
         post: {
           operationId: "inspect_workspace_model",
-          summary: "Inspect one exact digest-pinned reusable model and its instance ID-map keys.",
+          summary: `Inspect one complete digest-pinned reusable model, its instance ID-map keys, and ModelDefinition 2.0 metadata; responses above ${WORKSPACE_MODEL_INSPECTION_MAX_BYTES} encoded bytes fail without truncation.`,
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
@@ -602,7 +603,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/space/query": {
         post: {
           operationId: "query_spatial_placement",
-          summary: "Preflight an asset-bound, explicit-box, or compound collision-aware world3d placement without mutation.",
+          summary: "Preflight an asset, parametric primitive, or host-evaluated semantic CAD world3d placement without mutation.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
@@ -636,7 +637,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/physics/placement/query": {
         post: {
           operationId: "query_stable_placement",
-          summary: "Preflight collision and center-of-mass stability for a world3d placement without mutation.",
+          summary: "Preflight collision and center-of-mass stability for an asset, primitive, or host-evaluated semantic CAD world3d placement without mutation.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
