@@ -216,8 +216,16 @@ describe("Agent Gateway browser boundary", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(payload.restEndpoint).toBe(`${PUBLIC_URL}/v1`);
-    expect(String(payload.mcpConfig)).toContain('"--silent"');
-    expect(String(payload.mcpConfig)).toContain('"/workspace/SemaFrame"');
+    const mcpConfig = JSON.parse(String(payload.mcpConfig)) as {
+      mcpServers: { semaframe: { command: string; args: string[]; cwd?: string } };
+    };
+    expect(mcpConfig.mcpServers.semaframe.command).toBe(process.execPath);
+    expect(mcpConfig.mcpServers.semaframe.args).toEqual([
+      "--import",
+      "file:///workspace/SemaFrame/node_modules/tsx/dist/loader.mjs",
+      "/workspace/SemaFrame/scripts/agent-mcp.ts",
+    ]);
+    expect(mcpConfig.mcpServers.semaframe.cwd).toBeUndefined();
     expect(String(payload.mcpConfig)).toContain(String(payload.connectionUrl));
     expect(String(payload.mcpConfig)).not.toContain(String(payload.pairingBearer));
     expect(String(payload.restConfig)).toContain(String(payload.restEndpoint));

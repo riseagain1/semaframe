@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   Client,
 } from "@modelcontextprotocol/client";
@@ -62,8 +65,12 @@ async function closeServer(server: Server): Promise<void> {
 
 function stdioTransport(connectionUrl: string): StdioClientTransport {
   return new StdioClientTransport({
-    command: process.platform === "win32" ? "npm.cmd" : "npm",
-    args: ["--silent", "--prefix", PROJECT_ROOT, "run", "agent:mcp"],
+    command: process.execPath,
+    args: [
+      "--import",
+      pathToFileURL(join(PROJECT_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href,
+      join(PROJECT_ROOT, "scripts", "agent-mcp.ts"),
+    ],
     cwd: PROJECT_ROOT,
     env: {
       ...getDefaultEnvironment(),
@@ -87,7 +94,10 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
   throw new Error(`stdio bridge process ${pid} did not exit within ${timeoutMs} ms`);
 }
 
-async function setup(): Promise<LiveRig & { connectionUrl: string; browserConnectionId: string }> {
+async function setup(options: { commandTimeoutMs?: number } = {}): Promise<LiveRig & {
+  connectionUrl: string;
+  browserConnectionId: string;
+}> {
   let handler: AgentGatewayNodeHandler | undefined;
   const server = createServer((request, response) => {
     if (!handler) {
@@ -103,9 +113,9 @@ async function setup(): Promise<LiveRig & { connectionUrl: string; browserConnec
   const gateway = new AgentGateway({
     publicBaseUrl,
     workspaceRoot: PROJECT_ROOT,
-    commandTimeoutMs: 2_000,
+    commandTimeoutMs: options.commandTimeoutMs ?? 2_000,
     pollTimeoutMs: 10,
-    // Spawning npm + the stdio bridge can take several seconds when the full
+    // Spawning the stdio bridge can take several seconds when the full
     // Vitest suite is saturating the machine. Keep this test-only browser
     // authority alive long enough to exercise the bridge deterministically.
     browserTtlMs: 30_000,
@@ -301,9 +311,10 @@ describe("Agent MCP stdio transport bridge", () => {
     let requestClosed!: () => void;
     const requestSeen = new Promise<void>((resolve) => { sawRequest = resolve; });
     const closedRequest = new Promise<void>((resolve) => { requestClosed = resolve; });
-    const server = createServer((request, _response) => {
-      sawRequest();
-      request.once("aborted", requestClosed);
+    const server = createServer((request, response) => {
+      request.once("end", sawRequest);
+      request.resume();
+      response.once("close", requestClosed);
       request.socket.once("close", requestClosed);
       // Intentionally never answer: shutdown must abort this fetch rather than
       // waiting for the SDK's normal network timeout.
@@ -336,4 +347,72 @@ describe("Agent MCP stdio transport bridge", () => {
     ]);
     await pendingCallSettled;
   }, 15_000);
+
+  it("aborts a hanging tool call on an already-connected upstream before exit", async () => {
+    const rig = await setup({ commandTimeoutMs: 60_000 });
+    const transport = stdioTransport(rig.connectionUrl);
+    const client = new Client({ name: "stdio-connected-shutdown-test", version: "1.0.0" });
+    clients.push(client);
+    await client.connect(transport);
+
+    const claimResult = await client.callTool({
+      name: "get_workspace_instructions",
+      arguments: { client_id: "connected-shutdown-client", client_name: "Connected Shutdown Client" },
+    });
+    const claim = (claimResult.structuredContent as {
+      error: { details: { approval_token: string; claim_id: string } };
+    }).error;
+    rig.gateway.approveClaim(claim.details.claim_id);
+
+    const pendingCall = client.callTool({
+      name: "get_workspace_instructions",
+      arguments: { approval_token: claim.details.approval_token },
+    });
+    const pendingCallSettled = pendingCall.catch(() => undefined);
+    await pollCommand(rig.gateway, rig.browserConnectionId);
+
+    const pid = transport.pid;
+    expect(pid).toBeTypeOf("number");
+    process.kill(pid!, "SIGTERM");
+    await waitForProcessExit(pid!, 3_000);
+    await Promise.race([
+      pendingCallSettled,
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error("Connected upstream tool call did not settle during shutdown")),
+        3_000,
+      )),
+    ]);
+  }, 15_000);
+
+  it("exits when an MCP host closes stdin without sending a signal", async () => {
+    const child = spawn(process.execPath, [
+      "--import",
+      pathToFileURL(join(PROJECT_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href,
+      join(PROJECT_ROOT, "scripts", "agent-mcp.ts"),
+    ], {
+      cwd: PROJECT_ROOT,
+      env: {
+        ...getDefaultEnvironment(),
+        SEMAFRAME_AGENT_MCP_URL: "http://127.0.0.1:9/mcp/stdio-eof-test",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const pid = child.pid;
+    expect(pid).toBeTypeOf("number");
+    try {
+      const exited = once(child, "exit");
+      child.stdin.end();
+      const [code, signal] = await Promise.race([
+        exited,
+        new Promise<never>((_resolve, reject) => setTimeout(
+          () => reject(new Error("stdio bridge did not exit within 3 seconds of stdin EOF")),
+          3_000,
+        )),
+      ]);
+      expect(signal).toBeNull();
+      expect(code).toBe(0);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  }, 10_000);
 });

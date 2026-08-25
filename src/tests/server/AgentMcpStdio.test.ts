@@ -8,6 +8,8 @@ import {
   StdioClientTransport,
   type StdioServerParameters,
 } from "@modelcontextprotocol/client/stdio";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const PROJECT_ROOT = process.cwd();
@@ -51,8 +53,12 @@ type NegotiationSnapshot = {
 
 function serverParameters(): StdioServerParameters {
   return {
-    command: process.platform === "win32" ? "npm.cmd" : "npm",
-    args: ["--silent", "--prefix", PROJECT_ROOT, "run", "agent:mcp"],
+    command: process.execPath,
+    args: [
+      "--import",
+      pathToFileURL(join(PROJECT_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href,
+      join(PROJECT_ROOT, "scripts", "agent-mcp.ts"),
+    ],
     cwd: PROJECT_ROOT,
     env: {
       ...getDefaultEnvironment(),

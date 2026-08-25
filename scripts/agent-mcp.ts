@@ -46,6 +46,7 @@ let upstreamAttemptClient: Client | undefined;
 let upstreamAttemptTransport: StreamableHTTPClientTransport | undefined;
 let upstreamAttemptAbort: AbortController | undefined;
 let closing = false;
+let closePromise: Promise<void> | undefined;
 
 async function connectUpstream(): Promise<Client> {
   if (upstreamClient) return upstreamClient;
@@ -188,21 +189,32 @@ const handle = serveStdio(
   ),
 );
 
-async function close(): Promise<void> {
-  if (closing) return;
+function close(): Promise<void> {
+  if (closePromise) return closePromise;
   closing = true;
-  const pending = upstreamConnection;
-  const attemptClient = upstreamAttemptClient;
-  const attemptTransport = upstreamAttemptTransport;
-  upstreamAttemptAbort?.abort();
-  await attemptTransport?.close().catch(() => undefined);
-  await attemptClient?.close().catch(() => undefined);
-  await handle.close().catch(() => undefined);
-  await pending?.catch(() => undefined);
-  await upstreamClient?.close().catch(() => undefined);
-  upstreamClient = undefined;
+  closePromise = (async () => {
+    const pending = upstreamConnection;
+    const attemptClient = upstreamAttemptClient;
+    const attemptTransport = upstreamAttemptTransport;
+    const connectedClient = upstreamClient;
+    upstreamClient = undefined;
+    upstreamAttemptAbort?.abort();
+    await attemptTransport?.close().catch(() => undefined);
+    await attemptClient?.close().catch(() => undefined);
+    // Abort an already-connected upstream tool call before asking the stdio
+    // server to drain its matching downstream request.
+    await connectedClient?.close().catch(() => undefined);
+    await handle.close().catch(() => undefined);
+    await pending?.catch(() => undefined);
+  })();
+  return closePromise;
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => { void close(); });
 }
+// Some MCP hosts close the stdio pipe without delivering a signal. Treat EOF
+// as the same shutdown request so an in-flight upstream fetch is never left
+// holding the bridge process open.
+process.stdin.once("end", () => { void close(); });
+process.stdin.once("close", () => { void close(); });

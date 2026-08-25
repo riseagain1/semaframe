@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { DEFAULT_WORKSPACE_AGENT_SCOPES } from "../../src/workspace/agents/contracts";
 import {
   AGENT_GATEWAY_VERSION,
@@ -397,9 +398,16 @@ export class AgentGateway {
       mcpConfig: JSON.stringify({
         mcpServers: {
           "semaframe": {
-            command: "npm",
-            // npm's normal run banner is stdout and would corrupt MCP stdio.
-            args: ["--silent", "--prefix", this.#workspaceRoot, "run", "agent:mcp"],
+            // Launch the bridge itself instead of an npm wrapper. MCP hosts
+            // terminate the configured PID directly; on POSIX npm can exit
+            // without forwarding that signal to its child, leaving an
+            // in-flight upstream request orphaned.
+            command: process.execPath,
+            args: [
+              "--import",
+              pathToFileURL(join(this.#workspaceRoot, "node_modules", "tsx", "dist", "loader.mjs")).href,
+              join(this.#workspaceRoot, "scripts", "agent-mcp.ts"),
+            ],
             env: {
               // The child receives only the non-authorizing offer URL. REST
               // authority is exposed separately and never enters MCP env.
