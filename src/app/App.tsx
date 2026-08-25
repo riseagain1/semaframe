@@ -6,6 +6,7 @@ import {
   type AgentGatewayCommandHandler,
   type AgentGatewayConfig,
   type AgentGatewayStatus,
+  type PhotoReconstructionCapability,
 } from "../agent/AgentGatewayClient";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import {
@@ -130,9 +131,18 @@ import {
 } from "../workspace/modeling";
 import { historyEntriesForStore } from "./workspaceHistory";
 import { safeStorageGet, safeStorageRemove, safeStorageSet } from "./browserStorage";
-import { RealityAssetCompletionLedger } from "./realityAssetCompletion";
+import {
+  assertRealityAssetCandidatePurpose,
+  PhotoReconstructionCancellationTracker,
+  RetainedRealityAssetCandidateError,
+  RealityAssetCompletionLedger,
+  type RealityAssetCandidatePurpose,
+  type RealityAssetCompletionSource,
+  type TrackedPhotoReconstruction,
+} from "./realityAssetCompletion";
 import {
   BrowserAssetVault,
+  digestBlobSha256,
   MemoryAssetVault,
   RealityAssetError,
   preflightRealityAssetInWorker,
@@ -140,6 +150,13 @@ import {
   type RealityAssetCandidate,
   type RealityAssetDescriptor,
 } from "../workspace/assets";
+import {
+  PHOTO_RECONSTRUCTION_LIMITS,
+  PHOTO_RECONSTRUCTION_MEDIA_TYPES,
+  type PhotoReconstructionJobView,
+  type PhotoReconstructionMediaType,
+  type PhotoReconstructionProfile,
+} from "../reconstruction/contracts";
 import type { RealityMeasurementEvent } from "../renderer/reality";
 
 const RECOVERY_KEY = "semaframe-workspace-recovery-v2";
@@ -155,6 +172,7 @@ type AppRealityAssetVault = Readonly<{
 type AppRealityAssetCompletion = Readonly<{
   requestId: string;
   inputRevision: number;
+  purpose: RealityAssetCandidatePurpose;
   descriptor: RealityAssetDescriptor;
   result: JSONObject;
 }>;
@@ -319,6 +337,36 @@ function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : "An unexpected error occurred.";
 }
 
+function reconstructionPhotoMediaType(file: File): PhotoReconstructionMediaType | undefined {
+  const declared = file.type.toLowerCase();
+  if ((PHOTO_RECONSTRUCTION_MEDIA_TYPES as readonly string[]).includes(declared)) {
+    return declared as PhotoReconstructionMediaType;
+  }
+  if (declared === "image/jpg") return "image/jpeg";
+  const extension = file.name.split(".").at(-1)?.toLowerCase();
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  if (extension === "png") return "image/png";
+  if (extension === "webp") return "image/webp";
+  if (extension === "heic") return "image/heic";
+  if (extension === "heif") return "image/heif";
+  return undefined;
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new DOMException("Photo reconstruction cancelled", "AbortError"));
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Photo reconstruction cancelled", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 function latestStatus(entries: WorkspaceHistoryEntry[]): WorkspaceHistoryStatus {
   return entries.at(-1)?.status ?? "ready";
 }
@@ -390,8 +438,15 @@ export default function App() {
   const allowAgentDestructiveRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const realityFileRef = useRef<HTMLInputElement>(null);
+  const photoSetFileRef = useRef<HTMLInputElement>(null);
   const pendingRealityRelinkRef = useRef<string | null>(null);
   const realityImportAbortRef = useRef<AbortController | null>(null);
+  const photoReconstructionAbortRef = useRef<AbortController | null>(null);
+  const activePhotoReconstructionRef = useRef<TrackedPhotoReconstruction | null>(null);
+  const photoReconstructionCancellationRef = useRef(
+    new PhotoReconstructionCancellationTracker<PhotoReconstructionJobView>(),
+  );
+  const appMountedRef = useRef(false);
   const realityVaultLifecycleRef = useRef(0);
   const workspaceUnsubscribeRef = useRef<(() => void) | null>(null);
   const workspaceSerializerRef = useRef(new WorkspaceProjectSerializer(DEFAULT_COMPONENT_REGISTRY));
@@ -435,6 +490,13 @@ export default function App() {
   const [realityAssetAvailability, setRealityAssetAvailability] = useState<Record<string, RealityAssetAvailability>>({});
   const [realityImportStatus, setRealityImportStatus] = useState<string>();
   const [realityImportBusy, setRealityImportBusy] = useState(false);
+  const [photoReconstructionCapability, setPhotoReconstructionCapability] = useState<
+    PhotoReconstructionCapability | "checking"
+  >("checking");
+  const [photoReconstructionProfile, setPhotoReconstructionProfile] = useState<PhotoReconstructionProfile>("balanced");
+  const [photoReconstructionJob, setPhotoReconstructionJob] = useState<PhotoReconstructionJobView>();
+  const [photoReconstructionStatus, setPhotoReconstructionStatus] = useState<string>();
+  const [photoReconstructionBusy, setPhotoReconstructionBusy] = useState(false);
   const [realityMeasurement, setRealityMeasurement] = useState<RealityMeasurementEvent>();
   const [hostFeedRuntime, setHostFeedRuntime] = useState<Record<string, Readonly<{
     refreshing: boolean;
@@ -453,6 +515,29 @@ export default function App() {
   const [realityRenderGeneration, setRealityRenderGeneration] = useState(0);
   const busy = busyCount > 0;
 
+  const confirmTrackedPhotoReconstructionCancellation = useCallback(async (
+    active: TrackedPhotoReconstruction,
+    updateUi = true,
+    clientOverride?: AgentGatewayClient,
+  ): Promise<PhotoReconstructionJobView> => {
+    const client = clientOverride ?? agentGatewayRef.current;
+    if (!client) throw new Error("The local photo reconstruction gateway is unavailable.");
+    const job = await photoReconstructionCancellationRef.current.confirm(
+      active,
+      (tracked) => client.cancelPhotoReconstruction(tracked.jobId, tracked.workspaceId),
+    );
+    const current = activePhotoReconstructionRef.current;
+    if (current?.jobId === active.jobId && current.workspaceId === active.workspaceId) {
+      activePhotoReconstructionRef.current = null;
+      if (updateUi && appMountedRef.current) {
+        setPhotoReconstructionJob(job);
+        setRealityImportBusy(false);
+        setPhotoReconstructionBusy(false);
+      }
+    }
+    return job;
+  }, []);
+
   const advanceWorkspaceGeneration = useCallback(() => {
     hybridCanvasRef.current?.cancelRealityMeasurement();
     setRealityMeasurement(undefined);
@@ -464,26 +549,60 @@ export default function App() {
     hostFeedOnOpenSeenRef.current.clear();
     hostFeedAutomationConsentRef.current.reset();
     realityAssetCompletionLedgerRef.current.clear();
+    const activeReconstruction = activePhotoReconstructionRef.current;
+    photoReconstructionAbortRef.current?.abort();
+    photoReconstructionAbortRef.current = null;
+    if (activeReconstruction) {
+      setPhotoReconstructionStatus("Cancelling the previous photo reconstruction…");
+      void confirmTrackedPhotoReconstructionCancellation(activeReconstruction).then(() => {
+        if (appMountedRef.current) {
+          setPhotoReconstructionStatus("Previous photo reconstruction cancelled and temporary inputs deleted.");
+        }
+      }).catch((error) => {
+        if (appMountedRef.current) {
+          setPhotoReconstructionStatus(
+            `Warning: cancellation could not be confirmed; the previous job remains tracked. ${friendlyError(error)}`,
+          );
+        }
+      });
+    } else {
+      setPhotoReconstructionJob(undefined);
+      setPhotoReconstructionStatus(undefined);
+      setPhotoReconstructionBusy(false);
+    }
     setHostFeedRuntime({});
     setHostFeedAutomationRevision((current) => current + 1);
     workspaceGenerationRef.current += 1;
     setWorkspaceRenderGeneration(workspaceGenerationRef.current);
-  }, []);
+  }, [confirmTrackedPhotoReconstructionCancellation]);
 
   useEffect(() => {
+    appMountedRef.current = true;
     const lifecycle = ++realityVaultLifecycleRef.current;
     return () => {
+      appMountedRef.current = false;
       realityImportAbortRef.current?.abort();
+      photoReconstructionAbortRef.current?.abort();
+      photoReconstructionAbortRef.current = null;
+      const activeReconstruction = activePhotoReconstructionRef.current;
+      const cancellationClient = agentGatewayRef.current;
       // React StrictMode intentionally performs a setup/cleanup/setup cycle.
       // Delay disposal one microtask so the second setup can retain the vault,
       // while a real unmount still closes its database and Worker resources.
       queueMicrotask(() => {
         if (realityVaultLifecycleRef.current === lifecycle) {
+          if (activeReconstruction && cancellationClient) {
+            void confirmTrackedPhotoReconstructionCancellation(
+              activeReconstruction,
+              false,
+              cancellationClient,
+            ).catch(() => undefined);
+          }
           realityAssetVaultRef.current?.vault.dispose();
         }
       });
     };
-  }, []);
+  }, [confirmTrackedPhotoReconstructionCancellation]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -991,27 +1110,41 @@ export default function App() {
     return { descriptor: stored.descriptor, previouslyAvailable };
   }, []);
 
-  const announceRealityAssetCompletion = useCallback((completion: AppRealityAssetCompletion) => {
-    setEntries((current) => current.some((entry) => entry.id === completion.requestId) ? current : [...current, {
-      id: completion.requestId,
-      inputRevision: completion.inputRevision,
-      text: "Agent imported a verified visual-only Reality asset",
-      status: "committed",
-      source: "agent",
-      clientName: agentGatewayRef.current?.config?.clientName,
-      traceId: completion.requestId,
-      summary: "Imported a verified visual-only Reality asset",
-    }]);
+  const announceRealityAssetCompletion = useCallback((
+    completion: AppRealityAssetCompletion,
+    source: RealityAssetCompletionSource = "agent",
+  ) => {
+    if (source === "agent") {
+      setEntries((current) => current.some((entry) => entry.id === completion.requestId) ? current : [...current, {
+        id: completion.requestId,
+        inputRevision: completion.inputRevision,
+        text: "Agent imported a verified visual-only Reality asset",
+        status: "committed",
+        source: "agent",
+        clientName: agentGatewayRef.current?.config?.clientName,
+        traceId: completion.requestId,
+        summary: "Imported a verified visual-only Reality asset",
+      }]);
+    }
     setRealityAssetAvailability((values) => ({
       ...values,
       [completion.descriptor.assetId]: "available",
     }));
     setRealityRenderGeneration((generation) => generation + 1);
-    setRealityImportStatus("Agent import verified and stored. The asset is ready for a Gaussian Splat component.");
-    notice("Agent imported a verified visual-only Reality asset.", "success");
+    if (source === "agent") {
+      setRealityImportStatus("Agent import verified and stored. The asset is ready for a Gaussian Splat component.");
+    } else {
+      setPhotoReconstructionStatus("Reconstruction verified and stored. Creating an editable Reality layer…");
+    }
+    notice(source === "agent"
+      ? "Agent imported a verified visual-only Reality asset."
+      : "Photo reconstruction passed browser preflight and was stored locally.", "success");
   }, [notice, setEntries]);
 
-  const completeRealityAssetImport = useCallback(async (candidateHandle: string): Promise<JSONObject> => {
+  const completeRealityAssetImport = useCallback(async (
+    candidateHandle: string,
+    source: RealityAssetCompletionSource = "agent",
+  ): Promise<JSONObject> => {
     const completed = await runExclusive(async () => {
       const client = agentGatewayRef.current;
       const store = workspaceStoreRef.current;
@@ -1021,11 +1154,26 @@ export default function App() {
       const baseRevision = initialState.revision;
       const workspaceGeneration = workspaceGenerationRef.current;
       const completionContext = `${workspaceGeneration}:${workspaceId}`;
+      const priorCompletion = realityAssetCompletionLedgerRef.current.peekCompleted(
+        candidateHandle,
+        completionContext,
+      );
+      if (priorCompletion) {
+        assertRealityAssetCandidatePurpose(priorCompletion.purpose, source);
+        const registered = store.getState().realityAssets.get(priorCompletion.descriptor.assetId);
+        if (!registered || registered.digest !== priorCompletion.descriptor.digest) {
+          realityAssetCompletionLedgerRef.current.abandon(candidateHandle);
+          throw new Error("The completed Reality Asset is no longer registered in this Workspace.");
+        }
+        announceRealityAssetCompletion(priorCompletion, source);
+        return structuredClone(priorCompletion.result);
+      }
       const pendingCompletion = realityAssetCompletionLedgerRef.current.peek(
         candidateHandle,
         completionContext,
       );
       if (pendingCompletion) {
+        assertRealityAssetCandidatePurpose(pendingCompletion.purpose, source);
         const registered = store.getState().realityAssets.get(pendingCompletion.descriptor.assetId);
         if (!registered || registered.digest !== pendingCompletion.descriptor.digest) {
           realityAssetCompletionLedgerRef.current.abandon(candidateHandle);
@@ -1037,33 +1185,52 @@ export default function App() {
           () => client.completeAssetCandidate(candidateHandle, workspaceId),
         );
         if (!retried) throw new Error("The pending Reality Asset completion was not available for retry.");
-        announceRealityAssetCompletion(retried);
+        announceRealityAssetCompletion(retried, source);
         return structuredClone(retried.result);
       }
       let stored: Awaited<ReturnType<typeof putRealityAssetBytes>> | undefined;
       let registeredNow = false;
       let hadRegistration = false;
+      let retainCandidateOnFailure = source === "photo-reconstruction";
       try {
         const inspected = await client.inspectAssetCandidate(candidateHandle, workspaceId);
+        assertRealityAssetCandidatePurpose(inspected.purpose, source);
         const opened = await client.openAssetCandidate(candidateHandle, workspaceId);
+        if (opened.descriptor.purpose !== inspected.purpose) {
+          await opened.body.cancel().catch(() => undefined);
+          assertRealityAssetCandidatePurpose(opened.descriptor.purpose, source);
+          throw new Error("The staged Reality asset purpose changed between inspection and streaming.");
+        }
+        assertRealityAssetCandidatePurpose(opened.descriptor.purpose, source);
         if (opened.descriptor.candidateHandle !== inspected.candidateHandle
           || opened.descriptor.sha256 !== inspected.sha256
           || opened.descriptor.byteLength !== inspected.byteLength
           || opened.descriptor.format !== inspected.format) {
           await opened.body.cancel().catch(() => undefined);
+          retainCandidateOnFailure = false;
           throw new Error("The staged Reality asset changed between inspection and streaming.");
         }
         const blob = await new Response(opened.body, {
           headers: { "Content-Type": inspected.mediaType },
         }).blob();
-        if (blob.size !== inspected.byteLength) throw new Error("The staged Reality asset stream ended at the wrong byte length.");
-        const candidate = await preflightRealityAssetInWorker(blob);
+        if (blob.size !== inspected.byteLength) {
+          retainCandidateOnFailure = false;
+          throw new Error("The staged Reality asset stream ended at the wrong byte length.");
+        }
+        let candidate: RealityAssetCandidate;
+        try {
+          candidate = await preflightRealityAssetInWorker(blob);
+        } catch (error) {
+          retainCandidateOnFailure = false;
+          throw error;
+        }
         const expectedFormat = inspected.format === "spz"
           ? "spz-v4"
           : inspected.format === "sog" ? "sog-v2" : "ply";
         if (candidate.descriptor.digest !== inspected.sha256
           || candidate.descriptor.byteLength !== inspected.byteLength
           || candidate.descriptor.format !== expectedFormat) {
+          retainCandidateOnFailure = false;
           throw new Error("The staged Reality asset metadata does not match browser preflight.");
         }
 
@@ -1071,6 +1238,7 @@ export default function App() {
           || workspaceGenerationRef.current !== workspaceGeneration
           || store.getState().workspaceId !== workspaceId
           || store.getState().revision !== baseRevision) {
+          retainCandidateOnFailure = false;
           throw new Error("The project changed while the staged Reality asset was being verified.");
         }
 
@@ -1078,6 +1246,7 @@ export default function App() {
         const registered = store.getState().realityAssets.get(candidate.descriptor.assetId);
         hadRegistration = Boolean(registered);
         if (registered && registered.digest !== candidate.descriptor.digest) {
+          retainCandidateOnFailure = false;
           throw new Error("The staged content conflicts with registered Reality asset metadata.");
         }
         if (!registered) {
@@ -1092,6 +1261,7 @@ export default function App() {
         if (workspaceStoreRef.current !== store
           || workspaceGenerationRef.current !== workspaceGeneration
           || store.getState().workspaceId !== workspaceId) {
+          retainCandidateOnFailure = false;
           throw new Error("The project changed before the staged Reality asset could be finalized.");
         }
         const result = {
@@ -1105,6 +1275,7 @@ export default function App() {
         const completion: AppRealityAssetCompletion = {
           requestId: inspected.requestId,
           inputRevision: store.getState().revision,
+          purpose: inspected.purpose,
           descriptor: structuredClone(candidate.descriptor),
           result,
         };
@@ -1114,7 +1285,7 @@ export default function App() {
           completion,
           () => client.completeAssetCandidate(candidateHandle, workspaceId),
         );
-        announceRealityAssetCompletion(completion);
+        announceRealityAssetCompletion(completion, source);
         return structuredClone(result);
       } catch (error) {
         const preservedCompletion = realityAssetCompletionLedgerRef.current.peek(
@@ -1126,8 +1297,10 @@ export default function App() {
           // content. A status-less/lost gateway acknowledgement is ambiguous:
           // retain the local source of truth and let an identical tool retry
           // consume the server's idempotent completion tombstone.
-          announceRealityAssetCompletion(preservedCompletion);
-          throw error;
+          announceRealityAssetCompletion(preservedCompletion, source);
+          throw source === "photo-reconstruction" && !(error instanceof RetainedRealityAssetCandidateError)
+            ? new RetainedRealityAssetCandidateError(friendlyError(error), { cause: error })
+            : error;
         }
         // Best-effort transaction rollback: failed completion must not leave a
         // newly registered descriptor or newly written local bytes behind.
@@ -1153,14 +1326,97 @@ export default function App() {
         if (stored && !stored.previouslyAvailable && !hadRegistration && !registeredNow) {
           await realityAssetVaultRef.current!.vault.delete(stored.descriptor.assetId).catch(() => false);
         }
-        await client.cancelAssetCandidate(candidateHandle, workspaceId).catch(() => undefined);
-        throw error;
+        const failureStatus = (error as { status?: unknown } | null)?.status;
+        if (typeof failureStatus === "number" && failureStatus >= 400 && failureStatus < 500
+          && ![408, 409, 425, 429].includes(failureStatus)) {
+          retainCandidateOnFailure = false;
+        }
+        const retainCandidate = error instanceof RetainedRealityAssetCandidateError || retainCandidateOnFailure;
+        if (!retainCandidate) {
+          await client.cancelAssetCandidate(candidateHandle, workspaceId).catch(() => undefined);
+          throw error;
+        }
+        throw error instanceof RetainedRealityAssetCandidateError
+          ? error
+          : new RetainedRealityAssetCandidateError(friendlyError(error), { cause: error });
       }
     });
     if (!completed) throw new Error("Another Workspace operation is still in progress.");
     return completed;
   }, [announceRealityAssetCompletion, applyWorkspaceSystemOperations, putRealityAssetBytes, runExclusive]);
   completeRealityAssetImportRef.current = completeRealityAssetImport;
+
+  const placeReconstructedRealityLayer = useCallback(async (
+    descriptor: RealityAssetDescriptor,
+    label: string,
+    expectedWorkspaceId: string,
+    expectedGeneration: number,
+  ): Promise<void> => {
+    const placed = await runExclusive(async () => {
+      const store = workspaceStoreRef.current;
+      if (!store || store.getState().workspaceId !== expectedWorkspaceId ||
+          workspaceGenerationRef.current !== expectedGeneration) {
+        throw new Error("The project changed before the reconstructed Reality layer could be placed.");
+      }
+      const state = store.getState();
+      const registered = state.realityAssets.get(descriptor.assetId);
+      if (!registered || registered.digest !== descriptor.digest) {
+        throw new Error("The reconstructed Reality asset is no longer registered in this project.");
+      }
+      const hasStage = [...state.components.values()].some((component) => component.type.typeId === "stage-3d");
+      const stageManifest = hasStage ? undefined : store.getComponentManifest("stage-3d");
+      const realityManifest = store.getComponentManifest("gaussian-splat");
+      if (!realityManifest) throw new Error("The built-in Gaussian Splat Reality Layer is unavailable.");
+      if (!hasStage && !stageManifest) throw new Error("The built-in 3D Stage is unavailable.");
+      const ids = store.reserveComponentIds(hasStage ? 1 : 2);
+      const stageId = hasStage ? undefined : ids[0];
+      const realityId = ids[hasStage ? 0 : 1];
+      if (!realityId || (!hasStage && !stageId)) throw new Error("The workspace could not reserve Reality component IDs.");
+      const operations: WorkspaceOperation[] = [];
+      if (stageId && stageManifest) operations.push({
+        op: "create_component",
+        op_id: uid("op_reconstruction_stage"),
+        id: stageId,
+        component_type: {
+          typeId: stageManifest.typeId,
+          version: stageManifest.version,
+          digest: stageManifest.digest,
+        },
+        label: "3D Stage",
+        placement: defaultWorkspacePlacement(stageManifest, state.components.size),
+      });
+      operations.push({
+        op: "create_component",
+        op_id: uid("op_reconstruction_layer"),
+        id: realityId,
+        component_type: {
+          typeId: realityManifest.typeId,
+          version: realityManifest.version,
+          digest: realityManifest.digest,
+        },
+        label,
+        props: {
+          assetRef: { assetId: descriptor.assetId, digest: descriptor.digest },
+          calibration: {
+            version: 1,
+            status: "uncalibrated",
+            sourceCoordinateSystem: descriptor.coordinateSystem.system,
+            targetCoordinateSystem: "RUB",
+            metersPerSourceUnit: null,
+          },
+          quality: "auto",
+          semanticProxyIds: [],
+        },
+        placement: defaultWorkspacePlacement(realityManifest, state.components.size + (stageId ? 1 : 0)),
+        tags: ["reality", "visual-reference", "photo-reconstruction"],
+      });
+      applyWorkspaceOperations(operations, "Placed an editable photo reconstruction");
+      setSelectedComponentId(realityId);
+      window.setTimeout(() => hybridCanvasRef.current?.frameAll(), 120);
+      return true;
+    });
+    if (!placed) throw new Error("Another Workspace operation is still in progress.");
+  }, [applyWorkspaceOperations, runExclusive]);
 
   const importRealityAssetFile = useCallback(async (file: File, relinkAssetId?: string) => {
     await runExclusive(async () => {
@@ -1286,6 +1542,233 @@ export default function App() {
     pendingRealityRelinkRef.current = relinkAssetId ?? null;
     realityFileRef.current?.click();
   }, []);
+
+  const reconstructPhotoSet = useCallback(async (files: readonly File[]) => {
+    const client = agentGatewayRef.current;
+    const store = workspaceStoreRef.current;
+    if (!client || !store) {
+      notice("The local photo reconstruction gateway is unavailable.", "error");
+      return;
+    }
+    if (photoReconstructionCapability === "checking") {
+      notice("Photo reconstruction capability is still being checked.", "warning");
+      return;
+    }
+    if (!photoReconstructionCapability.available) {
+      notice(photoReconstructionCapability.reason ?? "Photo reconstruction is unavailable on this machine.", "error");
+      return;
+    }
+    if (files.length < PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount ||
+        files.length > PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount) {
+      notice(`Choose ${PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount}-${PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount} overlapping photos.`, "error");
+      return;
+    }
+
+    const previousReconstruction = activePhotoReconstructionRef.current;
+    photoReconstructionAbortRef.current?.abort();
+    if (previousReconstruction) {
+      setPhotoReconstructionStatus("Cancelling the previous photo reconstruction before starting a new one…");
+      try {
+        await confirmTrackedPhotoReconstructionCancellation(previousReconstruction);
+      } catch (error) {
+        const message = `Warning: the previous job remains tracked because cancellation could not be confirmed. ${friendlyError(error)}`;
+        setPhotoReconstructionStatus(message);
+        notice(message, "warning");
+        return;
+      }
+    }
+    if (workspaceStoreRef.current !== store) {
+      notice("The project changed before photo reconstruction could start.", "warning");
+      return;
+    }
+
+    const workspaceId = store.getState().workspaceId;
+    const workspaceGeneration = workspaceGenerationRef.current;
+    const controller = new AbortController();
+    photoReconstructionAbortRef.current = controller;
+    setRealityImportBusy(true);
+    setPhotoReconstructionBusy(true);
+    setPhotoReconstructionJob(undefined);
+    let completed = false;
+    let activeJobId: string | undefined;
+    try {
+      const totalBytes = files.reduce((total, file) => total + file.size, 0);
+      if (totalBytes > PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoSetBytes) {
+        throw new Error(`The photo set exceeds the ${Math.round(PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoSetBytes / 1_073_741_824)} GiB limit.`);
+      }
+      const photos: Array<{
+        photoId: string;
+        mediaType: PhotoReconstructionMediaType;
+        byteLength: number;
+        sha256: `sha256:${string}`;
+      }> = [];
+      const fileByPhotoId = new Map<string, File>();
+      const seenDigests = new Set<string>();
+      for (const [index, file] of files.entries()) {
+        if (file.size < 1 || file.size > PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoBytes) {
+          throw new Error(`Photo ${index + 1} must be between 1 byte and 64 MiB.`);
+        }
+        const mediaType = reconstructionPhotoMediaType(file);
+        if (!mediaType) throw new Error(`Photo ${index + 1} is not JPEG, PNG, WebP, HEIC, or HEIF.`);
+        setPhotoReconstructionStatus(`Hashing photo ${index + 1} of ${files.length}…`);
+        const sha256 = await digestBlobSha256(file, {
+          signal: controller.signal,
+          maximumBytes: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoBytes,
+        });
+        if (seenDigests.has(sha256)) {
+          throw new Error(`Photo ${index + 1} duplicates another selected image. Remove duplicate views and try again.`);
+        }
+        seenDigests.add(sha256);
+        const photoId = `photo_${String(index + 1).padStart(4, "0")}`;
+        photos.push({ photoId, mediaType, byteLength: file.size, sha256 });
+        fileByPhotoId.set(photoId, file);
+      }
+      if (workspaceStoreRef.current !== store || store.getState().workspaceId !== workspaceId ||
+          workspaceGenerationRef.current !== workspaceGeneration) {
+        throw new DOMException("The project changed during photo preparation", "AbortError");
+      }
+
+      setPhotoReconstructionStatus(`Preparing ${files.length} verified photo uploads…`);
+      const begun = await client.beginPhotoReconstruction({
+        requestId: uid("photo_reconstruction"),
+        workspaceId,
+        profile: photoReconstructionProfile,
+        photos,
+      }, controller.signal);
+      activeJobId = begun.job.jobId;
+      activePhotoReconstructionRef.current = { jobId: begun.job.jobId, workspaceId };
+      setPhotoReconstructionJob(begun.job);
+      if (begun.uploads.length !== files.length) {
+        throw new Error("The reconstruction gateway returned an incomplete photo upload plan.");
+      }
+
+      let job = begun.job;
+      for (const [index, grant] of begun.uploads.entries()) {
+        const file = fileByPhotoId.get(grant.photoId);
+        if (!file) throw new Error("A photo upload grant did not match the selected photo set.");
+        setPhotoReconstructionStatus(`Uploading verified photo ${index + 1} of ${begun.uploads.length}…`);
+        job = await client.uploadPhotoReconstructionGrant(grant, file, controller.signal);
+        setPhotoReconstructionJob(job);
+      }
+
+      setPhotoReconstructionStatus("Starting local camera solve…");
+      job = await client.startPhotoReconstruction(job.jobId, workspaceId, controller.signal);
+      setPhotoReconstructionJob(job);
+      while (!["ready", "failed", "cancelled"].includes(job.status)) {
+        await abortableDelay(1_000, controller.signal);
+        job = await client.inspectPhotoReconstruction(job.jobId, workspaceId, controller.signal);
+        setPhotoReconstructionJob(job);
+        const percent = Math.round(job.progress * 100);
+        setPhotoReconstructionStatus(`${job.status.replaceAll("_", " ")} · ${percent}%`);
+      }
+      if (job.status === "failed") throw new Error(job.error?.message ?? "Photo reconstruction failed.");
+      if (job.status === "cancelled") throw new DOMException("Photo reconstruction cancelled", "AbortError");
+      if (!job.result) throw new Error("Photo reconstruction finished without an output candidate.");
+
+      setPhotoReconstructionStatus("Verifying reconstructed Reality bytes in the browser…");
+      const candidate = await client.finalizePhotoReconstruction(
+        job.jobId,
+        workspaceId,
+        `photo-reconstruction-${job.jobId.slice(0, 8)}.ply`,
+        job.result.sha256,
+        controller.signal,
+      );
+      let completion: JSONObject;
+      try {
+        completion = await completeRealityAssetImport(candidate.candidateHandle, "photo-reconstruction");
+      } catch (error) {
+        if (!(error instanceof RetainedRealityAssetCandidateError)) throw error;
+        // A lost/ambiguous browser acknowledgement is the common retry case.
+        // Retry once through the same purpose-bound ledger before exposing a
+        // failure; this also makes an already-durable local commit idempotent.
+        setPhotoReconstructionStatus("Browser acknowledgement was interrupted. Retrying the verified Reality handoff once…");
+        completion = await completeRealityAssetImport(candidate.candidateHandle, "photo-reconstruction");
+      }
+      const assetRef = completion.asset_ref;
+      if (!assetRef || typeof assetRef !== "object" || Array.isArray(assetRef)) {
+        throw new Error("Browser preflight did not return a reconstructed asset reference.");
+      }
+      const assetId = (assetRef as Record<string, unknown>).asset_id;
+      const digest = (assetRef as Record<string, unknown>).digest;
+      if (typeof assetId !== "string" || typeof digest !== "string") {
+        throw new Error("Browser preflight returned an invalid reconstructed asset reference.");
+      }
+      const descriptor = workspaceStoreRef.current?.getState().realityAssets.get(assetId);
+      if (!descriptor || descriptor.digest !== digest) {
+        throw new Error("The reconstructed Reality asset was not registered after browser preflight.");
+      }
+      const ordinal = [...store.getState().components.values()]
+        .filter((component) => component.type.typeId === "gaussian-splat").length + 1;
+      await placeReconstructedRealityLayer(
+        descriptor,
+        `Photo reconstruction ${ordinal}`,
+        workspaceId,
+        workspaceGeneration,
+      );
+      completed = true;
+      activePhotoReconstructionRef.current = null;
+      setPhotoReconstructionStatus("Photo reconstruction is editable in the Workspace. Calibrate scale and link engineering proxies before metric use.");
+      notice("Photo set reconstructed into an editable visual-only Reality layer.", "success");
+    } catch (error) {
+      const aborted = controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+      if (photoReconstructionAbortRef.current === controller) {
+        setPhotoReconstructionStatus(aborted ? "Photo reconstruction cancellation requested…" : friendlyError(error));
+        if (!aborted) notice(`Photo reconstruction failed after its bounded browser retry: ${friendlyError(error)}`, "error");
+      }
+    } finally {
+      const active = activePhotoReconstructionRef.current;
+      if (!completed && activeJobId && active?.jobId === activeJobId && active.workspaceId === workspaceId) {
+        try {
+          await confirmTrackedPhotoReconstructionCancellation(active);
+          if (photoReconstructionAbortRef.current === controller) {
+            setPhotoReconstructionStatus("Photo reconstruction cancelled and temporary inputs deleted.");
+          }
+        } catch (error) {
+          if (photoReconstructionAbortRef.current === controller) {
+            const message = `Warning: cancellation could not be confirmed; the job remains tracked. ${friendlyError(error)}`;
+            setPhotoReconstructionStatus(message);
+            notice(message, "warning");
+          }
+        }
+      }
+      if (photoReconstructionAbortRef.current === controller) {
+        photoReconstructionAbortRef.current = null;
+        const stillTracked = activeJobId !== undefined
+          && activePhotoReconstructionRef.current?.jobId === activeJobId
+          && activePhotoReconstructionRef.current.workspaceId === workspaceId;
+        if (!stillTracked) {
+          setRealityImportBusy(false);
+          setPhotoReconstructionBusy(false);
+        }
+      }
+    }
+  }, [
+    completeRealityAssetImport,
+    confirmTrackedPhotoReconstructionCancellation,
+    notice,
+    photoReconstructionCapability,
+    photoReconstructionProfile,
+    placeReconstructedRealityLayer,
+  ]);
+
+  const choosePhotoSet = useCallback(() => {
+    photoSetFileRef.current?.click();
+  }, []);
+
+  const cancelPhotoReconstruction = useCallback(async () => {
+    const active = activePhotoReconstructionRef.current;
+    photoReconstructionAbortRef.current?.abort();
+    if (!active) return;
+    setPhotoReconstructionStatus("Cancelling photo reconstruction and deleting temporary inputs…");
+    try {
+      await confirmTrackedPhotoReconstructionCancellation(active);
+      setPhotoReconstructionStatus("Photo reconstruction cancelled and temporary inputs deleted.");
+    } catch (error) {
+      const message = `Warning: photo reconstruction cancellation could not be confirmed; the job remains tracked. ${friendlyError(error)}`;
+      setPhotoReconstructionStatus(message);
+      notice(message, "warning");
+    }
+  }, [confirmTrackedPhotoReconstructionCancellation, notice]);
 
   const deleteRealityAsset = useCallback(async (assetId: string): Promise<boolean> => {
     const result = await runExclusive(async () => {
@@ -2466,6 +2949,25 @@ export default function App() {
 
   const handleAgentCommand = useCallback<AgentGatewayCommandHandler>(async (name, input, context) => {
     if (context.signal.aborted) throw new DOMException("Agent command cancelled", "AbortError");
+    if (name === "complete_workspace_reconstruction_asset") {
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new AgentGatewayCommandError("invalid_request", "The reconstructed asset handoff is invalid.");
+      }
+      const body = input as Record<string, unknown>;
+      if (Object.keys(body).some((key) => !["candidate_handle", "workspace_id"].includes(key)) ||
+          typeof body.candidate_handle !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(body.candidate_handle) ||
+          typeof body.workspace_id !== "string" || body.workspace_id !== workspaceStoreRef.current?.getState().workspaceId) {
+        throw new AgentGatewayCommandError("invalid_request", "The reconstructed asset does not match the open Workspace.");
+      }
+      const result = await completeRealityAssetImport(body.candidate_handle, "photo-reconstruction");
+      return {
+        ok: true,
+        data: {
+          workspace_id: body.workspace_id,
+          result,
+        },
+      };
+    }
     const workspaceRouter = workspaceAgentRouterRef.current;
     if (!workspaceRouter || !workspaceRouter.handles(name)) {
       throw new AgentGatewayCommandError("unsupported_command", `Unsupported Workspace command ${name}.`);
@@ -2516,7 +3018,7 @@ export default function App() {
       }
     }
     return result;
-  }, []);
+  }, [completeRealityAssetImport, setEntries]);
 
   const startAgentBridge = useCallback((client: AgentGatewayClient) => {
     void client.start().catch((error) => {
@@ -2582,6 +3084,16 @@ export default function App() {
       },
     });
     agentGatewayRef.current = client;
+    setPhotoReconstructionCapability("checking");
+    void client.getPhotoReconstructionCapability().then((capability) => {
+      if (!cancelled) setPhotoReconstructionCapability(capability);
+    }).catch(() => {
+      if (!cancelled) setPhotoReconstructionCapability({
+        backend: { id: "local-reconstruction", version: "1" },
+        available: false,
+        reason: "The local photo reconstruction backend is unavailable.",
+      });
+    });
     void client.fetchConfig().then((config) => {
       if (cancelled) return;
       setAgentEnabled(config.enabled);
@@ -3099,6 +3611,14 @@ export default function App() {
         return { mcpConfig: pairing.mcpConfig };
       });
     },
+    onCopyRestSetup: async () => {
+      return runAgentAction(async () => {
+        const client = agentGatewayRef.current;
+        if (!client) throw new Error("The local Agent Gateway is unavailable.");
+        const pairing = await client.revealPairing();
+        return { restConfig: pairing.restConfig };
+      });
+    },
     onPermissionChange: (allowDeleteAndClear: boolean) => runAgentAction(() => changeAgentPermission(allowDeleteAndClear)),
     onRetry: () => runAgentAction(retryAgentConnection),
     onRefreshOffer: () => runAgentAction(refreshAgentOffer),
@@ -3213,7 +3733,15 @@ export default function App() {
           realityImportStatus={realityImportStatus ?? (realityAssetVaultRef.current.persistent
             ? undefined
             : "Private persistent storage is unavailable; imported bytes last for this App session only.")}
+          realityReconstructionCapability={photoReconstructionCapability}
+          realityReconstructionProfile={photoReconstructionProfile}
+          realityReconstructionJob={photoReconstructionJob}
+          realityReconstructionBusy={photoReconstructionBusy}
+          realityReconstructionStatus={photoReconstructionStatus}
           onImportRealityAsset={() => chooseRealityAssetFile()}
+          onReconstructRealityFromPhotos={choosePhotoSet}
+          onRealityReconstructionProfile={setPhotoReconstructionProfile}
+          onCancelRealityReconstruction={() => void cancelPhotoReconstruction()}
           onRelinkRealityAsset={chooseRealityAssetFile}
           onDeleteRealityAsset={deleteRealityAsset}
           onCreateShowcase={createMixedWorkspaceShowcase}
@@ -3244,6 +3772,7 @@ export default function App() {
     {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => { safeStorageRemove(RECOVERY_KEY); setRecoveryAvailable(false); }}>Dismiss</button></div>}
     <input ref={fileRef} hidden type="file" accept=".json,.semaframe.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
+    <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />
     <ConfirmDialog open={confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
     <ConfirmDialog open={confirm === "open"} title="Open another project?" detail="Your current project has unsaved changes. Opening another file will replace it in this window." confirmLabel="Open project" tone="danger" onCancel={() => { setConfirm(null); setPendingFile(null); }} onConfirm={() => { const file = pendingFile; setConfirm(null); setPendingFile(null); if (file) void loadProject(file); }} />
     <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>

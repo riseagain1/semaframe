@@ -82,6 +82,7 @@ function assetCandidate(overrides: Record<string, unknown> = {}) {
     mediaType: "model/spz",
     byteLength: 4,
     sha256: assetDigest,
+    purpose: "generic_import",
     status: "ready",
     expiresAt: "2026-08-21T03:04:35.000Z",
     ...overrides,
@@ -99,9 +100,11 @@ afterEach(() => {
 });
 
 describe("AgentGatewayClient", () => {
-  it("accepts the complete nineteen-command browser dispatch surface", () => {
-    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(19);
+  it("accepts all 24 public commands plus the reconstruction-only internal completion command", () => {
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(25);
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("read_workspace_resource_snapshot");
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("begin_workspace_photo_reconstruction");
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("finalize_workspace_photo_reconstruction");
   });
 
   it("binds the browser-owned Fetch implementation before storing it", async () => {
@@ -352,6 +355,39 @@ describe("AgentGatewayClient", () => {
       code: "invalid_response",
     });
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("probes photo reconstruction through the browser-bound CSRF POST route", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })))
+      .mockResolvedValueOnce(jsonResponse({
+        backend: { id: "apple-object-capture", version: "1" },
+        available: true,
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-reconstruction-probe",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.getPhotoReconstructionCapability()).resolves.toEqual({
+      backend: { id: "apple-object-capture", version: "1" },
+      available: true,
+    });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/reconstructions/capability",
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
+      },
+      body: "{}",
+    });
   });
 
   it("serializes overlapping config reads so browser start order cannot invert server observation order", async () => {
@@ -736,6 +772,7 @@ describe("AgentGatewayClient", () => {
       .mockResolvedValueOnce(jsonResponse({
         pairingBearer: "pair-secret",
         mcpConfig: "secret ready-to-paste config",
+        restConfig: "secret REST config",
         restEndpoint: "https://scene.test/mcp",
       }));
     const client = new AgentGatewayClient({
@@ -749,6 +786,7 @@ describe("AgentGatewayClient", () => {
     const pairing = await client.revealPairing();
 
     expect(pairing.mcpConfig).toBe("secret ready-to-paste config");
+    expect(pairing.restConfig).toBe("secret REST config");
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       "/api/agent/config",
       "/api/agent/browser/enable",
@@ -780,6 +818,7 @@ describe("AgentGatewayClient", () => {
         }),
         pairingBearer: "rotated-pair-secret",
         mcpConfig: "rotated ready-to-paste config",
+        restConfig: "rotated REST config",
         restEndpoint: "https://scene.test/v1",
       }));
     const client = new AgentGatewayClient({

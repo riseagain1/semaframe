@@ -1,5 +1,9 @@
 import workspaceProtocolSchema from "../../src/workspace/protocol/workspaceProtocol.schema.json";
 import {
+  PHOTO_RECONSTRUCTION_LIMITS,
+  PHOTO_RECONSTRUCTION_MEDIA_TYPES,
+} from "../../src/reconstruction/contracts";
+import {
   WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
@@ -49,6 +53,11 @@ const agentControlErrorSchema = {
         "begin_workspace_asset_import",
         "cancel_workspace_asset_import",
         "complete_workspace_asset_import",
+        "begin_workspace_photo_reconstruction",
+        "start_workspace_photo_reconstruction",
+        "inspect_workspace_photo_reconstruction",
+        "cancel_workspace_photo_reconstruction",
+        "finalize_workspace_photo_reconstruction",
         "begin_workspace_update",
         "submit_workspace_batch",
         "undo_workspace_batch",
@@ -262,6 +271,213 @@ const agentAssetImportResultSchema = {
   ],
 } as const;
 
+const photoReconstructionCandidateSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["candidateHandle", "format", "mediaType", "byteLength", "sha256"],
+  properties: {
+    candidateHandle: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" },
+    format: { enum: ["ply", "spz", "sog"] },
+    mediaType: { type: "string", minLength: 3, maxLength: 192 },
+    byteLength: {
+      type: "integer",
+      minimum: 1,
+      maximum: PHOTO_RECONSTRUCTION_LIMITS.maximumOutputBytes,
+    },
+    sha256: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+  },
+} as const;
+
+const photoReconstructionJobSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "version", "jobId", "requestId", "workspaceId", "photoSetDigest", "profile", "status",
+    "progress", "inputPhotoCount", "uploadedPhotoCount", "backend", "warnings", "createdAt",
+    "updatedAt", "expiresAt",
+  ],
+  properties: {
+    version: { const: 1 },
+    jobId: { type: "string", format: "uuid" },
+    requestId: { type: "string", minLength: 8, maxLength: 128 },
+    workspaceId: { type: "string", minLength: 1, maxLength: 256 },
+    photoSetDigest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+    profile: { enum: ["preview", "balanced", "quality"] },
+    status: {
+      enum: ["awaiting_upload", "queued", "camera_solving", "training", "packing", "ready", "failed", "cancelled"],
+    },
+    progress: { type: "number", minimum: 0, maximum: 1 },
+    inputPhotoCount: {
+      type: "integer",
+      minimum: PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount,
+      maximum: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount,
+    },
+    uploadedPhotoCount: {
+      type: "integer",
+      minimum: 0,
+      maximum: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount,
+    },
+    registeredPhotoCount: {
+      type: "integer",
+      minimum: 0,
+      maximum: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount,
+    },
+    backend: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "version"],
+      properties: {
+        id: { type: "string", minLength: 1, maxLength: 64 },
+        version: { type: "string", minLength: 1, maxLength: 64 },
+      },
+    },
+    warnings: {
+      type: "array",
+      maxItems: PHOTO_RECONSTRUCTION_LIMITS.maximumWireWarnings,
+      uniqueItems: true,
+      items: {
+        enum: [
+          "low_photo_count",
+          "duplicate_content_removed",
+          "partial_camera_registration",
+          "source_scale_unknown",
+          "source_coordinates_unknown",
+        ],
+      },
+    },
+    createdAt: { type: "string", format: "date-time" },
+    updatedAt: { type: "string", format: "date-time" },
+    expiresAt: { type: "string", format: "date-time" },
+    result: { $ref: "#/components/schemas/PhotoReconstructionCandidate" },
+    error: {
+      type: "object",
+      additionalProperties: false,
+      required: ["code", "message", "retryable"],
+      properties: {
+        code: { type: "string" },
+        message: { type: "string" },
+        retryable: { type: "boolean" },
+      },
+    },
+  },
+} as const;
+
+const realityAssetDescriptorSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "version", "assetId", "digest", "format", "formatVersion", "mediaType", "byteLength",
+    "splatCount", "sphericalHarmonicsDegree", "model", "antialiased", "coordinateSystem",
+    "engineeringAuthority",
+  ],
+  properties: {
+    version: { const: 1 },
+    assetId: { type: "string", pattern: "^ra_[a-f0-9]{64}$" },
+    digest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+    format: { enum: ["spz-v4", "ply", "sog-v2"] },
+    formatVersion: { type: "integer", minimum: 1, maximum: 65_535 },
+    mediaType: { enum: ["application/x-spz", "application/ply", "model/vnd.sog"] },
+    byteLength: { type: "integer", minimum: 1, maximum: 268_435_456 },
+    splatCount: { type: "integer", minimum: 1, maximum: 4_000_000 },
+    sphericalHarmonicsDegree: { type: ["integer", "null"], minimum: 0, maximum: 4 },
+    model: { enum: ["gaussian-3d", "gaussian-2d", "unknown"] },
+    antialiased: { type: ["boolean", "null"] },
+    coordinateSystem: {
+      type: "object",
+      additionalProperties: false,
+      required: ["system", "provenance"],
+      properties: {
+        system: {
+          enum: [
+            "UNKNOWN", "LDB", "RDB", "LUB", "RUB", "LDF", "RDF", "LUF", "RUF",
+            "LFD", "RFD", "LFU", "RFU", "LBD", "RBD", "LBU", "RBU",
+          ],
+        },
+        provenance: { enum: ["embedded", "format-default", "unknown"] },
+      },
+    },
+    sourceBounds: {
+      type: "object",
+      additionalProperties: false,
+      required: ["min", "max"],
+      properties: {
+        min: { $ref: "#/components/schemas/RealityAssetPoint" },
+        max: { $ref: "#/components/schemas/RealityAssetPoint" },
+      },
+    },
+    engineeringAuthority: { const: "visual_only" },
+  },
+} as const;
+
+function agentDataResultSchema(data: unknown) {
+  return {
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok", "data"],
+        properties: { ok: { const: true }, data },
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok", "error"],
+        properties: {
+          ok: { const: false },
+          error: { $ref: "#/components/schemas/AgentControlError" },
+        },
+      },
+    ],
+  } as const;
+}
+
+const beginPhotoReconstructionResultSchema = agentDataResultSchema({
+  type: "object",
+  additionalProperties: false,
+  required: ["job", "uploads"],
+  properties: {
+    job: { $ref: "#/components/schemas/PhotoReconstructionJob" },
+    uploads: {
+      type: "array",
+      maxItems: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount,
+      items: { $ref: "#/components/schemas/PhotoReconstructionUploadGrant" },
+    },
+  },
+});
+
+const photoReconstructionJobResultSchema = agentDataResultSchema({
+  $ref: "#/components/schemas/PhotoReconstructionJob",
+});
+
+const cancelPhotoReconstructionResultSchema = agentDataResultSchema({
+  type: "object",
+  additionalProperties: false,
+  required: ["cancelled", "job"],
+  properties: {
+    cancelled: { const: true },
+    job: { $ref: "#/components/schemas/PhotoReconstructionJob" },
+  },
+});
+
+const finalizePhotoReconstructionResultSchema = agentDataResultSchema({
+  type: "object",
+  additionalProperties: false,
+  required: ["asset_ref", "descriptor", "warnings"],
+  properties: {
+    asset_ref: {
+      type: "object",
+      additionalProperties: false,
+      required: ["asset_id", "digest"],
+      properties: {
+        asset_id: { type: "string", pattern: "^ra_[a-f0-9]{64}$" },
+        digest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+      },
+    },
+    descriptor: { $ref: "#/components/schemas/RealityAssetDescriptor" },
+    warnings: { type: "array", maxItems: 32, items: { type: "string" } },
+  },
+});
+
 const successResponses = {
   "200": {
     description: "The browser-authoritative Workspace completed the command.",
@@ -301,6 +517,18 @@ const successResponses = {
   },
 } as const;
 
+const photoReconstructionResponses = {
+  ...successResponses,
+  "403": {
+    description: "The approved client does not hold the non-default asset:reconstruct scope.",
+    content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+  },
+  "404": {
+    description: "The client-owned reconstruction job is invalid, expired, or belongs to another Workspace.",
+    content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+  },
+} as const;
+
 const inspectWorkspaceComponentResponses = {
   ...successResponses,
   "200": {
@@ -333,7 +561,7 @@ const readWorkspaceResourceSnapshotResponses = {
 
 const agentAssetCandidateRequired = [
   "version", "candidate_handle", "request_id", "workspace_id", "display_name", "format",
-  "media_type", "byte_length", "sha256", "status", "expires_at",
+  "media_type", "byte_length", "sha256", "purpose", "status", "expires_at",
 ] as const;
 
 const agentAssetCandidateProperties = {
@@ -346,6 +574,10 @@ const agentAssetCandidateProperties = {
   media_type: { type: "string" },
   byte_length: { type: "integer", minimum: 1 },
   sha256: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+  purpose: {
+    enum: ["generic_import", "photo_reconstruction"],
+    description: "Host-authored provenance. Public asset-import endpoints always mint generic_import; photo_reconstruction is reserved for the reconstruction service.",
+  },
   status: { enum: ["awaiting_upload", "ready"] },
   expires_at: { type: "string", format: "date-time" },
 } as const;
@@ -362,7 +594,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
     openapi: "3.1.0",
     info: {
       title: "SemaFrame Agent Gateway",
-      version: "1.1.0",
+      version: "1.2.0",
       description: "Provider-neutral control of the browser-authoritative universal Workspace. Obtain the ephemeral bearer from the in-app agent setup; never place it in a URL.",
     },
     servers: [{ url: `${publicBaseUrl.replace(/\/$/u, "")}/v1` }],
@@ -456,6 +688,213 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
             "401": { description: "Invalid upload bearer.", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
             "410": { description: "Expired or cancelled grant.", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
             "422": { description: "Streamed size or digest mismatch.", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          },
+        },
+      },
+      "/reconstructions/begin": {
+        post: {
+          operationId: "begin_workspace_photo_reconstruction",
+          summary: "Declare a digest-bound photo set and mint one-time upload grants.",
+          description: `Requires the non-default asset:reconstruct scope. Declares ${PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount}-${PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount} user-provided photos by exact media type, byte length, and SHA-256. The response contains one bounded PUT grant per missing photo; raw bytes, local paths, filenames, and EXIF never enter this JSON request or the saved Workspace. The complete set may not exceed ${PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoSetBytes} bytes.`,
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["session_token", "instruction_digest", "request_id", "workspace_id", "profile", "photos", "approval_token"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              approval_token: {
+                type: "string",
+                minLength: 16,
+                maxLength: 256,
+                description: "Private proof from the active user-approved MCP connection. Never log or persist it.",
+              },
+              request_id: {
+                type: "string",
+                minLength: 8,
+                maxLength: 128,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._~-]{7,127}$",
+              },
+              workspace_id: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$",
+              },
+              profile: { enum: ["preview", "balanced", "quality"] },
+              photos: {
+                type: "array",
+                minItems: PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount,
+                maxItems: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount,
+                items: { $ref: "#/components/schemas/PhotoReconstructionPhotoInput" },
+              },
+            },
+          }),
+          responses: {
+            ...photoReconstructionResponses,
+            "200": {
+              description: "An idempotent reconstruction job plus upload grants for photos not yet staged.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/BeginPhotoReconstructionResult" },
+                },
+              },
+            },
+            "429": {
+              description: "The bounded reconstruction job or temporary-storage capacity is exhausted.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+            },
+          },
+        },
+      },
+      "/reconstructions/start": {
+        post: {
+          operationId: "start_workspace_photo_reconstruction",
+          summary: "Start a photo reconstruction after every declared upload is byte-verified.",
+          description: "Identical retries are idempotent. The host rejects an incomplete photo set rather than queuing a partial reconstruction.",
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["session_token", "instruction_digest", "workspace_id", "job_id", "approval_token"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              approval_token: { type: "string", minLength: 16, maxLength: 256, description: "Private proof from the active user-approved MCP connection." },
+              workspace_id: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$",
+              },
+              job_id: { type: "string", format: "uuid" },
+            },
+          }),
+          responses: {
+            ...photoReconstructionResponses,
+            "200": {
+              description: "The exact current job state after the idempotent start request.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PhotoReconstructionJobResult" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/reconstructions/inspect": {
+        post: {
+          operationId: "inspect_workspace_photo_reconstruction",
+          summary: "Inspect one authorized photo reconstruction job.",
+          description: "Returns bounded progress, phase, warnings, backend identity, and the digest-pinned output candidate when ready. It never returns photo bytes, source metadata, local paths, credentials, or backend logs.",
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["session_token", "instruction_digest", "workspace_id", "job_id", "approval_token"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              approval_token: { type: "string", minLength: 16, maxLength: 256, description: "Private proof from the active user-approved MCP connection." },
+              workspace_id: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$",
+              },
+              job_id: { type: "string", format: "uuid" },
+            },
+          }),
+          responses: {
+            ...photoReconstructionResponses,
+            "200": {
+              description: "The exact current bounded job view.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PhotoReconstructionJobResult" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/reconstructions/cancel": {
+        post: {
+          operationId: "cancel_workspace_photo_reconstruction",
+          summary: "Cancel one owned photo reconstruction job and clean up temporary bytes.",
+          description: "Requires confirm=true. Cancellation schedules staged source and unfinalized output bytes for deletion; an asset already finalized into the browser-owned vault is not deleted.",
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["session_token", "instruction_digest", "workspace_id", "job_id", "confirm", "approval_token"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              approval_token: { type: "string", minLength: 16, maxLength: 256, description: "Private proof from the active user-approved MCP connection." },
+              workspace_id: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$",
+              },
+              job_id: { type: "string", format: "uuid" },
+              confirm: { const: true },
+            },
+          }),
+          responses: {
+            ...photoReconstructionResponses,
+            "200": {
+              description: "Cancellation acknowledgement and the terminal job view.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CancelPhotoReconstructionResult" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/reconstructions/finalize": {
+        post: {
+          operationId: "finalize_workspace_photo_reconstruction",
+          summary: "Finalize a ready reconstruction as a browser-owned Reality Asset.",
+          description: "Pins the ready output to expected_output_sha256, then asks the authoritative browser to independently preflight, hash, store, and register it. The result is visual_only and uncalibrated; this operation creates neither a component nor collision, metric, physics, structural, or CAD authority.",
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "session_token", "instruction_digest", "workspace_id", "job_id", "display_name",
+              "expected_output_sha256", "approval_token",
+            ],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              approval_token: { type: "string", minLength: 16, maxLength: 256, description: "Private proof from the active user-approved MCP connection." },
+              workspace_id: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$",
+              },
+              job_id: { type: "string", format: "uuid" },
+              display_name: {
+                type: "string",
+                minLength: 1,
+                maxLength: 255,
+                description: "A plain display label, never a path or URL.",
+              },
+              expected_output_sha256: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+            },
+          }),
+          responses: {
+            ...photoReconstructionResponses,
+            "200": {
+              description: "The browser-registered digest-pinned Reality Asset reference and safe descriptor.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/FinalizePhotoReconstructionResult" },
+                },
+              },
+            },
           },
         },
       },
@@ -782,6 +1221,65 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
             },
           },
         },
+        PhotoReconstructionPhotoInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["photo_id", "media_type", "byte_length", "sha256"],
+          properties: {
+            photo_id: {
+              type: "string",
+              minLength: 1,
+              maxLength: 64,
+              pattern: "^[A-Za-z0-9][A-Za-z0-9._~-]{0,63}$",
+            },
+            media_type: { enum: PHOTO_RECONSTRUCTION_MEDIA_TYPES },
+            byte_length: {
+              type: "integer",
+              minimum: 1,
+              maximum: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoBytes,
+            },
+            sha256: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" },
+          },
+        },
+        PhotoReconstructionUploadGrant: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "photoId", "method", "url", "authorization", "token", "contentType", "contentLength",
+            "expiresAt",
+          ],
+          properties: {
+            photoId: { type: "string", minLength: 1, maxLength: 64 },
+            method: { const: "PUT" },
+            url: { type: "string", format: "uri" },
+            authorization: { const: "Bearer" },
+            token: { type: "string", minLength: 43, maxLength: 43 },
+            contentType: { enum: PHOTO_RECONSTRUCTION_MEDIA_TYPES },
+            contentLength: {
+              type: "integer",
+              minimum: 1,
+              maximum: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoBytes,
+            },
+            expiresAt: { type: "string", format: "date-time" },
+          },
+        },
+        PhotoReconstructionCandidate: photoReconstructionCandidateSchema,
+        PhotoReconstructionJob: photoReconstructionJobSchema,
+        BeginPhotoReconstructionResult: beginPhotoReconstructionResultSchema,
+        PhotoReconstructionJobResult: photoReconstructionJobResultSchema,
+        CancelPhotoReconstructionResult: cancelPhotoReconstructionResultSchema,
+        FinalizePhotoReconstructionResult: finalizePhotoReconstructionResultSchema,
+        RealityAssetPoint: {
+          type: "object",
+          additionalProperties: false,
+          required: ["x", "y", "z"],
+          properties: {
+            x: { type: "number", minimum: -1_000_000_000_000, maximum: 1_000_000_000_000 },
+            y: { type: "number", minimum: -1_000_000_000_000, maximum: 1_000_000_000_000 },
+            z: { type: "number", minimum: -1_000_000_000_000, maximum: 1_000_000_000_000 },
+          },
+        },
+        RealityAssetDescriptor: realityAssetDescriptorSchema,
         WorkspaceSession: {
           type: "object",
           additionalProperties: false,

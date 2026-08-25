@@ -11,10 +11,19 @@ import {
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
+  type BeginWorkspacePhotoReconstructionInput,
+  type CancelWorkspacePhotoReconstructionInput,
+  type FinalizeWorkspacePhotoReconstructionInput,
+  type InspectWorkspacePhotoReconstructionInput,
+  type StartWorkspacePhotoReconstructionInput,
   type WorkspaceAgentResult,
   type WorkspaceAgentToolName,
   type WorkspacePermissionScope,
 } from "../../src/workspace/agents";
+import {
+  PHOTO_RECONSTRUCTION_LIMITS,
+  PHOTO_RECONSTRUCTION_MEDIA_TYPES,
+} from "../../src/reconstruction/contracts";
 import {
   workspaceProtocolSchema,
   type WorkspaceCommandBatch,
@@ -22,7 +31,7 @@ import {
 
 export const WORKSPACE_MCP_SERVER_INFO = Object.freeze({
   name: "semaframe-workspace-engine",
-  version: "1.8.0",
+  version: "1.9.0",
 });
 
 export type WorkspaceMcpBackendResult = Readonly<{
@@ -51,6 +60,26 @@ export interface WorkspaceMcpBackend {
     input: unknown,
     client: WorkspaceMcpClientContext,
   ): Promise<WorkspaceMcpBackendResult>;
+  beginPhotoReconstruction?(
+    input: BeginWorkspacePhotoReconstructionInput,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
+  startPhotoReconstruction?(
+    input: StartWorkspacePhotoReconstructionInput,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
+  inspectPhotoReconstruction?(
+    input: InspectWorkspacePhotoReconstructionInput,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
+  cancelPhotoReconstruction?(
+    input: CancelWorkspacePhotoReconstructionInput,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
+  finalizePhotoReconstruction?(
+    input: FinalizeWorkspacePhotoReconstructionInput,
+    client: WorkspaceMcpClientContext,
+  ): Promise<WorkspaceMcpBackendResult>;
 }
 
 export type RegisterWorkspaceToolsOptions = Readonly<{
@@ -73,6 +102,11 @@ const requiredActionSchema = z.enum([
   "begin_workspace_asset_import",
   "cancel_workspace_asset_import",
   "complete_workspace_asset_import",
+  "begin_workspace_photo_reconstruction",
+  "start_workspace_photo_reconstruction",
+  "inspect_workspace_photo_reconstruction",
+  "cancel_workspace_photo_reconstruction",
+  "finalize_workspace_photo_reconstruction",
   "begin_workspace_update",
   "submit_workspace_batch",
   "undo_workspace_batch",
@@ -184,9 +218,24 @@ function clientContext(
 
 function toolResult(name: WorkspaceAgentToolName, result: WorkspaceMcpBackendResult) {
   const structuredContent = normalizeResult(result);
+  const textContent = name === "begin_workspace_photo_reconstruction" && structuredContent.ok
+    ? {
+        ok: true,
+        data: {
+          job: typeof structuredContent.data === "object" && structuredContent.data !== null
+            ? (structuredContent.data as Record<string, unknown>).job
+            : undefined,
+          upload_grants: "redacted_from_text_use_structuredContent",
+          upload_grant_count: typeof structuredContent.data === "object" && structuredContent.data !== null &&
+            Array.isArray((structuredContent.data as Record<string, unknown>).uploads)
+            ? ((structuredContent.data as Record<string, unknown>).uploads as unknown[]).length
+            : 0,
+        },
+      }
+    : structuredContent;
   return {
     content: [
-      { type: "text" as const, text: JSON.stringify(structuredContent, null, 2) },
+      { type: "text" as const, text: JSON.stringify(textContent, null, 2) },
       ...(name === "get_workspace_instructions" ? [{
         type: "resource_link" as const,
         uri: "workspace://instructions/v1",
@@ -261,6 +310,88 @@ const sessionFields = {
   session_token: z.string().min(8).max(256),
   instruction_digest: z.string().min(8).max(256),
 };
+
+const reconstructionWorkspaceIdSchema = z.string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/u);
+const reconstructionJobIdSchema = z.string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
+const canonicalSha256Schema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
+
+export const workspacePhotoReconstructionPhotoInputSchema = z.strictObject({
+  photo_id: z.string().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._~-]*$/u),
+  media_type: z.enum(PHOTO_RECONSTRUCTION_MEDIA_TYPES),
+  byte_length: z.number().int().positive().max(PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoBytes),
+  sha256: canonicalSha256Schema,
+});
+
+export const beginWorkspacePhotoReconstructionInputSchema = z.strictObject({
+  ...sessionFields,
+  request_id: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._~-]*$/u),
+  workspace_id: reconstructionWorkspaceIdSchema,
+  profile: z.enum(["preview", "balanced", "quality"]),
+  photos: z.array(workspacePhotoReconstructionPhotoInputSchema)
+    .min(PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount)
+    .max(PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount),
+}).superRefine((input, context) => {
+  const photoIds = new Set<string>();
+  const digests = new Set<string>();
+  let totalBytes = 0;
+  input.photos.forEach((photo, index) => {
+    if (photoIds.has(photo.photo_id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["photos", index, "photo_id"],
+        message: "photo_id must be unique within one reconstruction",
+      });
+    }
+    photoIds.add(photo.photo_id);
+    if (digests.has(photo.sha256)) {
+      context.addIssue({
+        code: "custom",
+        path: ["photos", index, "sha256"],
+        message: "Duplicate photo content is not accepted",
+      });
+    }
+    digests.add(photo.sha256);
+    totalBytes += photo.byte_length;
+  });
+  if (totalBytes > PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoSetBytes) {
+    context.addIssue({
+      code: "custom",
+      path: ["photos"],
+      message: `Photo set exceeds ${PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoSetBytes} bytes`,
+    });
+  }
+});
+
+export const startWorkspacePhotoReconstructionInputSchema = z.strictObject({
+  ...sessionFields,
+  workspace_id: reconstructionWorkspaceIdSchema,
+  job_id: reconstructionJobIdSchema,
+});
+
+export const inspectWorkspacePhotoReconstructionInputSchema = z.strictObject({
+  ...sessionFields,
+  workspace_id: reconstructionWorkspaceIdSchema,
+  job_id: reconstructionJobIdSchema,
+});
+
+export const cancelWorkspacePhotoReconstructionInputSchema = z.strictObject({
+  ...sessionFields,
+  workspace_id: reconstructionWorkspaceIdSchema,
+  job_id: reconstructionJobIdSchema,
+  confirm: z.literal(true),
+});
+
+export const finalizeWorkspacePhotoReconstructionInputSchema = z.strictObject({
+  ...sessionFields,
+  workspace_id: reconstructionWorkspaceIdSchema,
+  job_id: reconstructionJobIdSchema,
+  display_name: z.string().min(1).max(255),
+  expected_output_sha256: canonicalSha256Schema,
+});
 
 type SubmitWorkspaceBatchInput = Readonly<{
   session_token: string;
@@ -744,6 +875,91 @@ export function registerWorkspaceTools(
   );
 
   server.registerTool(
+    "begin_workspace_photo_reconstruction",
+    {
+      title: "Stage a photo set for Reality reconstruction",
+      description: "After explicit asset:reconstruct approval, declares 2-400 user-provided photos by exact media type, byte length, and SHA-256 and returns bounded one-time upload grants. Photo bytes never enter MCP JSON, a Workspace batch, or the saved project.",
+      inputSchema: beginWorkspacePhotoReconstructionInputSchema,
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "begin_workspace_photo_reconstruction",
+      await (backend.beginPhotoReconstruction
+        ? backend.beginPhotoReconstruction(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("begin_workspace_photo_reconstruction", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "start_workspace_photo_reconstruction",
+    {
+      title: "Start a verified photo reconstruction",
+      description: "Explicitly queues an awaiting-upload reconstruction only after the host has byte-verified every declared photo. Identical retries for the same job are idempotent; the backend and source bytes remain host-owned.",
+      inputSchema: startWorkspacePhotoReconstructionInputSchema,
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "start_workspace_photo_reconstruction",
+      await (backend.startPhotoReconstruction
+        ? backend.startPhotoReconstruction(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("start_workspace_photo_reconstruction", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "inspect_workspace_photo_reconstruction",
+    {
+      title: "Inspect a photo reconstruction job",
+      description: "Returns the authorized job's exact phase, bounded progress, warnings, backend identity, and digest-pinned output candidate when ready. It never returns photo bytes, local paths, credentials, or logs containing source metadata.",
+      inputSchema: inspectWorkspacePhotoReconstructionInputSchema,
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "inspect_workspace_photo_reconstruction",
+      await (backend.inspectPhotoReconstruction
+        ? backend.inspectPhotoReconstruction(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("inspect_workspace_photo_reconstruction", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "cancel_workspace_photo_reconstruction",
+    {
+      title: "Cancel a photo reconstruction job",
+      description: "With confirm=true, cancels one job owned by the approved session and schedules its temporary source and output bytes for deletion. A ready asset that was already finalized is not deleted.",
+      inputSchema: cancelWorkspacePhotoReconstructionInputSchema,
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "cancel_workspace_photo_reconstruction",
+      await (backend.cancelPhotoReconstruction
+        ? backend.cancelPhotoReconstruction(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("cancel_workspace_photo_reconstruction", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
+    "finalize_workspace_photo_reconstruction",
+    {
+      title: "Finalize a reconstructed Reality Asset",
+      description: "Pins the ready job to expected_output_sha256, independently preflights the generated Gaussian payload, and registers a content-addressed Reality Asset. The result remains visual_only and uncalibrated; it does not create a component or claim collision, metric, physics, or CAD authority.",
+      inputSchema: finalizeWorkspacePhotoReconstructionInputSchema,
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "finalize_workspace_photo_reconstruction",
+      await (backend.finalizePhotoReconstruction
+        ? backend.finalizePhotoReconstruction(input, clientContext({}, context, protocolEra))
+        : backend.dispatch("finalize_workspace_photo_reconstruction", input, clientContext({}, context, protocolEra))),
+    ),
+  );
+
+  server.registerTool(
     "begin_workspace_update",
     {
       title: "Begin an atomic Workspace update",
@@ -849,6 +1065,7 @@ export function createWorkspaceMcpServer(
       "For a data-backed chart, use data_interaction_quickstart: create an inline.snapshot@1.0.0 resource and bind $.labels and $.series in snapshot mode.",
       "For 2D and 3D interaction, connect declared semantic events to declared actions; button.pressed can invoke spatial play_animation, and spatial.activated can invoke a window visibility action.",
       "Copy exact asset IDs and supported animation clips from capability_manifest.asset_library; never guess them.",
+      "Raw photo reconstruction requires the non-default asset:reconstruct scope: begin and upload the declared photo set, explicitly start only after all uploads verify, inspect until ready, and finalize against the exact output SHA-256. The resulting Gaussian remains visual_only and uncalibrated until separately calibrated.",
       "All external controllers use the same Workspace agent controls. Realtime partials are client-side previews only; final mutations use begin_workspace_update then submit_workspace_batch.",
     ].join(" "),
   });

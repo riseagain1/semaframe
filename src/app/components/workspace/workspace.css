@@ -740,6 +740,19 @@
 .workspace-reality__import p { margin: 0; color: #aeb8c8; font-size: .71rem; line-height: 1.45; }
 .workspace-reality__import button { min-height: 44px; }
 .workspace-reality__import .workspace-reality__status { color: #dff7ff; }
+.workspace-reality__reconstruct { border-color: rgba(104, 213, 255, .28); background: rgba(104, 213, 255, .055); }
+.workspace-reality__section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.workspace-reality__section-heading span { padding: 3px 6px; color: #9fe7ff; border: 1px solid rgba(104, 213, 255, .25); border-radius: 999px; background: rgba(104, 213, 255, .08); font-size: .6rem; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.workspace-reality__profile { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, .9fr); align-items: center; gap: 8px; color: #cbd3df; font-size: .71rem; font-weight: 650; }
+.workspace-reality__profile select { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px 8px; color: #eef7fb; border: 1px solid rgba(255, 255, 255, .17); border-radius: 7px; background: #0c1118; }
+.workspace-reality__capability { color: #9fe870 !important; }
+.workspace-reality__capability.is-unavailable { color: #ffb86b !important; }
+.workspace-reality__progress { display: grid; gap: 6px; padding: 9px; border: 1px solid rgba(104, 213, 255, .2); border-radius: 8px; background: rgba(4, 11, 17, .55); }
+.workspace-reality__progress > div { display: flex; justify-content: space-between; gap: 8px; color: #dff7ff; font-size: .7rem; text-transform: capitalize; }
+.workspace-reality__progress progress { width: 100%; height: 7px; overflow: hidden; border: 0; border-radius: 999px; accent-color: #68d5ff; }
+.workspace-reality__progress small { color: #9aa8ba; font-size: .65rem; line-height: 1.4; }
+.workspace-reality__progress .is-secondary { min-height: 38px; color: #ffd6dc; border-color: rgba(255, 102, 125, .4); background: rgba(101, 26, 40, .24); }
+.workspace-reality__boundary { padding-top: 7px; border-top: 1px solid rgba(255, 255, 255, .09); color: #94a1b3 !important; font-size: .66rem !important; }
 .workspace-reality__list { align-content: start; }
 .workspace-reality-card { display: grid !important; gap: 8px !important; padding: 10px; border: 1px solid rgba(255,255,255,.11); border-radius: 9px; background: rgba(255,255,255,.025); }
 .workspace-reality-card__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

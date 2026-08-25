@@ -8,6 +8,10 @@ import {
 } from "./contracts";
 import workspaceCommandSchema from "../protocol/workspaceProtocol.schema.json";
 import { NORMALIZED_CHART_TIMESERIES_SCHEMA } from "../data/connectorCatalog";
+import {
+  PHOTO_RECONSTRUCTION_LIMITS,
+  PHOTO_RECONSTRUCTION_MEDIA_TYPES,
+} from "../../reconstruction/contracts";
 
 type SchemaRecord = Record<string, JSONValue>;
 
@@ -324,6 +328,36 @@ export const WORKSPACE_REALITY_ASSET_QUICKSTART: JSONValue = Object.freeze(jsonC
   },
 }));
 
+export const WORKSPACE_PHOTO_RECONSTRUCTION_QUICKSTART: JSONValue = Object.freeze(jsonContract({
+  required_scopes: ["workspace:read", "workspace:write", "component:create", "asset:reconstruct"],
+  accepted_inputs: {
+    media_types: [...PHOTO_RECONSTRUCTION_MEDIA_TYPES],
+    minimum_photos: PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount,
+    maximum_photos: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount,
+    maximum_photo_bytes: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoBytes,
+    maximum_photo_set_bytes: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoSetBytes,
+    maximum_photo_pixels: PHOTO_RECONSTRUCTION_LIMITS.maximumPixelCount,
+    maximum_photo_set_pixels: PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoSetPixelCount,
+    source_rule: "Use only photos the user explicitly supplied. Never scan local paths, import EXIF/GPS into the project, or fetch arbitrary URLs.",
+  },
+  profiles: ["preview", "balanced", "quality"],
+  workflow: [
+    "Request the non-default asset:reconstruct scope explicitly. It is never included in DEFAULT_WORKSPACE_AGENT_SCOPES.",
+    "Compute each photo's exact byte_length and sha256, assign a stable unique photo_id, and call begin_workspace_photo_reconstruction with the current exact workspace_id.",
+    "Read each short-lived upload URL and bearer only from begin_workspace_photo_reconstruction structuredContent, PUT the matching original photo once, then discard the grant. Never echo bytes, base64, local paths, upload URLs, or bearer tokens into another MCP input, transcript, log, Workspace batch, project, or history record.",
+    "After every declared photo is byte-verified, call start_workspace_photo_reconstruction with the returned job_id. Starting early fails closed.",
+    "Call inspect_workspace_photo_reconstruction until status is ready, failed, or cancelled. Treat progress as bounded status, not proof of output quality.",
+    "When ready, copy the exact result sha256 into expected_output_sha256 and call finalize_workspace_photo_reconstruction with a safe display_name. A mismatch fails closed.",
+    "Use the returned digest-pinned asset_ref in a normal begin_workspace_update/submit_workspace_batch transaction to create gaussian-splat@1.0.0.",
+  ],
+  authority: {
+    result: "The reconstructed Gaussian is engineeringAuthority visual_only with source scale and coordinates unknown until separately calibrated.",
+    proxies: "Create editable spatial or CAD proxies for collision, physics, feasibility, and semantic reasoning. Reconstruction never fabricates engineering authority.",
+    persistence: "Temporary photos, upload grants, reconstruction jobs, local paths, logs, and backend credentials are not project state. Only a finalized content-addressed Reality Asset descriptor and component references persist.",
+    availability: "A configured host reconstruction backend is required. Missing or unsupported backends fail explicitly; no placeholder model is fabricated.",
+  },
+}));
+
 export const WORKSPACE_AGENT_GUIDE_TEXT = `
 You control a deterministic universal 2D/3D component workspace. You are the
 planner; the Workspace engine validates, resolves, commits, stores, and projects.
@@ -479,6 +513,18 @@ Component and placement rules
   Use inspect_workspace_asset with an exact ra_<sha256> ID to rediscover the
   complete safe descriptor if inspect_workspace omitted it; its
   binary_availability remains host_local_unknown to Agents.
+- Raw photo sets use a separate, explicitly authorized reconstruction workflow.
+  Request the non-default asset:reconstruct scope, declare 2-400 user-provided
+  photos by exact media_type, byte_length, and sha256, upload each through its
+  one-time capability, explicitly start the verified job, inspect bounded
+  progress, then finalize only against the ready output's exact digest. Raw
+  photo bytes, EXIF/GPS, local paths, temporary jobs, and backend logs never
+  enter Workspace project state. The begin result necessarily returns one-use
+  upload URLs and bearers in structuredContent; treat them as short-lived
+  secrets, use them only for their matching PUT, never echo or persist them,
+  and note that the human-readable text result is redacted. A configured reconstruction backend
+  is required; unavailable or failed reconstruction returns an explicit error
+  and never fabricates a fallback model.
 - A Gaussian splat is always engineeringAuthority visual_only. It contributes
   calibrated visual bounds to SSG 3.2 but never a collider, rigid body, support
   surface, CAD solid, or feasibility result. Choose uncalibrated,
@@ -729,6 +775,7 @@ export const WORKSPACE_AGENT_GUIDE = Object.freeze({
   data_interaction_quickstart: WORKSPACE_DATA_INTERACTION_QUICKSTART,
   modeling_quickstart: WORKSPACE_MODELING_QUICKSTART,
   reality_asset_quickstart: WORKSPACE_REALITY_ASSET_QUICKSTART,
+  photo_reconstruction_quickstart: WORKSPACE_PHOTO_RECONSTRUCTION_QUICKSTART,
   create_component_schema: WORKSPACE_CREATE_COMPONENT_SCHEMA,
   workspace_command_schema: workspaceCommandSchema as unknown as JSONValue,
 }) satisfies JSONValue;

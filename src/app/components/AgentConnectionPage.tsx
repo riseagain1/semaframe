@@ -30,6 +30,7 @@ export type AgentConnectionClient = Readonly<{
 }>;
 
 export type AgentConnectionSetup = string | Readonly<{ mcpConfig: string }>;
+export type AgentRestConnectionSetup = string | Readonly<{ restConfig: string }>;
 
 export type AgentConnectionPageProps = {
   id?: string;
@@ -43,6 +44,7 @@ export type AgentConnectionPageProps = {
   expiresAt?: string;
   onEnable: (allowDeleteAndClear: boolean) => unknown | Promise<unknown>;
   onCopySetup?: () => AgentConnectionSetup | Promise<AgentConnectionSetup>;
+  onCopyRestSetup?: () => AgentRestConnectionSetup | Promise<AgentRestConnectionSetup>;
   onPermissionChange: (allowDeleteAndClear: boolean) => unknown | Promise<unknown>;
   onRetry?: () => unknown | Promise<unknown>;
   /** Replaces the current offer URL without changing the browser-engine lease. */
@@ -144,6 +146,10 @@ function setupText(payload: AgentConnectionSetup): string {
   return typeof payload === "string" ? payload : payload.mcpConfig;
 }
 
+function restSetupText(payload: AgentRestConnectionSetup): string {
+  return typeof payload === "string" ? payload : payload.restConfig;
+}
+
 function expiryLabel(expiresAt: string): string {
   const date = new Date(expiresAt);
   return Number.isNaN(date.valueOf()) ? expiresAt : date.toLocaleString();
@@ -166,6 +172,7 @@ export function AgentConnectionPage({
   expiresAt,
   onEnable,
   onCopySetup,
+  onCopyRestSetup,
   onPermissionChange,
   onRetry,
   onRefreshOffer,
@@ -189,7 +196,7 @@ export function AgentConnectionPage({
   onCloseRef.current = onClose;
   const [permission, setPermission] = useState(status === "disabled" ? false : allowDeleteAndClear);
   const [pending, setPending] = useState<PendingAction | null>(null);
-  const [copied, setCopied] = useState<"connection" | "setup" | null>(null);
+  const [copied, setCopied] = useState<"connection" | "mcp" | "rest" | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [confirmTakeover, setConfirmTakeover] = useState(false);
   const [localError, setLocalError] = useState<string>();
@@ -284,7 +291,7 @@ export function AgentConnectionPage({
       const text = connectionUrl ?? (onCopySetup ? setupText(await onCopySetup()) : "");
       if (!text || !navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       await navigator.clipboard.writeText(text);
-      setCopied(connectionUrl ? "connection" : "setup");
+      setCopied(connectionUrl ? "connection" : "mcp");
       if (copyTimerRef.current !== undefined) window.clearTimeout(copyTimerRef.current);
       copyTimerRef.current = window.setTimeout(() => setCopied(null), 2_400);
     } catch {
@@ -295,15 +302,19 @@ export function AgentConnectionPage({
     }
   };
 
-  const copyLocalSetup = async () => {
-    if (!onCopySetup) return;
+  const copyLocalSetup = async (kind: "mcp" | "rest") => {
+    const readSetup = kind === "mcp" ? onCopySetup : onCopyRestSetup;
+    if (!readSetup) return;
     setPending("copy");
     setLocalError(undefined);
     try {
-      const text = setupText(await onCopySetup());
+      const payload = await readSetup();
+      const text = kind === "mcp"
+        ? setupText(payload as AgentConnectionSetup)
+        : restSetupText(payload as AgentRestConnectionSetup);
       if (!text || !navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       await navigator.clipboard.writeText(text);
-      setCopied("setup");
+      setCopied(kind);
       if (copyTimerRef.current !== undefined) window.clearTimeout(copyTimerRef.current);
       copyTimerRef.current = window.setTimeout(() => setCopied(null), 2_400);
     } catch {
@@ -466,18 +477,24 @@ export function AgentConnectionPage({
                     disabled={!canCopy || blocked}
                   >
                     {pending === "copy" ? <LoaderCircle className="spin-slow" size={16} aria-hidden="true" /> : copied === "connection" ? <Check size={16} aria-hidden="true" /> : <Clipboard size={16} aria-hidden="true" />}
-                    {urlExpired && connectionUrl ? "Connection URL expired" : copied === "connection" ? "Connection URL copied" : copied === "setup" && !connectionUrl ? "Connection setup copied" : connectionUrl ? "Copy connection URL" : "Copy connection setup"}
+                    {urlExpired && connectionUrl ? "Connection URL expired" : copied === "connection" ? "Connection URL copied" : copied === "mcp" && !connectionUrl ? "MCP setup copied" : connectionUrl ? "Copy connection URL" : "Copy MCP setup"}
                   </button>
                   <p className="agent-copy-guidance" role="note">{status === "connected"
                     ? "Keep this address for reconnecting the approved client. Revoke the pairing before giving control to a different agent."
                     : "After copying, paste it into your agent client and ask it to connect. Access is still controlled from this page."}</p>
-                  {onCopySetup && <details className="agent-local-setup">
+                  {(onCopySetup || onCopyRestSetup) && <details className="agent-local-setup">
                     <summary>Advanced local setup</summary>
-                    <p>This setup contains an ephemeral bearer credential. Copy it only into a trusted local stdio or REST client, and never paste it into chat, a URL, project data, or logs.</p>
-                    <button type="button" onClick={() => void copyLocalSetup()} disabled={blocked}>
-                      {pending === "copy" ? <LoaderCircle className="spin-slow" size={15} aria-hidden="true" /> : copied === "setup" ? <Check size={15} aria-hidden="true" /> : <Clipboard size={15} aria-hidden="true" />}
-                      {copied === "setup" ? "Local setup copied" : "Copy local stdio/REST setup"}
-                    </button>
+                    <p>The stdio MCP setup contains only the non-authorizing offer URL and still requires in-app approval. The REST setup contains an ephemeral bearer; copy it only into a trusted local REST client and never into chat, a URL, project data, or logs.</p>
+                    <div className="agent-local-setup-actions">
+                      {onCopySetup && <button type="button" onClick={() => void copyLocalSetup("mcp")} disabled={blocked}>
+                        {pending === "copy" ? <LoaderCircle className="spin-slow" size={15} aria-hidden="true" /> : copied === "mcp" ? <Check size={15} aria-hidden="true" /> : <Clipboard size={15} aria-hidden="true" />}
+                        {copied === "mcp" ? "MCP setup copied" : "Copy stdio MCP setup"}
+                      </button>}
+                      {onCopyRestSetup && <button type="button" onClick={() => void copyLocalSetup("rest")} disabled={blocked}>
+                        {pending === "copy" ? <LoaderCircle className="spin-slow" size={15} aria-hidden="true" /> : copied === "rest" ? <Check size={15} aria-hidden="true" /> : <KeyRound size={15} aria-hidden="true" />}
+                        {copied === "rest" ? "REST setup copied" : "Copy bearer REST setup"}
+                      </button>}
+                    </div>
                   </details>}
                 </div>
               </section>

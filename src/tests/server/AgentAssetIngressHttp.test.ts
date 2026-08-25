@@ -15,6 +15,7 @@ import {
 
 const PUBLIC_URL = "http://127.0.0.1:8788";
 const ORIGIN = "http://127.0.0.1:4173";
+const BROWSER_BOOTSTRAP_TOKEN = "b".repeat(43);
 
 const gateways: AgentGateway[] = [];
 const handlers: AgentGatewayFetchHandler[] = [];
@@ -56,6 +57,7 @@ async function setup() {
   const handle = createAgentGatewayHttpHandler(gateway, {
     allowedOrigins: [ORIGIN],
     publicBaseUrl: PUBLIC_URL,
+    browserBootstrapToken: BROWSER_BOOTSTRAP_TOKEN,
     assetIngress,
   });
   gateways.push(gateway);
@@ -336,6 +338,7 @@ describe("Agent asset ingress HTTP boundary", () => {
     const browserHeaders = {
       origin: ORIGIN,
       "x-semaframe-agent-csrf": connection.csrfToken,
+      "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN,
     };
     const inspect = await handle(jsonRequest("/api/agent/assets/candidates/inspect", {
       candidateHandle: grant.candidate_handle,
@@ -393,6 +396,7 @@ describe("Agent asset ingress HTTP boundary", () => {
     const handler = createNodeAgentGatewayHttpHandler(gateway, {
       allowedOrigins: [ORIGIN],
       publicBaseUrl: PUBLIC_URL,
+      browserBootstrapToken: BROWSER_BOOTSTRAP_TOKEN,
       bodyLimitBytes: 32,
       assetIngress,
     });
@@ -465,6 +469,7 @@ describe("Agent asset ingress HTTP boundary", () => {
     const handler = createNodeAgentGatewayHttpHandler(gateway, {
       allowedOrigins: [ORIGIN],
       publicBaseUrl: PUBLIC_URL,
+      browserBootstrapToken: BROWSER_BOOTSTRAP_TOKEN,
       assetIngress,
     });
     nodeHandlers.push(handler);
@@ -489,6 +494,7 @@ describe("Agent asset ingress HTTP boundary", () => {
       headers: {
         origin: ORIGIN,
         "x-semaframe-agent-csrf": gateway.csrfToken,
+        "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN,
         "content-type": "application/json",
         "content-length": String(requestBody.byteLength),
       },
@@ -536,6 +542,7 @@ describe("Agent asset ingress HTTP boundary", () => {
     const handler = createNodeAgentGatewayHttpHandler(gateway, {
       allowedOrigins: [ORIGIN],
       publicBaseUrl: PUBLIC_URL,
+      browserBootstrapToken: BROWSER_BOOTSTRAP_TOKEN,
       assetIngress,
     });
     nodeHandlers.push(handler);
@@ -566,6 +573,7 @@ describe("Agent asset ingress HTTP boundary", () => {
       headers: {
         origin: ORIGIN,
         "x-semaframe-agent-csrf": gateway.csrfToken,
+        "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN,
         "content-type": "application/json",
         "content-length": String(requestBody.byteLength),
       },

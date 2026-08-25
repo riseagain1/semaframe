@@ -6,6 +6,7 @@ import { FeedFetchRuntime } from "../../../server/feed/FeedFetchRuntime";
 
 const ORIGIN = "http://127.0.0.1:4173";
 const PUBLIC_URL = "http://127.0.0.1:8788";
+const BROWSER_BOOTSTRAP_TOKEN = "b".repeat(43);
 const gateways: AgentGateway[] = [];
 
 function setup(feedApprovalStore?: FeedFetchApprovalStore) {
@@ -33,6 +34,7 @@ function setup(feedApprovalStore?: FeedFetchApprovalStore) {
     handle: createAgentGatewayHttpHandler(gateway, {
       allowedOrigins: [ORIGIN],
       publicBaseUrl: PUBLIC_URL,
+      browserBootstrapToken: BROWSER_BOOTSTRAP_TOKEN,
       feedRuntime,
       ...(feedApprovalStore ? { feedApprovalStore } : {}),
     }),
@@ -48,6 +50,7 @@ function approvalRequest(csrfToken: string | undefined, origin = ORIGIN, body: u
     headers: {
       "content-type": "application/json",
       origin,
+      "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN,
       ...(csrfToken ? { "x-semaframe-agent-csrf": csrfToken } : {}),
     },
     body: JSON.stringify(body),
@@ -63,6 +66,7 @@ function feedRequest(csrfToken: string | undefined, origin = ORIGIN, body: unkno
     headers: {
       "content-type": "application/json",
       origin,
+      "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN,
       ...(csrfToken ? { "x-semaframe-agent-csrf": csrfToken } : {}),
     },
     body: JSON.stringify(body),
@@ -76,7 +80,9 @@ afterEach(() => {
 describe("Agent Gateway host feed boundary", () => {
   it("requires the existing exact browser Origin and CSRF token", async () => {
     const { handle, request } = setup();
-    const configResponse = await handle(new Request(`${PUBLIC_URL}/api/agent/config`));
+    const configResponse = await handle(new Request(`${PUBLIC_URL}/api/agent/config`, {
+      headers: { "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN },
+    }));
     const config = await configResponse.json() as Record<string, unknown>;
     const csrf = String(config.csrfToken);
 

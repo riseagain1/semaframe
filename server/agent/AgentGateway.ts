@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { DEFAULT_WORKSPACE_AGENT_SCOPES } from "../../src/workspace/agents/contracts";
 import {
   AGENT_GATEWAY_VERSION,
@@ -139,6 +140,7 @@ export type AgentGatewayConfig = Readonly<{
 export type PairingReveal = Readonly<{
   pairingBearer: string;
   mcpConfig: string;
+  restConfig: string;
   restEndpoint: string;
 }> & AgentConnectionOffer;
 
@@ -336,7 +338,10 @@ export class AgentGateway {
    * capabilities such as asset ingress must be bound to an approved client and
    * scope, not merely to possession of the process-wide pairing credential.
    */
-  requireApprovedClientScope(scope: string): ApprovedAgentScopePrincipal {
+  requireApprovedClientScope(
+    scope: string,
+    proof?: Readonly<{ approvalToken: string; clientId?: string }>,
+  ): ApprovedAgentScopePrincipal {
     this.#assertOpen();
     this.#assertEnabled();
     const claim = this.#offer?.claim;
@@ -358,6 +363,20 @@ export class AgentGateway {
         `The approved connection does not include the required ${scope} scope.`,
       );
     }
+    if (proof) {
+      if (!proof.approvalToken || !tokenMatches(proof.approvalToken, claim.tokenHash)) {
+        throw new AgentGatewayError(
+          "approval_invalid",
+          "The approval proof does not match the active Agent connection.",
+        );
+      }
+      if (proof.clientId !== undefined && claim.clientId !== proof.clientId) {
+        throw new AgentGatewayError(
+          "approval_invalid",
+          "The REST Agent identity does not match the approved connection claim.",
+        );
+      }
+    }
     return Object.freeze({
       authorizationId: claim.id,
       ...(claim.clientId ? { clientId: claim.clientId } : {}),
@@ -370,22 +389,37 @@ export class AgentGateway {
     this.#assertOpen();
     this.#assertEnabled();
     const offer = this.#ensureFreshOffer();
+    const offerView = this.#offerView(offer);
     const restEndpoint = `${this.#publicBaseUrl}/v1`;
     return Object.freeze({
       pairingBearer: this.#pairingBearer,
       restEndpoint,
-      ...this.#offerView(offer),
+      ...offerView,
       mcpConfig: JSON.stringify({
         mcpServers: {
           "semaframe": {
-            command: "npm",
-            // npm's normal run banner is stdout and would corrupt MCP stdio.
-            args: ["--silent", "--prefix", this.#workspaceRoot, "run", "agent:mcp"],
+            // Launch the bridge itself instead of an npm wrapper. MCP hosts
+            // terminate the configured PID directly; on POSIX npm can exit
+            // without forwarding that signal to its child, leaving an
+            // in-flight upstream request orphaned.
+            command: process.execPath,
+            args: [
+              "--import",
+              pathToFileURL(join(this.#workspaceRoot, "node_modules", "tsx", "dist", "loader.mjs")).href,
+              join(this.#workspaceRoot, "scripts", "agent-mcp.ts"),
+            ],
             env: {
-              SEMAFRAME_AGENT_GATEWAY_URL: this.#publicBaseUrl,
-              SEMAFRAME_AGENT_TOKEN: this.#pairingBearer,
+              // The child receives only the non-authorizing offer URL. REST
+              // authority is exposed separately and never enters MCP env.
+              SEMAFRAME_AGENT_MCP_URL: offerView.connectionUrl,
             },
           },
+        },
+      }, null, 2),
+      restConfig: JSON.stringify({
+        semaframeRest: {
+          baseUrl: restEndpoint,
+          authorization: `Bearer ${this.#pairingBearer}`,
         },
       }, null, 2),
     });

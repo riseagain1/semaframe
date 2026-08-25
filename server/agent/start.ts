@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { hostHeaderValidation } from "@modelcontextprotocol/node";
 import { AgentGateway } from "./AgentGateway";
 import { createNodeAgentGatewayHttpHandler } from "./AgentGatewayHttpHandler";
 import { resolveAgentGatewayNetworkConfig } from "./AgentGatewayNetworkConfig";
+import { closeAgentGatewayStack } from "./shutdown";
 
 function positiveInteger(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -38,6 +40,12 @@ const browserOrigins = [
   ]),
 ];
 const bodyLimitBytes = positiveInteger("SEMAFRAME_AGENT_BODY_LIMIT_BYTES", 512 * 1024);
+const shutdownTimeoutMs = positiveInteger("SEMAFRAME_AGENT_SHUTDOWN_TIMEOUT_MS", 15_000);
+const browserBootstrapToken = process.env.SEMAFRAME_AGENT_BROWSER_TOKEN?.trim()
+  || randomBytes(32).toString("base64url");
+if (!/^[A-Za-z0-9_-]{43}$/u.test(browserBootstrapToken)) {
+  throw new Error("SEMAFRAME_AGENT_BROWSER_TOKEN must be a 256-bit base64url capability.");
+}
 
 const gateway = new AgentGateway({
   publicBaseUrl,
@@ -52,6 +60,7 @@ const handle = createNodeAgentGatewayHttpHandler(gateway, {
   allowedOrigins: browserOrigins,
   publicBaseUrl,
   bodyLimitBytes,
+  browserBootstrapToken,
 });
 const validateHost = hostHeaderValidation([...network.allowedHostnames]);
 
@@ -73,10 +82,19 @@ let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  gateway.close();
-  void handle.close();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 5_000).unref();
+  void closeAgentGatewayStack({
+    server,
+    gateway,
+    handler: handle,
+    timeoutMs: shutdownTimeoutMs,
+  }).then(
+    () => process.exit(0),
+    () => {
+      // Keep diagnostics deliberately path- and credential-free.
+      console.error("SemaFrame Agent Gateway shutdown could not complete all cleanup work.");
+      process.exit(1);
+    },
+  );
 }
 
 process.on("SIGINT", shutdown);

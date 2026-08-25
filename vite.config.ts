@@ -46,7 +46,14 @@ export default defineConfig({
     port: 4173,
     strictPort: true,
     proxy: {
-      "/api/agent": process.env.SEMAFRAME_AGENT_GATEWAY_URL ?? "http://127.0.0.1:8788",
+      "/api/agent": {
+        target: process.env.SEMAFRAME_AGENT_GATEWAY_URL ?? "http://127.0.0.1:8788",
+        ...(process.env.SEMAFRAME_AGENT_BROWSER_TOKEN ? {
+          headers: {
+            "x-semaframe-browser-bootstrap": process.env.SEMAFRAME_AGENT_BROWSER_TOKEN,
+          },
+        } : {}),
+      },
     },
   },
   preview: { port: 4173, strictPort: true },

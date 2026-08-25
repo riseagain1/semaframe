@@ -44,7 +44,12 @@ import {
 import {
   WorkspaceRealityAssets,
   type WorkspaceRealityAssetItem,
+  type WorkspacePhotoReconstructionCapability,
 } from "./WorkspaceRealityAssets";
+import type {
+  PhotoReconstructionJobView,
+  PhotoReconstructionProfile,
+} from "../../../reconstruction/contracts";
 
 type WorkspacePanel = "library" | "inspector" | "models" | "reality" | "sources" | null;
 
@@ -86,7 +91,15 @@ export type WorkspaceChromeProps = Readonly<{
   realityAssets?: readonly WorkspaceRealityAssetItem[];
   realityImportBusy?: boolean;
   realityImportStatus?: string;
+  realityReconstructionCapability?: WorkspacePhotoReconstructionCapability;
+  realityReconstructionProfile?: PhotoReconstructionProfile;
+  realityReconstructionJob?: PhotoReconstructionJobView;
+  realityReconstructionBusy?: boolean;
+  realityReconstructionStatus?: string;
   onImportRealityAsset?: () => void;
+  onReconstructRealityFromPhotos?: () => void;
+  onRealityReconstructionProfile?: (profile: PhotoReconstructionProfile) => void;
+  onCancelRealityReconstruction?: () => void;
   onRelinkRealityAsset?: (assetId: string) => void;
   onDeleteRealityAsset?: (assetId: string) => boolean | void | Promise<boolean | void>;
   onCreateShowcase: () => void;
@@ -139,7 +152,15 @@ export function WorkspaceChrome({
   realityAssets = [],
   realityImportBusy,
   realityImportStatus,
+  realityReconstructionCapability,
+  realityReconstructionProfile,
+  realityReconstructionJob,
+  realityReconstructionBusy,
+  realityReconstructionStatus,
   onImportRealityAsset,
+  onReconstructRealityFromPhotos,
+  onRealityReconstructionProfile,
+  onCancelRealityReconstruction,
   onRelinkRealityAsset,
   onDeleteRealityAsset,
   onCreateShowcase,
@@ -274,7 +295,15 @@ export function WorkspaceChrome({
               disabled={disabled}
               importBusy={realityImportBusy}
               importStatus={realityImportStatus}
+              reconstructionCapability={realityReconstructionCapability}
+              reconstructionProfile={realityReconstructionProfile}
+              reconstructionJob={realityReconstructionJob}
+              reconstructionBusy={realityReconstructionBusy}
+              reconstructionStatus={realityReconstructionStatus}
               onImport={onImportRealityAsset}
+              onReconstruct={onReconstructRealityFromPhotos}
+              onReconstructionProfile={onRealityReconstructionProfile}
+              onCancelReconstruction={onCancelRealityReconstruction}
               onRelink={onRelinkRealityAsset}
               onDelete={onDeleteRealityAsset}
               onSelectComponent={onSelectComponent}

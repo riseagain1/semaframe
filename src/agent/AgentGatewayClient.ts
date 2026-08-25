@@ -4,6 +4,17 @@ import {
   type HostFeedFetchRequest,
   type HostFeedFetchResponse,
 } from "../workspace/data/hostFeedContracts";
+import {
+  PHOTO_RECONSTRUCTION_MEDIA_TYPES,
+  type BeginPhotoReconstructionInput,
+  type BeginPhotoReconstructionResult,
+  type PhotoReconstructionMediaType,
+  type PhotoReconstructionPhase,
+  type PhotoReconstructionJobView,
+  type PhotoReconstructionResultCandidate,
+  type PhotoReconstructionWarningCode,
+  type PhotoUploadGrant,
+} from "../reconstruction/contracts";
 
 export const AGENT_GATEWAY_COMMAND_NAMES = [
   "get_workspace_instructions",
@@ -20,11 +31,18 @@ export const AGENT_GATEWAY_COMMAND_NAMES = [
   "begin_workspace_asset_import",
   "cancel_workspace_asset_import",
   "complete_workspace_asset_import",
+  "begin_workspace_photo_reconstruction",
+  "start_workspace_photo_reconstruction",
+  "inspect_workspace_photo_reconstruction",
+  "cancel_workspace_photo_reconstruction",
+  "finalize_workspace_photo_reconstruction",
   "begin_workspace_update",
   "submit_workspace_batch",
   "undo_workspace_batch",
   "redo_workspace_batch",
   "read_workspace_events",
+  // Host-internal attested handoff. It is never exposed as an MCP/REST tool.
+  "complete_workspace_reconstruction_asset",
 ] as const;
 
 export type AgentGatewayCommandName = (typeof AGENT_GATEWAY_COMMAND_NAMES)[number];
@@ -73,6 +91,7 @@ export type AgentGatewayConfig = Readonly<{
 export type AgentGatewayPairing = Readonly<{
   pairingBearer: string;
   mcpConfig: string;
+  restConfig: string;
   restEndpoint: string;
   connectionUrl?: string;
   offerExpiresAt?: string;
@@ -93,6 +112,7 @@ export type AgentAssetCandidateDescriptor = Readonly<{
   mediaType: string;
   byteLength: number;
   sha256: string;
+  purpose: "generic_import" | "photo_reconstruction";
   status: "ready";
   expiresAt: string;
 }>;
@@ -100,6 +120,12 @@ export type AgentAssetCandidateDescriptor = Readonly<{
 export type AgentAssetCandidateStream = Readonly<{
   descriptor: AgentAssetCandidateDescriptor;
   body: ReadableStream<Uint8Array>;
+}>;
+
+export type PhotoReconstructionCapability = Readonly<{
+  backend: Readonly<{ id: string; version: string }>;
+  available: boolean;
+  reason?: string;
 }>;
 
 export type AgentGatewayStatus =
@@ -148,6 +174,13 @@ export type AgentGatewayEndpoints = Readonly<{
   assetCandidateOpen: string;
   assetCandidateComplete: string;
   assetCandidateCancel: string;
+  photoReconstructionCapability: string;
+  photoReconstructionBegin: string;
+  photoReconstructionStart: string;
+  photoReconstructionInspect: string;
+  photoReconstructionCancel: string;
+  photoReconstructionFinalize: string;
+  photoReconstructionUploadPrefix: string;
 }>;
 
 export class AgentGatewayError extends Error {
@@ -201,6 +234,13 @@ const DEFAULT_ENDPOINTS: AgentGatewayEndpoints = {
   assetCandidateOpen: "/api/agent/assets/candidates/open",
   assetCandidateComplete: "/api/agent/assets/candidates/complete",
   assetCandidateCancel: "/api/agent/assets/candidates/cancel",
+  photoReconstructionCapability: "/api/agent/reconstructions/capability",
+  photoReconstructionBegin: "/api/agent/reconstructions/begin",
+  photoReconstructionStart: "/api/agent/reconstructions/start",
+  photoReconstructionInspect: "/api/agent/reconstructions/inspect",
+  photoReconstructionCancel: "/api/agent/reconstructions/cancel",
+  photoReconstructionFinalize: "/api/agent/reconstructions/finalize",
+  photoReconstructionUploadPrefix: "/api/agent/reconstructions/photo-uploads",
 };
 
 const CLIENT_INSTANCE_ID_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/;
@@ -253,7 +293,7 @@ function assetCandidateRequest(candidateHandle: string, workspaceId: string): {
 function parseAssetCandidate(value: unknown): AgentAssetCandidateDescriptor {
   if (!isRecord(value) || Object.keys(value).some((key) => ![
     "version", "candidateHandle", "requestId", "workspaceId", "displayName", "format",
-    "mediaType", "byteLength", "sha256", "status", "expiresAt",
+    "mediaType", "byteLength", "sha256", "purpose", "status", "expiresAt",
   ].includes(key)) || value.version !== 1 ||
       typeof value.candidateHandle !== "string" || !ASSET_CANDIDATE_HANDLE_PATTERN.test(value.candidateHandle) ||
       typeof value.requestId !== "string" || value.requestId.length < 8 || value.requestId.length > 128 ||
@@ -263,6 +303,7 @@ function parseAssetCandidate(value: unknown): AgentAssetCandidateDescriptor {
       typeof value.mediaType !== "string" || value.mediaType.length < 3 || value.mediaType.length > 192 ||
       !Number.isSafeInteger(value.byteLength) || Number(value.byteLength) < 1 ||
       typeof value.sha256 !== "string" || !ASSET_DIGEST_PATTERN.test(value.sha256) ||
+      !["generic_import", "photo_reconstruction"].includes(String(value.purpose)) ||
       value.status !== "ready" || typeof value.expiresAt !== "string") {
     throw new AgentGatewayError("invalid_response", "The agent gateway returned an invalid asset candidate.");
   }
@@ -280,8 +321,180 @@ function parseAssetCandidate(value: unknown): AgentAssetCandidateDescriptor {
     mediaType: value.mediaType,
     byteLength: Number(value.byteLength),
     sha256: value.sha256,
+    purpose: value.purpose as "generic_import" | "photo_reconstruction",
     status: "ready",
     expiresAt: value.expiresAt,
+  });
+}
+
+const PHOTO_RECONSTRUCTION_JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const PHOTO_RECONSTRUCTION_PHASES = new Set<PhotoReconstructionPhase>([
+  "awaiting_upload", "queued", "camera_solving", "training", "packing", "ready", "failed", "cancelled",
+]);
+const PHOTO_RECONSTRUCTION_WARNINGS = new Set<PhotoReconstructionWarningCode>([
+  "low_photo_count",
+  "duplicate_content_removed",
+  "partial_camera_registration",
+  "source_scale_unknown",
+  "source_coordinates_unknown",
+]);
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const set = new Set(allowed);
+  return Object.keys(value).every((key) => set.has(key));
+}
+
+function isCanonicalIsoDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.valueOf()) && date.toISOString() === value;
+}
+
+function parsePhotoReconstructionCandidate(value: unknown): PhotoReconstructionResultCandidate {
+  if (!isRecord(value) || !exactKeys(value, ["candidateHandle", "format", "mediaType", "byteLength", "sha256"]) ||
+      typeof value.candidateHandle !== "string" || !ASSET_CANDIDATE_HANDLE_PATTERN.test(value.candidateHandle) ||
+      !["ply", "spz", "sog"].includes(String(value.format)) ||
+      typeof value.mediaType !== "string" || value.mediaType.length < 3 || value.mediaType.length > 192 ||
+      !Number.isSafeInteger(value.byteLength) || Number(value.byteLength) < 1 ||
+      typeof value.sha256 !== "string" || !ASSET_DIGEST_PATTERN.test(value.sha256)) {
+    throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid output candidate.");
+  }
+  return Object.freeze({
+    candidateHandle: value.candidateHandle,
+    format: value.format as "ply" | "spz" | "sog",
+    mediaType: value.mediaType,
+    byteLength: Number(value.byteLength),
+    sha256: value.sha256 as `sha256:${string}`,
+  });
+}
+
+function parsePhotoReconstructionJob(value: unknown): PhotoReconstructionJobView {
+  if (!isRecord(value) || !exactKeys(value, [
+    "version", "jobId", "requestId", "workspaceId", "photoSetDigest", "profile", "status", "progress",
+    "inputPhotoCount", "uploadedPhotoCount", "registeredPhotoCount", "backend", "warnings", "createdAt",
+    "updatedAt", "expiresAt", "result", "error",
+  ]) || value.version !== 1 ||
+      typeof value.jobId !== "string" || !PHOTO_RECONSTRUCTION_JOB_ID_PATTERN.test(value.jobId) ||
+      typeof value.requestId !== "string" || value.requestId.length < 8 || value.requestId.length > 128 ||
+      typeof value.workspaceId !== "string" || !WORKSPACE_ID_PATTERN.test(value.workspaceId) ||
+      typeof value.photoSetDigest !== "string" || !ASSET_DIGEST_PATTERN.test(value.photoSetDigest) ||
+      !["preview", "balanced", "quality"].includes(String(value.profile)) ||
+      typeof value.status !== "string" || !PHOTO_RECONSTRUCTION_PHASES.has(value.status as PhotoReconstructionPhase) ||
+      typeof value.progress !== "number" || !Number.isFinite(value.progress) || value.progress < 0 || value.progress > 1 ||
+      !Number.isSafeInteger(value.inputPhotoCount) || Number(value.inputPhotoCount) < 2 || Number(value.inputPhotoCount) > 400 ||
+      !Number.isSafeInteger(value.uploadedPhotoCount) || Number(value.uploadedPhotoCount) < 0 ||
+      Number(value.uploadedPhotoCount) > Number(value.inputPhotoCount) ||
+      (value.registeredPhotoCount !== undefined && (!Number.isSafeInteger(value.registeredPhotoCount) ||
+        Number(value.registeredPhotoCount) < 0 || Number(value.registeredPhotoCount) > Number(value.inputPhotoCount))) ||
+      !isRecord(value.backend) || !exactKeys(value.backend, ["id", "version"]) ||
+      typeof value.backend.id !== "string" || !/^[A-Za-z][A-Za-z0-9._-]{0,63}$/u.test(value.backend.id) ||
+      typeof value.backend.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/u.test(value.backend.version) ||
+      !Array.isArray(value.warnings) || value.warnings.length > 32 ||
+      !value.warnings.every((warning) => typeof warning === "string" &&
+        PHOTO_RECONSTRUCTION_WARNINGS.has(warning as PhotoReconstructionWarningCode)) ||
+      !isCanonicalIsoDate(value.createdAt) || !isCanonicalIsoDate(value.updatedAt) || !isCanonicalIsoDate(value.expiresAt)) {
+    throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid job.");
+  }
+  const result = value.result === undefined ? undefined : parsePhotoReconstructionCandidate(value.result);
+  let failure: PhotoReconstructionJobView["error"];
+  if (value.error !== undefined) {
+    if (!isRecord(value.error) || !exactKeys(value.error, ["code", "message", "retryable"]) ||
+        typeof value.error.code !== "string" || value.error.code.length < 1 || value.error.code.length > 128 ||
+        typeof value.error.message !== "string" || value.error.message.length < 1 || value.error.message.length > 2_000 ||
+        typeof value.error.retryable !== "boolean") {
+      throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid job failure.");
+    }
+    failure = Object.freeze({
+      code: value.error.code,
+      message: value.error.message,
+      retryable: value.error.retryable,
+    });
+  }
+  if ((value.status === "ready") !== Boolean(result) || (value.status === "failed") !== Boolean(failure)) {
+    throw new AgentGatewayError("invalid_response", "The reconstruction job terminal state is inconsistent.");
+  }
+  return Object.freeze({
+    version: 1,
+    jobId: value.jobId,
+    requestId: value.requestId,
+    workspaceId: value.workspaceId,
+    photoSetDigest: value.photoSetDigest as `sha256:${string}`,
+    profile: value.profile as PhotoReconstructionJobView["profile"],
+    status: value.status as PhotoReconstructionPhase,
+    progress: value.progress,
+    inputPhotoCount: Number(value.inputPhotoCount),
+    uploadedPhotoCount: Number(value.uploadedPhotoCount),
+    ...(value.registeredPhotoCount === undefined ? {} : { registeredPhotoCount: Number(value.registeredPhotoCount) }),
+    backend: Object.freeze({ id: value.backend.id, version: value.backend.version }),
+    warnings: Object.freeze([...(value.warnings as PhotoReconstructionWarningCode[])]),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    expiresAt: value.expiresAt,
+    ...(result ? { result } : {}),
+    ...(failure ? { error: failure } : {}),
+  });
+}
+
+function parsePhotoUploadGrant(value: unknown): PhotoUploadGrant {
+  if (!isRecord(value) || !exactKeys(value, [
+    "photoId", "method", "url", "authorization", "token", "contentType", "contentLength", "expiresAt",
+  ]) || typeof value.photoId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._~-]{0,63}$/u.test(value.photoId) ||
+      value.method !== "PUT" || value.authorization !== "Bearer" ||
+      typeof value.token !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(value.token) ||
+      typeof value.contentType !== "string" ||
+      !(PHOTO_RECONSTRUCTION_MEDIA_TYPES as readonly string[]).includes(value.contentType) ||
+      !Number.isSafeInteger(value.contentLength) || Number(value.contentLength) < 1 ||
+      typeof value.url !== "string" || !isCanonicalIsoDate(value.expiresAt)) {
+    throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid photo upload grant.");
+  }
+  let url: URL;
+  try {
+    url = new URL(value.url);
+  } catch (cause) {
+    throw new AgentGatewayError("invalid_response", "The photo upload grant URL is invalid.", { cause });
+  }
+  if (!/^https?:$/u.test(url.protocol) || url.username || url.password || url.search || url.hash ||
+      !/^\/v1\/reconstructions\/photo-uploads\/[0-9a-f-]{36}$/iu.test(url.pathname)) {
+    throw new AgentGatewayError("invalid_response", "The photo upload grant URL is outside the reconstruction route.");
+  }
+  return Object.freeze({
+    photoId: value.photoId,
+    method: "PUT",
+    url: value.url,
+    authorization: "Bearer",
+    token: value.token,
+    contentType: value.contentType as PhotoReconstructionMediaType,
+    contentLength: Number(value.contentLength),
+    expiresAt: value.expiresAt,
+  });
+}
+
+function parseBeginPhotoReconstructionResult(value: unknown): BeginPhotoReconstructionResult {
+  if (!isRecord(value) || !exactKeys(value, ["job", "uploads"]) || !Array.isArray(value.uploads)) {
+    throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid begin response.");
+  }
+  const job = parsePhotoReconstructionJob(value.job);
+  const uploads = value.uploads.map(parsePhotoUploadGrant);
+  if (new Set(uploads.map((upload) => upload.photoId)).size !== uploads.length ||
+      uploads.some((upload) => upload.contentLength < 1) || uploads.length > job.inputPhotoCount) {
+    throw new AgentGatewayError("invalid_response", "The reconstruction upload grants are inconsistent with the job.");
+  }
+  return Object.freeze({ job, uploads: Object.freeze(uploads) });
+}
+
+function parsePhotoReconstructionCapability(value: unknown): PhotoReconstructionCapability {
+  if (!isRecord(value) || !exactKeys(value, ["backend", "available", "reason"]) ||
+      !isRecord(value.backend) || !exactKeys(value.backend, ["id", "version"]) ||
+      typeof value.backend.id !== "string" || !/^[A-Za-z][A-Za-z0-9._-]{0,63}$/u.test(value.backend.id) ||
+      typeof value.backend.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/u.test(value.backend.version) ||
+      typeof value.available !== "boolean" ||
+      (value.reason !== undefined && (typeof value.reason !== "string" || value.reason.length > 500))) {
+    throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid capability response.");
+  }
+  return Object.freeze({
+    backend: Object.freeze({ id: value.backend.id, version: value.backend.version }),
+    available: value.available,
+    ...(value.reason === undefined ? {} : { reason: value.reason }),
   });
 }
 
@@ -293,7 +506,8 @@ function isCommandName(value: unknown): value is AgentGatewayCommandName {
 function isMutatingCommand(value: AgentGatewayCommandName): boolean {
   return value === "submit_workspace_batch" ||
     value === "undo_workspace_batch" ||
-    value === "redo_workspace_batch";
+    value === "redo_workspace_batch" ||
+    value === "complete_workspace_reconstruction_asset";
 }
 
 function isOfferStatus(value: unknown): value is AgentGatewayOfferStatus {
@@ -429,6 +643,7 @@ function parseConfig(value: unknown): AgentGatewayConfig {
 function parsePairing(value: unknown): AgentGatewayPairing {
   if (!isRecord(value) || typeof value.pairingBearer !== "string" || !value.pairingBearer ||
       typeof value.mcpConfig !== "string" || !value.mcpConfig ||
+      typeof value.restConfig !== "string" || !value.restConfig ||
       typeof value.restEndpoint !== "string" || !value.restEndpoint ||
       (value.connectionUrl !== undefined && (typeof value.connectionUrl !== "string" || !value.connectionUrl)) ||
       (value.offerExpiresAt !== undefined && (typeof value.offerExpiresAt !== "string" || !value.offerExpiresAt)) ||
@@ -438,6 +653,7 @@ function parsePairing(value: unknown): AgentGatewayPairing {
   return {
     pairingBearer: value.pairingBearer,
     mcpConfig: value.mcpConfig,
+    restConfig: value.restConfig,
     restEndpoint: value.restEndpoint,
     ...(value.connectionUrl === undefined ? {} : { connectionUrl: value.connectionUrl }),
     ...(value.offerExpiresAt === undefined ? {} : { offerExpiresAt: value.offerExpiresAt }),
@@ -741,6 +957,142 @@ export class AgentGatewayClient {
     if (!isRecord(value) || Object.keys(value).some((key) => key !== "cancelled") || value.cancelled !== true) {
       throw new AgentGatewayError("invalid_response", "The agent gateway did not confirm asset cancellation.");
     }
+  }
+
+  /** Detects the host-owned reconstruction backend through the browser-bound control channel. */
+  async getPhotoReconstructionCapability(signal?: AbortSignal): Promise<PhotoReconstructionCapability> {
+    await this.ensureConfig(signal);
+    return parsePhotoReconstructionCapability(await this.postJson(
+      this.endpoints.photoReconstructionCapability,
+      {},
+      signal,
+    ));
+  }
+
+  async beginPhotoReconstruction(
+    input: BeginPhotoReconstructionInput,
+    signal?: AbortSignal,
+  ): Promise<BeginPhotoReconstructionResult> {
+    await this.ensureConfig(signal);
+    const result = parseBeginPhotoReconstructionResult(await this.postJson(
+      this.endpoints.photoReconstructionBegin,
+      input,
+      signal,
+    ));
+    if (result.job.requestId !== input.requestId || result.job.workspaceId !== input.workspaceId ||
+        result.job.profile !== input.profile || result.job.inputPhotoCount !== input.photos.length) {
+      throw new AgentGatewayError("invalid_response", "The reconstruction job does not match its declared photo set.");
+    }
+    return result;
+  }
+
+  /**
+   * Streams one exact photo through its one-use grant. The signed public URL is
+   * used only as a capability description; bytes travel through a same-origin
+   * local alias so no upload bearer is exposed to cross-origin redirects.
+   */
+  async uploadPhotoReconstructionGrant(
+    grant: PhotoUploadGrant,
+    photo: Blob,
+    signal?: AbortSignal,
+  ): Promise<PhotoReconstructionJobView> {
+    const parsedGrant = parsePhotoUploadGrant(grant);
+    if (photo.size !== parsedGrant.contentLength) {
+      throw new AgentGatewayError("invalid_configuration", "The selected photo no longer matches its upload grant.");
+    }
+    const grantPath = new URL(parsedGrant.url).pathname;
+    const grantId = grantPath.slice(grantPath.lastIndexOf("/") + 1);
+    const endpoint = `${this.endpoints.photoReconstructionUploadPrefix}/${grantId}`;
+    const response = await this.fetchResponse(endpoint, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${parsedGrant.token}`,
+        "Content-Type": parsedGrant.contentType,
+      },
+      body: photo,
+      signal,
+    }, 10 * 60_000);
+    let value: unknown;
+    try {
+      value = await response.json() as unknown;
+    } catch (cause) {
+      throw new AgentGatewayError("invalid_response", "The photo upload returned invalid JSON.", { cause });
+    }
+    return parsePhotoReconstructionJob(value);
+  }
+
+  async startPhotoReconstruction(
+    jobId: string,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<PhotoReconstructionJobView> {
+    await this.ensureConfig(signal);
+    const job = parsePhotoReconstructionJob(await this.postJson(
+      this.endpoints.photoReconstructionStart,
+      { jobId, workspaceId },
+      signal,
+    ));
+    if (job.jobId !== jobId || job.workspaceId !== workspaceId) {
+      throw new AgentGatewayError("invalid_response", "The started reconstruction job does not match the request.");
+    }
+    return job;
+  }
+
+  async inspectPhotoReconstruction(
+    jobId: string,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<PhotoReconstructionJobView> {
+    await this.ensureConfig(signal);
+    const job = parsePhotoReconstructionJob(await this.postJson(
+      this.endpoints.photoReconstructionInspect,
+      { jobId, workspaceId },
+      signal,
+    ));
+    if (job.jobId !== jobId || job.workspaceId !== workspaceId) {
+      throw new AgentGatewayError("invalid_response", "The inspected reconstruction job does not match the request.");
+    }
+    return job;
+  }
+
+  async cancelPhotoReconstruction(
+    jobId: string,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<PhotoReconstructionJobView> {
+    await this.ensureConfig(signal);
+    const value = await this.postJson(
+      this.endpoints.photoReconstructionCancel,
+      { jobId, workspaceId, confirm: true },
+      signal,
+    );
+    if (!isRecord(value) || !exactKeys(value, ["cancelled", "job"]) || value.cancelled !== true) {
+      throw new AgentGatewayError("invalid_response", "The reconstruction gateway did not confirm cancellation.");
+    }
+    const job = parsePhotoReconstructionJob(value.job);
+    if (job.jobId !== jobId || job.workspaceId !== workspaceId || job.status !== "cancelled") {
+      throw new AgentGatewayError("invalid_response", "The cancelled reconstruction job does not match the request.");
+    }
+    return job;
+  }
+
+  async finalizePhotoReconstruction(
+    jobId: string,
+    workspaceId: string,
+    displayName: string,
+    expectedOutputSha256: string,
+    signal?: AbortSignal,
+  ): Promise<PhotoReconstructionResultCandidate> {
+    await this.ensureConfig(signal);
+    const candidate = parsePhotoReconstructionCandidate(await this.postJson(
+      this.endpoints.photoReconstructionFinalize,
+      { jobId, workspaceId, displayName, expectedOutputSha256 },
+      signal,
+    ));
+    if (candidate.sha256 !== expectedOutputSha256) {
+      throw new AgentGatewayError("invalid_response", "The finalized reconstruction digest changed unexpectedly.");
+    }
+    return candidate;
   }
 
   /**
@@ -1048,12 +1400,16 @@ export class AgentGatewayClient {
     }
   }
 
-  private async fetchResponse(endpoint: string, init: RequestInit): Promise<Response> {
+  private async fetchResponse(
+    endpoint: string,
+    init: RequestInit,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<Response> {
     let response: Response;
     const callerSignal = init.signal ?? undefined;
     const timeoutController = callerSignal ? undefined : new AbortController();
     const timeout = timeoutController
-      ? globalThis.setTimeout(() => timeoutController.abort(), this.requestTimeoutMs)
+      ? globalThis.setTimeout(() => timeoutController.abort(), timeoutMs)
       : undefined;
     try {
       response = await this.request(endpoint, {
