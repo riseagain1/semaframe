@@ -1,5 +1,10 @@
 import { useState } from "react";
 import type { RealityAssetDescriptor } from "../../../workspace/assets";
+import type {
+  PhotoReconstructionJobView,
+  PhotoReconstructionProfile,
+} from "../../../reconstruction/contracts";
+import { PHOTO_RECONSTRUCTION_LIMITS } from "../../../reconstruction/contracts";
 
 export type RealityAssetAvailability = "checking" | "available" | "missing" | "error";
 
@@ -9,12 +14,28 @@ export type WorkspaceRealityAssetItem = Readonly<{
   componentIds: readonly string[];
 }>;
 
+export type WorkspacePhotoReconstructionCapability =
+  | "checking"
+  | Readonly<{
+      available: boolean;
+      backend: Readonly<{ id: string; version: string }>;
+      reason?: string;
+    }>;
+
 export type WorkspaceRealityAssetsProps = Readonly<{
   items: readonly WorkspaceRealityAssetItem[];
   disabled?: boolean;
   importBusy?: boolean;
   importStatus?: string;
+  reconstructionCapability?: WorkspacePhotoReconstructionCapability;
+  reconstructionProfile?: PhotoReconstructionProfile;
+  reconstructionJob?: PhotoReconstructionJobView;
+  reconstructionBusy?: boolean;
+  reconstructionStatus?: string;
   onImport?: () => void;
+  onReconstruct?: () => void;
+  onReconstructionProfile?: (profile: PhotoReconstructionProfile) => void;
+  onCancelReconstruction?: () => void;
   onRelink?: (assetId: string) => void;
   onDelete?: (assetId: string) => boolean | void | Promise<boolean | void>;
   onSelectComponent?: (componentId: string) => void;
@@ -24,6 +45,11 @@ function formatBytes(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KiB`;
   return `${(bytes / 1_048_576).toFixed(bytes >= 10_485_760 ? 0 : 1)} MiB`;
+}
+
+function formatStorageBudget(bytes: number): string {
+  const gibibytes = bytes / (1024 * 1024 * 1024);
+  return gibibytes >= 1 ? `${gibibytes.toFixed(gibibytes % 1 === 0 ? 0 : 1)} GiB` : formatBytes(bytes);
 }
 
 function shortDigest(digest: string): string {
@@ -46,7 +72,15 @@ export function WorkspaceRealityAssets({
   disabled = false,
   importBusy = false,
   importStatus,
+  reconstructionCapability = "checking",
+  reconstructionProfile = "balanced",
+  reconstructionJob,
+  reconstructionBusy = false,
+  reconstructionStatus,
   onImport,
+  onReconstruct,
+  onReconstructionProfile,
+  onCancelReconstruction,
   onRelink,
   onDelete,
   onSelectComponent,
@@ -59,6 +93,88 @@ export function WorkspaceRealityAssets({
         <span>Reality</span>
         <strong>{items.length} {items.length === 1 ? "asset" : "assets"}</strong>
       </header>
+      <section className="workspace-reality__import workspace-reality__reconstruct" aria-label="Reconstruct Reality from photos">
+        <div className="workspace-reality__section-heading">
+          <h3>Reconstruct from photos</h3>
+          <span>Local</span>
+        </div>
+        <p>
+          Choose overlapping JPEG, PNG, WebP, HEIC, or HEIF views. Twenty or more well-lit
+          angles are recommended; temporary source photos are deleted after the job.
+        </p>
+        <label className="workspace-reality__profile">
+          <span>Detail</span>
+          <select
+            value={reconstructionProfile}
+            disabled={disabled || importBusy || reconstructionBusy || !onReconstructionProfile}
+            onChange={(event) => onReconstructionProfile?.(event.target.value as PhotoReconstructionProfile)}
+          >
+            <option value="preview">Preview · fast</option>
+            <option value="balanced">Balanced</option>
+            <option value="quality">Quality · slow</option>
+          </select>
+        </label>
+        {reconstructionCapability === "checking" ? (
+          <p className="workspace-reality__capability" role="status">Checking the local reconstruction backend…</p>
+        ) : !reconstructionCapability.available ? (
+          <p className="workspace-reality__capability is-unavailable" role="status">
+            {reconstructionCapability.reason ?? "Photo reconstruction is unavailable on this machine."}
+          </p>
+        ) : (
+          <p className="workspace-reality__capability" role="status">
+            {reconstructionCapability.backend.id === "apple-object-capture-gaussian"
+              ? `Apple Object Capture is ready on this Mac. ${reconstructionProfile[0]!.toUpperCase()}${reconstructionProfile.slice(1)} limits: ${PHOTO_RECONSTRUCTION_LIMITS.objectCaptureMaximumPixelsByProfile[reconstructionProfile] / 1_000_000}M decoded pixels; ${formatStorageBudget(PHOTO_RECONSTRUCTION_LIMITS.objectCaptureOutputBytesByProfile[reconstructionProfile])} temp plus ${formatStorageBudget(PHOTO_RECONSTRUCTION_LIMITS.objectCaptureMinimumFreeReserveBytes)} disk reserve; ${formatStorageBudget(PHOTO_RECONSTRUCTION_LIMITS.objectCaptureMaximumProcessRssBytesByProfile[reconstructionProfile])} process-tree RSS plus ${formatStorageBudget(PHOTO_RECONSTRUCTION_LIMITS.objectCaptureMinimumFreeMemoryReserveBytes)} memory reserve.`
+              : `${reconstructionCapability.backend.id} is ready.`}
+          </p>
+        )}
+        <button
+          type="button"
+          disabled={disabled || importBusy || reconstructionBusy || !onReconstruct ||
+            reconstructionCapability === "checking" || !reconstructionCapability.available}
+          onClick={onReconstruct}
+        >
+          {reconstructionBusy ? "Reconstructing…" : "Choose photo set…"}
+        </button>
+        {(reconstructionJob || reconstructionBusy) && (
+          <div className="workspace-reality__progress" aria-label="Photo reconstruction progress">
+            <div>
+              <strong>{reconstructionJob?.status.replaceAll("_", " ") ?? "preparing photos"}</strong>
+              <span>{Math.round((reconstructionJob?.progress ?? 0) * 100)}%</span>
+            </div>
+            <progress
+              aria-label="Photo reconstruction progress"
+              max={1}
+              value={reconstructionJob?.progress ?? 0}
+            />
+            {reconstructionJob && (
+              <small>
+                {reconstructionJob.uploadedPhotoCount}/{reconstructionJob.inputPhotoCount} photos verified
+                {reconstructionJob.registeredPhotoCount === undefined
+                  ? ""
+                  : ` · ${reconstructionJob.registeredPhotoCount} cameras solved`}
+              </small>
+            )}
+            {reconstructionBusy && onCancelReconstruction && (
+              <button type="button" className="is-secondary" disabled={disabled} onClick={onCancelReconstruction}>
+                Cancel and delete temporary photos
+              </button>
+            )}
+          </div>
+        )}
+        {reconstructionStatus && (
+          <p
+            aria-label="Photo reconstruction status"
+            className="workspace-reality__status"
+            role="status"
+          >
+            {reconstructionStatus}
+          </p>
+        )}
+        <p className="workspace-reality__boundary">
+          Output is visual-only and uncalibrated. Add scale and semantic proxies before collision,
+          measurement, physics, CAD, or survey use.
+        </p>
+      </section>
       <section className="workspace-reality__import" aria-label="Import Reality asset">
         <h3>Gaussian capture</h3>
         <p>

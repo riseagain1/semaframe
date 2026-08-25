@@ -406,7 +406,7 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("2.8");
+    expect(instructions.guide.guide_version).toBe("2.9");
     expect(instructions.guide.protocol_version).toBe("1.3");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),
@@ -436,6 +436,30 @@ describe("WorkspaceAgentController", () => {
         persistence: expect.stringContaining("exact same digest"),
       },
     });
+    expect(instructions.guide.photo_reconstruction_quickstart).toMatchObject({
+      required_scopes: expect.arrayContaining(["asset:reconstruct"]),
+      accepted_inputs: {
+        media_types: ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"],
+        minimum_photos: 2,
+        maximum_photos: 400,
+        maximum_photo_bytes: 67108864,
+        maximum_photo_set_bytes: 2147483648,
+        maximum_photo_pixels: 100000000,
+        maximum_photo_set_pixels: 1000000000,
+        source_rule: expect.stringContaining("user explicitly supplied"),
+      },
+      workflow: expect.arrayContaining([
+        expect.stringContaining("start_workspace_photo_reconstruction"),
+        expect.stringContaining("finalize_workspace_photo_reconstruction"),
+      ]),
+      authority: {
+        result: expect.stringContaining("visual_only"),
+        proxies: expect.stringContaining("collision"),
+        persistence: expect.stringContaining("not project state"),
+        availability: expect.stringContaining("configured host reconstruction backend"),
+      },
+    });
+    expect(instructions.guide.default_requested_scopes).not.toContain("asset:reconstruct");
     expect(instructions.guide.instructions).toContain("registered video-player component");
     expect(instructions.guide.instructions).toContain("Do not put iframe markup");
     expect(instructions.guide.instructions).toContain("Connect through SemaFrame agent controls");

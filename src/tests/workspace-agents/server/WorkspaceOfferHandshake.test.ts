@@ -12,6 +12,7 @@ import { DEFAULT_WORKSPACE_AGENT_SCOPES } from "../../../workspace/agents/contra
 
 const ORIGIN = "http://127.0.0.1:4173";
 const PUBLIC_URL = "http://127.0.0.1:8788";
+const BROWSER_BOOTSTRAP_TOKEN = "b".repeat(43);
 const clients: Client[] = [];
 const handlers: AgentGatewayFetchHandler[] = [];
 const gateways: AgentGateway[] = [];
@@ -34,7 +35,17 @@ async function browserPost(
   path: string,
   body: unknown,
 ): Promise<Response> {
-  return handle(request(path, body, { origin: ORIGIN, "x-semaframe-agent-csrf": csrfToken }));
+  return handle(request(path, body, {
+    origin: ORIGIN,
+    "x-semaframe-agent-csrf": csrfToken,
+    "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN,
+  }));
+}
+
+function browserConfigRequest(): Request {
+  return new Request(`${PUBLIC_URL}/api/agent/config`, {
+    headers: { "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN },
+  });
 }
 
 afterEach(async () => {
@@ -73,14 +84,15 @@ describe("Workspace MCP connection offer", () => {
     const handle = createAgentGatewayHttpHandler(gateway, {
       allowedOrigins: [ORIGIN],
       publicBaseUrl: PUBLIC_URL,
+      browserBootstrapToken: BROWSER_BOOTSTRAP_TOKEN,
     });
     gateways.push(gateway);
     handlers.push(handle);
 
-    const initial = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const initial = await payload(await handle(browserConfigRequest()));
     const csrfToken = String(initial.csrfToken);
     await browserPost(handle, csrfToken, "/api/agent/browser/enable", {});
-    const config = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const config = await payload(await handle(browserConfigRequest()));
     const registration = await payload(await browserPost(
       handle,
       csrfToken,
@@ -168,7 +180,7 @@ describe("Workspace MCP connection offer", () => {
     const guide = await guidePromise;
     expect(guide.isError).toBe(false);
     expect(guide.structuredContent).toEqual(coreResult);
-    expect(await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)))).toEqual(
+    expect(await payload(await handle(browserConfigRequest()))).toEqual(
       expect.objectContaining({
         connected: true,
         clientName: "JARVIS",
@@ -179,14 +191,18 @@ describe("Workspace MCP connection offer", () => {
 
     expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
       "begin_workspace_asset_import",
+      "begin_workspace_photo_reconstruction",
       "begin_workspace_update",
       "cancel_workspace_asset_import",
+      "cancel_workspace_photo_reconstruction",
       "complete_workspace_asset_import",
+      "finalize_workspace_photo_reconstruction",
       "get_workspace_instructions",
       "inspect_workspace",
       "inspect_workspace_asset",
       "inspect_workspace_component",
       "inspect_workspace_model",
+      "inspect_workspace_photo_reconstruction",
       "inspect_workspace_physics",
       "inspect_workspace_space",
       "query_spatial_placement",
@@ -195,6 +211,7 @@ describe("Workspace MCP connection offer", () => {
       "read_workspace_resource_snapshot",
       "redo_workspace_batch",
       "simulate_workspace_physics",
+      "start_workspace_photo_reconstruction",
       "submit_workspace_batch",
       "undo_workspace_batch",
     ]);

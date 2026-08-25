@@ -7,6 +7,7 @@ import {
   WorkspaceRealityAssets,
 } from "../../app/components/workspace";
 import type { RealityMeasurementEvent } from "../../renderer/reality";
+import type { PhotoReconstructionJobView } from "../../reconstruction/contracts";
 import type { RealityAssetDescriptor } from "../../workspace/assets";
 import { inspectRealityAsset, MemoryAssetVault } from "../../workspace/assets";
 import { DEFAULT_COMPONENT_REGISTRY } from "../../workspace/components";
@@ -38,6 +39,30 @@ function descriptor(): RealityAssetDescriptor {
     antialiased: null,
     coordinateSystem: { system: "RUB", provenance: "embedded" },
     engineeringAuthority: "visual_only",
+  };
+}
+
+function reconstructionJob(
+  overrides: Partial<PhotoReconstructionJobView> = {},
+): PhotoReconstructionJobView {
+  return {
+    version: 1,
+    jobId: "reconstruction_job_01",
+    requestId: "reconstruction_request_01",
+    workspaceId: "workspace_reality_ui",
+    photoSetDigest: `sha256:${"c".repeat(64)}`,
+    profile: "balanced",
+    status: "camera_solving",
+    progress: 0.58,
+    inputPhotoCount: 30,
+    uploadedPhotoCount: 24,
+    registeredPhotoCount: 21,
+    backend: { id: "apple-object-capture-gaussian", version: "1" },
+    warnings: ["source_scale_unknown", "source_coordinates_unknown"],
+    createdAt: "2026-08-25T01:00:00.000Z",
+    updatedAt: "2026-08-25T01:01:00.000Z",
+    expiresAt: "2026-08-25T03:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -78,6 +103,170 @@ function splatComponent(): WorkspaceRenderComponent {
     },
   };
 }
+
+describe("photo reconstruction controls", () => {
+  it("announces capability checks and keeps photo selection gated until the backend answers", () => {
+    render(<WorkspaceRealityAssets
+      items={[]}
+      reconstructionCapability="checking"
+      onReconstruct={vi.fn()}
+      onReconstructionProfile={vi.fn()}
+    />);
+
+    expect(screen.getByRole("region", { name: "Reconstruct Reality from photos" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Checking the local reconstruction backend");
+    expect(screen.getByRole("button", { name: "Choose photo set…" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Detail" })).toHaveValue("balanced");
+  });
+
+  it("announces an unavailable backend reason and leaves photo selection disabled", () => {
+    render(<WorkspaceRealityAssets
+      items={[]}
+      reconstructionCapability={{
+        available: false,
+        backend: { id: "apple-object-capture-gaussian", version: "1" },
+        reason: "Apple Object Capture is not supported on this Mac.",
+      }}
+      onReconstruct={vi.fn()}
+    />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Apple Object Capture is not supported on this Mac.");
+    expect(screen.getByRole("button", { name: "Choose photo set…" })).toBeDisabled();
+  });
+
+  it("announces an available backend, changes detail, and opens the photo chooser", async () => {
+    const user = userEvent.setup();
+    const onReconstruct = vi.fn();
+    const onProfile = vi.fn();
+    const { rerender } = render(<WorkspaceRealityAssets
+      items={[]}
+      reconstructionCapability={{
+        available: true,
+        backend: { id: "apple-object-capture-gaussian", version: "1" },
+      }}
+      reconstructionProfile="preview"
+      onReconstruct={onReconstruct}
+      onReconstructionProfile={onProfile}
+    />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Apple Object Capture is ready on this Mac.");
+    expect(screen.getByRole("status")).toHaveTextContent("Preview limits: 250M decoded pixels");
+    expect(screen.getByRole("status")).toHaveTextContent("2 GiB process-tree RSS plus 1 GiB memory reserve");
+    const choose = screen.getByRole("button", { name: "Choose photo set…" });
+    expect(choose).toBeEnabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Detail" }), "balanced");
+    expect(onProfile).toHaveBeenCalledWith("balanced");
+    rerender(<WorkspaceRealityAssets
+      items={[]}
+      reconstructionCapability={{
+        available: true,
+        backend: { id: "apple-object-capture-gaussian", version: "1" },
+      }}
+      reconstructionProfile="balanced"
+      onReconstruct={onReconstruct}
+      onReconstructionProfile={onProfile}
+    />);
+    expect(screen.getByRole("status")).toHaveTextContent("Balanced limits: 600M decoded pixels");
+    expect(screen.getByRole("status")).toHaveTextContent("6 GiB process-tree RSS plus 1 GiB memory reserve");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Detail" }), "quality");
+    expect(onProfile).toHaveBeenCalledWith("quality");
+    await user.click(choose);
+    expect(onReconstruct).toHaveBeenCalledOnce();
+  });
+
+  it("exposes named progress, verified and solved counts, cancellation, and the visual-only boundary", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(<WorkspaceRealityAssets
+      items={[]}
+      reconstructionCapability={{
+        available: true,
+        backend: { id: "apple-object-capture-gaussian", version: "1" },
+      }}
+      reconstructionBusy
+      reconstructionJob={reconstructionJob()}
+      reconstructionStatus="Solving cameras locally."
+      onCancelReconstruction={onCancel}
+    />);
+
+    expect(screen.getByText("camera solving")).toBeVisible();
+    expect(screen.getByText("58%")).toBeVisible();
+    expect(screen.getByText(/24\/30 photos verified/)).toHaveTextContent("21 cameras solved");
+    expect(screen.getByRole("progressbar", { name: "Photo reconstruction progress" }))
+      .toHaveAttribute("value", "0.58");
+    expect(screen.getByText(/Output is visual-only and uncalibrated/i)).toBeVisible();
+    expect(screen.getByText(/Add scale and semantic proxies before collision, measurement, physics, CAD, or survey use/i))
+      .toBeVisible();
+    expect(screen.getByRole("status", { name: "Photo reconstruction status" }))
+      .toHaveTextContent("Solving cameras locally.");
+
+    await user.click(screen.getByRole("button", { name: "Cancel and delete temporary photos" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("disables every reconstruction control when the surface is disabled", () => {
+    render(<WorkspaceRealityAssets
+      items={[]}
+      disabled
+      reconstructionCapability={{
+        available: true,
+        backend: { id: "apple-object-capture-gaussian", version: "1" },
+      }}
+      reconstructionBusy
+      reconstructionJob={reconstructionJob()}
+      onReconstruct={vi.fn()}
+      onReconstructionProfile={vi.fn()}
+      onCancelReconstruction={vi.fn()}
+    />);
+
+    expect(screen.getByRole("combobox", { name: "Detail" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reconstructing…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel and delete temporary photos" })).toBeDisabled();
+  });
+
+  it("forwards the complete reconstruction UI contract through WorkspaceChrome", async () => {
+    const user = userEvent.setup();
+    const onReconstruct = vi.fn();
+    const onProfile = vi.fn();
+    const onCancel = vi.fn();
+    const chrome = (busy = false) => <WorkspaceChrome
+      catalog={[]}
+      sources={[]}
+      realityAssets={[]}
+      realityReconstructionCapability={{
+        available: true,
+        backend: { id: "apple-object-capture-gaussian", version: "1" },
+      }}
+      realityReconstructionProfile="quality"
+      realityReconstructionJob={busy ? reconstructionJob({ status: "packing", progress: 0.91 }) : undefined}
+      realityReconstructionBusy={busy}
+      realityReconstructionStatus={busy ? "Packing the Reality asset." : "Ready for a photo set."}
+      onReconstructRealityFromPhotos={onReconstruct}
+      onRealityReconstructionProfile={onProfile}
+      onCancelRealityReconstruction={onCancel}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onAction={vi.fn()}
+      onCreateShowcase={vi.fn()}
+    />;
+    const view = render(chrome());
+
+    await user.click(screen.getByRole("button", { name: "Reality" }));
+    expect(screen.getByRole("combobox", { name: "Detail" })).toHaveValue("quality");
+    expect(screen.getByRole("status", { name: "Photo reconstruction status" }))
+      .toHaveTextContent("Ready for a photo set.");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Detail" }), "balanced");
+    expect(onProfile).toHaveBeenCalledWith("balanced");
+    await user.click(screen.getByRole("button", { name: "Choose photo set…" }));
+    expect(onReconstruct).toHaveBeenCalledOnce();
+
+    view.rerender(chrome(true));
+    expect(screen.getByText("packing")).toBeVisible();
+    expect(screen.getByText("91%")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel and delete temporary photos" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+});
 
 describe("human Reality asset workflow", () => {
   it("stores bytes only in the vault while save/reopen preserves an editable missing-byte placeholder", async () => {

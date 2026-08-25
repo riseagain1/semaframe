@@ -105,7 +105,7 @@ describe("public Workspace Agent surface", () => {
 
     try {
       const listed = await client.listTools();
-      expect(WORKSPACE_AGENT_TOOL_NAMES).toHaveLength(19);
+      expect(WORKSPACE_AGENT_TOOL_NAMES).toHaveLength(24);
       expect(listed.tools.map(({ name }) => name).sort()).toEqual(
         [...WORKSPACE_AGENT_TOOL_NAMES].sort(),
       );

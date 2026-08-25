@@ -9,10 +9,24 @@ import {
   toAgentAssetImportGrantWire,
   type AgentAssetFormat,
 } from "./AgentAssetIngress";
+import type {
+  BeginWorkspacePhotoReconstructionInput,
+  CancelWorkspacePhotoReconstructionInput,
+  FinalizeWorkspacePhotoReconstructionInput,
+  InspectWorkspacePhotoReconstructionInput,
+  StartWorkspacePhotoReconstructionInput,
+} from "../../src/workspace/agents";
+import {
+  PhotoReconstructionService,
+  PhotoReconstructionServiceError,
+} from "../reconstruction/PhotoReconstructionService";
+
+const AGENT_PHOTO_RECONSTRUCTION_SCOPE = "asset:reconstruct" as const;
 
 export type AgentMcpHttpOptions = Readonly<{
   allowedOrigins: readonly string[];
   assetIngress?: AgentAssetIngress;
+  photoReconstruction?: PhotoReconstructionService;
 }>;
 
 export type AgentMcpHttpHandler = Readonly<{
@@ -39,7 +53,7 @@ function errorResponse(status: number, code: string, message: string): Response 
 
 function statusFor(error: AgentGatewayError): number {
   if (error.code === "connection_offer_expired") return 410;
-  if (error.code === "authorization_scope_missing" || error.code === "instructions_required") return 403;
+  if (["authorization_scope_missing", "instructions_required", "approval_invalid"].includes(error.code)) return 403;
   if (error.code === "agent_mode_disabled" || error.code === "gateway_closed") return 503;
   if (error.code === "connection_invalid") return 404;
   return 409;
@@ -144,6 +158,129 @@ export function createAgentMcpHttpHandler(
               return { responseOk: true, status: 200, payload: { ok: true, data: result } };
             } catch (error) {
               return assetImportBackendError(error);
+            }
+          },
+        } : {}),
+        ...(options.photoReconstruction ? {
+          beginPhotoReconstruction: async (input: BeginWorkspacePhotoReconstructionInput, client) => {
+            const validation = await gateway.dispatchOffer(
+              pathname,
+              "begin_workspace_photo_reconstruction",
+              input,
+              client,
+            );
+            if (!successfulWorkspaceResult(validation.payload)) return validation;
+            try {
+              const principal = approvedPhotoReconstructionPrincipal(gateway, validation.payload);
+              const result = await options.photoReconstruction!.begin(principal, {
+                requestId: input.request_id,
+                workspaceId: input.workspace_id,
+                profile: input.profile,
+                photos: input.photos.map((photo) => ({
+                  photoId: photo.photo_id,
+                  mediaType: photo.media_type,
+                  byteLength: photo.byte_length,
+                  sha256: photo.sha256,
+                })),
+              });
+              return { responseOk: true, status: 200, payload: { ok: true, data: result } };
+            } catch (error) {
+              return photoReconstructionBackendError(error);
+            }
+          },
+          startPhotoReconstruction: async (input: StartWorkspacePhotoReconstructionInput, client) => {
+            const validation = await gateway.dispatchOffer(
+              pathname,
+              "start_workspace_photo_reconstruction",
+              input,
+              client,
+            );
+            if (!successfulWorkspaceResult(validation.payload)) return validation;
+            try {
+              const principal = approvedPhotoReconstructionPrincipal(gateway, validation.payload);
+              const result = await options.photoReconstruction!.start(
+                input.job_id,
+                principal.authorizationId,
+                input.workspace_id,
+              );
+              return { responseOk: true, status: 200, payload: { ok: true, data: result } };
+            } catch (error) {
+              return photoReconstructionBackendError(error);
+            }
+          },
+          inspectPhotoReconstruction: async (input: InspectWorkspacePhotoReconstructionInput, client) => {
+            const validation = await gateway.dispatchOffer(
+              pathname,
+              "inspect_workspace_photo_reconstruction",
+              input,
+              client,
+            );
+            if (!successfulWorkspaceResult(validation.payload)) return validation;
+            try {
+              const principal = approvedPhotoReconstructionPrincipal(gateway, validation.payload);
+              const result = await options.photoReconstruction!.inspect(
+                input.job_id,
+                principal.authorizationId,
+                input.workspace_id,
+              );
+              return { responseOk: true, status: 200, payload: { ok: true, data: result } };
+            } catch (error) {
+              return photoReconstructionBackendError(error);
+            }
+          },
+          cancelPhotoReconstruction: async (input: CancelWorkspacePhotoReconstructionInput, client) => {
+            const validation = await gateway.dispatchOffer(
+              pathname,
+              "cancel_workspace_photo_reconstruction",
+              input,
+              client,
+            );
+            if (!successfulWorkspaceResult(validation.payload)) return validation;
+            try {
+              const principal = approvedPhotoReconstructionPrincipal(gateway, validation.payload);
+              const result = await options.photoReconstruction!.cancel(
+                input.job_id,
+                principal.authorizationId,
+                input.workspace_id,
+              );
+              return { responseOk: true, status: 200, payload: { ok: true, data: result } };
+            } catch (error) {
+              return photoReconstructionBackendError(error);
+            }
+          },
+          finalizePhotoReconstruction: async (input: FinalizeWorkspacePhotoReconstructionInput, client) => {
+            const validation = await gateway.dispatchOffer(
+              pathname,
+              "finalize_workspace_photo_reconstruction",
+              input,
+              client,
+            );
+            if (!successfulWorkspaceResult(validation.payload)) return validation;
+            try {
+              const principal = approvedPhotoReconstructionPrincipal(gateway, validation.payload);
+              const candidate = await options.photoReconstruction!.finalize(
+                input.job_id,
+                principal,
+                input.workspace_id,
+                {
+                  displayName: input.display_name,
+                  expectedOutputSha256: input.expected_output_sha256,
+                },
+              );
+              // Finalization is browser-authoritative: the reconstructed bytes
+              // traverse the same independent preflight/vault/register path as
+              // every other approved Reality Asset candidate.
+              return await gateway.dispatchOffer(
+                pathname,
+                "complete_workspace_reconstruction_asset",
+                {
+                  candidate_handle: candidate.candidateHandle,
+                  workspace_id: input.workspace_id,
+                },
+                client,
+              );
+            } catch (error) {
+              return photoReconstructionBackendError(error);
             }
           },
         } : {}),
@@ -252,6 +389,48 @@ function successfulWorkspaceResult(value: unknown): value is { ok: true; data: u
     && (value as { ok?: unknown }).ok === true;
 }
 
+function approvedPhotoReconstructionPrincipal(
+  gateway: AgentGateway,
+  validation: { ok: true; data: unknown },
+) {
+  const approved = gateway.requireApprovedClientScope(AGENT_PHOTO_RECONSTRUCTION_SCOPE);
+  const data = validation.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new AgentGatewayError(
+      "invalid_response",
+      "The browser returned an invalid photo-reconstruction session validation.",
+    );
+  }
+  const clientId = (data as Record<string, unknown>).client_id;
+  const clientName = (data as Record<string, unknown>).client_name;
+  if (typeof clientId !== "string" || clientId.length < 1 || clientId.length > 128
+      || (clientName !== undefined && (
+        typeof clientName !== "string" || clientName.length < 1 || clientName.length > 160
+      ))) {
+    throw new AgentGatewayError(
+      "invalid_response",
+      "The browser returned an invalid photo-reconstruction Agent identity.",
+    );
+  }
+  if (approved.clientId === undefined) {
+    throw new AgentGatewayError(
+      "invalid_response",
+      "Photo reconstruction requires a stable client_id in the approved connection claim.",
+    );
+  }
+  if (approved.clientId !== clientId) {
+    throw new AgentGatewayError(
+      "invalid_response",
+      "The approved Agent identity changed during photo-reconstruction validation.",
+    );
+  }
+  return Object.freeze({
+    authorizationId: approved.authorizationId,
+    clientId: approved.clientId,
+    ...(clientName === undefined ? {} : { clientName }),
+  });
+}
+
 function assetImportInput(value: unknown): AssetImportMcpInput {
   const record = value as Record<string, unknown>;
   return {
@@ -294,6 +473,39 @@ function assetImportBackendError(error: unknown): {
     payload: {
       ok: false,
       error: { code: "asset_ingress_error", message: "The Reality Asset import could not begin.", retryable: false },
+    },
+  };
+}
+
+function photoReconstructionBackendError(error: unknown): {
+  responseOk: boolean;
+  status: number;
+  payload: unknown;
+} {
+  if (error instanceof PhotoReconstructionServiceError) {
+    return {
+      responseOk: false,
+      status: error.status,
+      payload: { ok: false, error: { code: error.code, message: error.message, retryable: error.status >= 429 } },
+    };
+  }
+  if (error instanceof AgentGatewayError) {
+    return {
+      responseOk: false,
+      status: statusFor(error),
+      payload: { ok: false, error: { code: error.code, message: error.message, retryable: false } },
+    };
+  }
+  return {
+    responseOk: false,
+    status: 500,
+    payload: {
+      ok: false,
+      error: {
+        code: "photo_reconstruction_error",
+        message: "The photo reconstruction request could not be completed.",
+        retryable: false,
+      },
     },
   };
 }

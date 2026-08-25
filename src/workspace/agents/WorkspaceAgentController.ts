@@ -17,6 +17,7 @@ import {
   type WorkspaceHistoryReceipt,
   type WorkspaceModelDefinitionView,
   type WorkspacePermissionScope,
+  type WorkspacePhotoReconstructionAuthorizationData,
   type WorkspacePreparedEnvelope,
   type WorkspacePreparedUpdate,
   type WorkspaceRealityAssetView,
@@ -1106,6 +1107,47 @@ export class WorkspaceAgentController {
     }
   }
 
+  async beginWorkspacePhotoReconstruction(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
+    return this.authorizeWorkspacePhotoReconstruction(input, [
+      "session_token", "instruction_digest", "request_id", "workspace_id", "profile", "photos",
+    ]);
+  }
+
+  async startWorkspacePhotoReconstruction(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
+    return this.authorizeWorkspacePhotoReconstruction(input, [
+      "session_token", "instruction_digest", "workspace_id", "job_id",
+    ]);
+  }
+
+  async inspectWorkspacePhotoReconstruction(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
+    return this.authorizeWorkspacePhotoReconstruction(input, [
+      "session_token", "instruction_digest", "workspace_id", "job_id",
+    ]);
+  }
+
+  async cancelWorkspacePhotoReconstruction(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
+    return this.authorizeWorkspacePhotoReconstruction(input, [
+      "session_token", "instruction_digest", "workspace_id", "job_id", "confirm",
+    ]);
+  }
+
+  async finalizeWorkspacePhotoReconstruction(
+    input: unknown,
+  ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
+    return this.authorizeWorkspacePhotoReconstruction(input, [
+      "session_token", "instruction_digest", "workspace_id", "job_id", "display_name",
+      "expected_output_sha256",
+    ]);
+  }
+
   async submitWorkspaceBatch(input: unknown): Promise<WorkspaceAgentResult<SubmitWorkspaceBatchData>> {
     try {
       this.purgeExpired();
@@ -1268,6 +1310,16 @@ export class WorkspaceAgentController {
         return this.validateWorkspaceAssetImportCancellation(input);
       case "complete_workspace_asset_import":
         return this.completeWorkspaceAssetImport(input);
+      case "begin_workspace_photo_reconstruction":
+        return this.beginWorkspacePhotoReconstruction(input);
+      case "start_workspace_photo_reconstruction":
+        return this.startWorkspacePhotoReconstruction(input);
+      case "inspect_workspace_photo_reconstruction":
+        return this.inspectWorkspacePhotoReconstruction(input);
+      case "cancel_workspace_photo_reconstruction":
+        return this.cancelWorkspacePhotoReconstruction(input);
+      case "finalize_workspace_photo_reconstruction":
+        return this.finalizeWorkspacePhotoReconstruction(input);
       case "begin_workspace_update":
         return this.beginWorkspaceUpdate(input);
       case "submit_workspace_batch":
@@ -1292,6 +1344,34 @@ export class WorkspaceAgentController {
     this.sessions.clear();
     this.transactions.clear();
     this.realityAssetCompletions.clear();
+  }
+
+  private async authorizeWorkspacePhotoReconstruction(
+    input: unknown,
+    allowedFields: readonly string[],
+  ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
+    try {
+      this.purgeExpired();
+      const body = exactRecord(input, allowedFields, allowedFields);
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["asset:reconstruct"]);
+      const workspaceId = requiredString(body.workspace_id, "workspace_id", 1, 256);
+      const state = await this.engine.getState();
+      if (state.workspaceId !== workspaceId) {
+        throw new WorkspaceEngineError(
+          "workspace_id_mismatch",
+          "The photo reconstruction targets a different Workspace. Inspect the current Workspace and begin again.",
+          { retryable: true, requiredAction: "inspect_workspace" },
+        );
+      }
+      return ok({
+        ...publicIdentity(session),
+        workspace_id: state.workspaceId,
+        workspace_revision: state.revision,
+      });
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
   }
 
   private async executeSubmission(

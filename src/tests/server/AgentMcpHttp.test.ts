@@ -13,16 +13,21 @@ import { resolveAgentGatewayNetworkConfig } from "../../../server/agent/AgentGat
 
 const ORIGIN = "http://127.0.0.1:4173";
 const PUBLIC_URL = "http://127.0.0.1:8788";
+const BROWSER_BOOTSTRAP_TOKEN = "b".repeat(43);
 const expectedTools = [
   "begin_workspace_asset_import",
+  "begin_workspace_photo_reconstruction",
   "begin_workspace_update",
   "cancel_workspace_asset_import",
+  "cancel_workspace_photo_reconstruction",
   "complete_workspace_asset_import",
+  "finalize_workspace_photo_reconstruction",
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_asset",
   "inspect_workspace_component",
   "inspect_workspace_model",
+  "inspect_workspace_photo_reconstruction",
   "inspect_workspace_physics",
   "inspect_workspace_space",
   "query_spatial_placement",
@@ -31,6 +36,7 @@ const expectedTools = [
   "read_workspace_resource_snapshot",
   "redo_workspace_batch",
   "simulate_workspace_physics",
+  "start_workspace_photo_reconstruction",
   "submit_workspace_batch",
   "undo_workspace_batch",
 ];
@@ -58,6 +64,7 @@ function setup(options: {
   const handle = createAgentGatewayHttpHandler(gateway, {
     allowedOrigins: [ORIGIN],
     publicBaseUrl: PUBLIC_URL,
+    browserBootstrapToken: BROWSER_BOOTSTRAP_TOKEN,
   });
   gateways.push(gateway);
   handlers.push(handle);
@@ -82,14 +89,24 @@ async function browserPost(
   path: string,
   body: unknown,
 ): Promise<Response> {
-  return handle(request(path, body, { origin: ORIGIN, "x-semaframe-agent-csrf": csrfToken }));
+  return handle(request(path, body, {
+    origin: ORIGIN,
+    "x-semaframe-agent-csrf": csrfToken,
+    "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN,
+  }));
+}
+
+function browserConfigRequest(): Request {
+  return new Request(`${PUBLIC_URL}/api/agent/config`, {
+    headers: { "x-semaframe-browser-bootstrap": BROWSER_BOOTSTRAP_TOKEN },
+  });
 }
 
 async function enableAndRegister(handle: AgentGatewayFetchHandler) {
-  const initial = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+  const initial = await payload(await handle(browserConfigRequest()));
   const csrfToken = String(initial.csrfToken);
   await browserPost(handle, csrfToken, "/api/agent/browser/enable", {});
-  const config = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+  const config = await payload(await handle(browserConfigRequest()));
   const registration = await payload(await browserPost(handle, csrfToken, "/api/agent/browser/register", {
     clientInstanceId: "http-mcp-browser-01",
   }));
@@ -141,9 +158,9 @@ describe("Agent MCP connection offers", () => {
     expect(client.getNegotiatedProtocolVersion()).toMatch(version);
     expect(client.getServerVersion()).toEqual({
       name: "semaframe-workspace-engine",
-      version: "1.8.0",
+      version: "1.9.0",
     });
-    expect(expectedTools).toHaveLength(19);
+    expect(expectedTools).toHaveLength(24);
     expect(tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     expect(tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
     expect(tools.every((tool) => Boolean(tool.outputSchema))).toBe(true);
@@ -194,7 +211,7 @@ describe("Agent MCP connection offers", () => {
     expect(approvalToken.length).toBeGreaterThanOrEqual(32);
     expect(approvalFingerprint).toMatch(/^SHA-256 /u);
 
-    const pending = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const pending = await payload(await handle(browserConfigRequest()));
     expect(pending).toEqual(expect.objectContaining({
       connected: false,
       offerStatus: "approval_pending",
@@ -211,7 +228,7 @@ describe("Agent MCP connection offers", () => {
 
     const approved = await browserPost(handle, browser.csrfToken, "/api/agent/browser/approval/approve", { claimId });
     expect(approved.status).toBe(200);
-    const afterApproval = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const afterApproval = await payload(await handle(browserConfigRequest()));
     expect(afterApproval).toEqual(expect.objectContaining({ connected: false, offerStatus: "approval_granted" }));
     expect(afterApproval.pendingApproval).toBeUndefined();
 
@@ -244,7 +261,7 @@ describe("Agent MCP connection offers", () => {
     expect(JSON.stringify(command)).not.toContain(approvalToken);
 
     now += 101;
-    expect(await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)))).toEqual(
+    expect(await payload(await handle(browserConfigRequest()))).toEqual(
       expect.objectContaining({ connectionUrl: browser.connectionUrl, offerStatus: "approval_granted" }),
     );
 
@@ -265,7 +282,7 @@ describe("Agent MCP connection offers", () => {
     expect(guide.isError).toBe(false);
     expect(guide.structuredContent).toEqual(coreResult);
 
-    const connected = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const connected = await payload(await handle(browserConfigRequest()));
     expect(connected).toEqual(expect.objectContaining({
       connected: true,
       clientName: "Trusted Agent",
@@ -344,7 +361,7 @@ describe("Agent MCP connection offers", () => {
       },
     });
     expect((retry.structuredContent as { error: { code: string } }).error.code).toBe("approval_denied");
-    expect((await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)))).connected).toBe(false);
+    expect((await payload(await handle(browserConfigRequest()))).connected).toBe(false);
   });
 
   it("replaces an approved-but-incomplete offer after a terminal instruction failure", async () => {
@@ -388,7 +405,7 @@ describe("Agent MCP connection offers", () => {
     const failedGuide = await guidePromise;
     expect(failedGuide.isError).toBe(true);
     expect((failedGuide.structuredContent as { error: { code: string } }).error.code).toBe("command_failed");
-    const recovered = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const recovered = await payload(await handle(browserConfigRequest()));
     expect(recovered).toEqual(expect.objectContaining({ offerStatus: "waiting" }));
     expect(recovered.connectionUrl).not.toBe(browser.connectionUrl);
     expect((await handle(new Request(browser.connectionUrl))).status).toBe(404);
@@ -424,7 +441,7 @@ describe("Agent MCP connection offers", () => {
       error: { code: string; retryable: boolean };
     }).error;
     expect(retryableError).toMatchObject({ code: "engine_unavailable", retryable: true });
-    const recoverable = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const recoverable = await payload(await handle(browserConfigRequest()));
     expect(recoverable).toEqual(expect.objectContaining({
       connectionUrl: browser.connectionUrl,
       offerStatus: "approval_granted",
@@ -440,12 +457,12 @@ describe("Agent MCP connection offers", () => {
       name: "get_workspace_instructions",
       arguments: { client_id: "abandoned-claim", client_name: "Abandoned Claim" },
     });
-    expect(await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)))).toEqual(
+    expect(await payload(await handle(browserConfigRequest()))).toEqual(
       expect.objectContaining({ connectionUrl: browser.connectionUrl, offerStatus: "approval_pending" }),
     );
 
     now += 101;
-    const refreshed = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const refreshed = await payload(await handle(browserConfigRequest()));
     expect(refreshed).toEqual(expect.objectContaining({ offerStatus: "waiting" }));
     expect(refreshed.connectionUrl).not.toBe(browser.connectionUrl);
     expect((await handle(new Request(browser.connectionUrl))).status).toBe(404);
@@ -459,7 +476,7 @@ describe("Agent MCP connection offers", () => {
 
     const expired = await handle(new Request(browser.connectionUrl));
     expect(expired.status).toBe(410);
-    const refreshed = await payload(await handle(new Request(`${PUBLIC_URL}/api/agent/config`)));
+    const refreshed = await payload(await handle(browserConfigRequest()));
     expect(refreshed).toEqual(expect.objectContaining({ offerStatus: "waiting" }));
     expect(refreshed.connectionUrl).not.toBe(browser.connectionUrl);
     expect((await handle(new Request(browser.connectionUrl))).status).toBe(404);

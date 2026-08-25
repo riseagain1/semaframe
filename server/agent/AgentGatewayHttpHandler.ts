@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { AgentGateway, PairingReveal } from "./AgentGateway";
 import { AgentGatewayError } from "./AgentGateway";
 import type { AgentCommandName, BrowserCommandResult } from "./contracts";
@@ -21,16 +21,26 @@ import {
   type AgentAssetCandidateDescriptor,
   type AgentAssetFormat,
 } from "./AgentAssetIngress";
+import {
+  PhotoReconstructionService,
+  PhotoReconstructionServiceError,
+} from "../reconstruction/PhotoReconstructionService";
+import { ApplePhotoReconstructionBackend } from "../reconstruction/ApplePhotoReconstructionBackend";
 
 const DEFAULT_BODY_LIMIT_BYTES = 512 * 1024;
+const AGENT_PHOTO_RECONSTRUCTION_SCOPE = "asset:reconstruct" as const;
+export const AGENT_BROWSER_BOOTSTRAP_HEADER = "x-semaframe-browser-bootstrap" as const;
 
 export type AgentGatewayHttpOptions = Readonly<{
   allowedOrigins: readonly string[];
   publicBaseUrl: string;
   bodyLimitBytes?: number;
+  /** Required process-private capability injected by the trusted local UI proxy. */
+  browserBootstrapToken: string;
   feedRuntime?: FeedFetchRuntime;
   feedApprovalStore?: FeedFetchApprovalStore;
   assetIngress?: AgentAssetIngress;
+  photoReconstruction?: PhotoReconstructionService;
 }>;
 
 export type NodeRequestLike = AsyncIterable<Uint8Array | string> & {
@@ -63,6 +73,20 @@ export type AgentGatewayNodeHandler = ((request: NodeRequestLike, response: Node
 class BodyTooLargeError extends Error {}
 class InvalidRequestError extends Error {}
 
+function browserBootstrapMatches(received: string | null, expected: string): boolean {
+  if (!received) return false;
+  const actualDigest = createHash("sha256").update(received, "utf8").digest();
+  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
+  return timingSafeEqual(actualDigest, expectedDigest);
+}
+
+function requireBrowserBootstrapToken(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(value)) {
+    throw new TypeError("browserBootstrapToken is required and must be a 256-bit base64url capability.");
+  }
+  return value;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -91,6 +115,67 @@ function sessionBoundAssetImporter(
     ...(clientName ? { clientName } : {}),
     scopes: Object.freeze([AGENT_ASSET_IMPORT_SCOPE]),
   });
+}
+
+/**
+ * REST photo jobs can outlive the browser controller's short-lived command
+ * session. Bind them to the validated client identity instead of the session
+ * token so the same paired client can renew instructions and resume a bounded
+ * local job. Pairing/offer rotation revokes every reconstruction job.
+ */
+function validatedPhotoReconstructionPrincipal(
+  validation: { ok: true; data: unknown },
+  approved: Readonly<{ authorizationId: string; clientId?: string; clientName?: string }>,
+): Readonly<{ authorizationId: string; clientId: string; clientName?: string }> {
+  if (!isObject(validation.data) || typeof validation.data.client_id !== "string") {
+    throw new AgentGatewayError(
+      "invalid_response",
+      "The browser returned an invalid photo-reconstruction session validation.",
+    );
+  }
+  const clientId = boundedString(validation.data.client_id, "client_id", 1, 128);
+  const clientName = validation.data.client_name === undefined
+    ? undefined
+    : boundedString(validation.data.client_name, "client_name", 1, 160);
+  if (!approved.clientId || approved.clientId !== clientId) {
+    throw new AgentGatewayError(
+      "approval_invalid",
+      "The REST Agent identity does not match the approved photo-reconstruction claim.",
+    );
+  }
+  return Object.freeze({
+    authorizationId: approved.authorizationId,
+    clientId,
+    ...(clientName ? { clientName } : {}),
+  });
+}
+
+function browserPhotoReconstructionPrincipal(gateway: AgentGateway): Readonly<{
+  authorizationId: string;
+  clientId: string;
+  clientName: string;
+}> {
+  const gatewayInstanceId = gateway.getConfig().gatewayInstanceId;
+  return Object.freeze({
+    authorizationId: `browser:${createHash("sha256").update(gatewayInstanceId).digest("hex")}`,
+    clientId: "semaframe-browser",
+    clientName: "SemaFrame human",
+  });
+}
+
+function approvedRestPhotoReconstructionPrincipal(
+  gateway: AgentGateway,
+  body: Record<string, unknown>,
+) {
+  return gateway.requireApprovedClientScope(AGENT_PHOTO_RECONSTRUCTION_SCOPE, {
+    approvalToken: boundedString(body.approval_token, "approval_token", 16, 256),
+  });
+}
+
+function withoutApprovalProof(body: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...body };
+  delete result.approval_token;
+  return result;
 }
 
 function exactObject(
@@ -150,6 +235,15 @@ function contentLength(request: Request): number | undefined {
 }
 
 function assetErrorResponse(error: AgentAssetIngressError, headers: HeadersInit = {}): Response {
+  const responseHeaders = new Headers(headers);
+  if (error.status === 401) responseHeaders.set("www-authenticate", "Bearer");
+  return errorResponse(error.status, error.code, error.message, undefined, responseHeaders);
+}
+
+function photoReconstructionErrorResponse(
+  error: PhotoReconstructionServiceError,
+  headers: HeadersInit = {},
+): Response {
   const responseHeaders = new Headers(headers);
   if (error.status === 401) responseHeaders.set("www-authenticate", "Bearer");
   return errorResponse(error.status, error.code, error.message, undefined, responseHeaders);
@@ -266,6 +360,7 @@ function statusFor(error: AgentGatewayError): number {
   switch (error.code) {
     case "instructions_required":
     case "authorization_scope_missing":
+    case "approval_invalid":
       return 403;
     case "agent_mode_disabled":
     case "engine_unavailable":
@@ -581,6 +676,7 @@ export function createAgentGatewayHttpHandler(
   options: AgentGatewayHttpOptions,
 ): AgentGatewayFetchHandler {
   const allowedOrigins = [...options.allowedOrigins];
+  const browserBootstrapToken = requireBrowserBootstrapToken(options.browserBootstrapToken);
   const bodyLimitBytes = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES;
   if (!Number.isSafeInteger(bodyLimitBytes) || bodyLimitBytes <= 0) {
     throw new RangeError("bodyLimitBytes must be a positive integer.");
@@ -591,7 +687,16 @@ export function createAgentGatewayHttpHandler(
   const assetIngress = options.assetIngress ?? new AgentAssetIngress({
     publicBaseUrl: options.publicBaseUrl,
   });
-  const mcp = createAgentMcpHttpHandler(gateway, { allowedOrigins, assetIngress });
+  const photoReconstruction = options.photoReconstruction ?? new PhotoReconstructionService({
+    publicBaseUrl: options.publicBaseUrl,
+    assetIngress,
+    backend: new ApplePhotoReconstructionBackend(),
+  });
+  const mcp = createAgentMcpHttpHandler(gateway, {
+    allowedOrigins,
+    assetIngress,
+    photoReconstruction,
+  });
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -599,6 +704,14 @@ export function createAgentGatewayHttpHandler(
     const isBrowserRoute = pathname.startsWith("/api/agent/");
     const origin = request.headers.get("origin") ?? "";
     const cors = isBrowserRoute ? corsHeaders(origin, allowedOrigins) : {};
+
+    if (isBrowserRoute && !browserBootstrapMatches(
+      request.headers.get(AGENT_BROWSER_BOOTSTRAP_HEADER),
+      browserBootstrapToken,
+    )) {
+      await request.body?.cancel().catch(() => undefined);
+      return errorResponse(403, "browser_bootstrap_invalid", "The trusted local browser proxy capability is required.");
+    }
 
     if (pathname === "/health" || pathname === "/healthz") {
       if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "Use GET.");
@@ -609,6 +722,43 @@ export function createAgentGatewayHttpHandler(
       return jsonResponse(200, openApi);
     }
     if (mcp.matches(pathname)) return mcp.fetch(request);
+
+    const browserPhotoUpload = /^\/api\/agent\/reconstructions\/photo-uploads\/[0-9a-f-]{36}$/iu.test(pathname);
+
+    // Photo bytes use per-file one-time grants and never enter JSON, project
+    // state, or browser history. The /api alias exists only so the local Vite
+    // origin can stream a grant without widening CORS on public /v1 routes.
+    if (photoReconstruction.matchesUploadPath(pathname) || browserPhotoUpload) {
+      if (url.search || url.hash) {
+        await request.body?.cancel().catch(() => undefined);
+        return errorResponse(404, "photo_upload_not_found", "Use the exact upload URL without query parameters or a fragment.");
+      }
+      if (browserPhotoUpload && origin && !allowedOrigins.includes(origin)) {
+        await request.body?.cancel().catch(() => undefined);
+        return errorResponse(403, "origin_not_allowed", "An allowed SemaFrame browser origin is required.");
+      }
+      if (request.method !== "PUT") {
+        await request.body?.cancel().catch(() => undefined);
+        return errorResponse(405, "method_not_allowed", "Use PUT.");
+      }
+      try {
+        const result = await photoReconstruction.upload(
+          pathname,
+          parseAuthorization(request),
+          request.headers.get("content-type") ?? undefined,
+          contentLength(request),
+          readableBody(request.body),
+          request.signal,
+        );
+        return jsonResponse(200, result);
+      } catch (error) {
+        await request.body?.cancel().catch(() => undefined);
+        if (error instanceof PhotoReconstructionServiceError) {
+          return photoReconstructionErrorResponse(error);
+        }
+        return errorResponse(500, "photo_reconstruction_error", "The local gateway could not receive the photo.");
+      }
+    }
 
     // Asset bytes use a dedicated, capability-bound streaming route. It must
     // run before normal /v1 bearer handling: the upload token is intentionally
@@ -663,24 +813,39 @@ export function createAgentGatewayHttpHandler(
       try {
         const value = await readJson(request, bodyLimitBytes);
         let result: unknown;
-        if (pathname === "/api/agent/browser/reveal") {
+        if (pathname === "/api/agent/reconstructions/capability") {
+          emptyInput(value);
+          result = await photoReconstruction.capability();
+        } else if (pathname === "/api/agent/browser/reveal") {
           emptyInput(value);
           result = gateway.revealPairing();
         } else if (pathname === "/api/agent/browser/rotate") {
           emptyInput(value);
           result = gateway.rotatePairing();
-          await assetIngress.revokeAll();
+          const retainedBrowserAuthorizationId = browserPhotoReconstructionPrincipal(gateway).authorizationId;
+          await Promise.all([
+            assetIngress.revokeAllExceptAuthorization(retainedBrowserAuthorizationId),
+            photoReconstruction.revokeAllExceptAuthorization(retainedBrowserAuthorizationId),
+          ]);
         } else if (pathname === "/api/agent/browser/enable") {
           emptyInput(value);
           result = gateway.setEnabled(true);
         } else if (pathname === "/api/agent/browser/disable") {
           emptyInput(value);
           result = gateway.setEnabled(false);
-          await assetIngress.revokeAll();
+          const retainedBrowserAuthorizationId = browserPhotoReconstructionPrincipal(gateway).authorizationId;
+          await Promise.all([
+            assetIngress.revokeAllExceptAuthorization(retainedBrowserAuthorizationId),
+            photoReconstruction.revokeAllExceptAuthorization(retainedBrowserAuthorizationId),
+          ]);
         } else if (pathname === "/api/agent/browser/offer/refresh") {
           emptyInput(value);
           result = gateway.refreshOffer();
-          await assetIngress.revokeAll();
+          const retainedBrowserAuthorizationId = browserPhotoReconstructionPrincipal(gateway).authorizationId;
+          await Promise.all([
+            assetIngress.revokeAllExceptAuthorization(retainedBrowserAuthorizationId),
+            photoReconstruction.revokeAllExceptAuthorization(retainedBrowserAuthorizationId),
+          ]);
         } else if (pathname === "/api/agent/browser/approval/approve") {
           const body = exactObject(value, ["claimId"]);
           result = gateway.approveClaim(boundedString(body.claimId, "claimId", 36, 128));
@@ -732,6 +897,52 @@ export function createAgentGatewayHttpHandler(
           };
           feedApprovals.consume(body.approvalToken, feedRequest);
           result = await feedRuntime.fetch(feedRequest, request.signal);
+        } else if (pathname === "/api/agent/reconstructions/begin") {
+          const body = exactObject(value, ["requestId", "workspaceId", "profile", "photos"]);
+          result = await photoReconstruction.begin(
+            browserPhotoReconstructionPrincipal(gateway),
+            body,
+          );
+        } else if (pathname === "/api/agent/reconstructions/start") {
+          const body = exactObject(value, ["jobId", "workspaceId"]);
+          result = await photoReconstruction.start(
+            boundedString(body.jobId, "jobId", 36, 36),
+            browserPhotoReconstructionPrincipal(gateway).authorizationId,
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
+        } else if (pathname === "/api/agent/reconstructions/inspect") {
+          const body = exactObject(value, ["jobId", "workspaceId"]);
+          result = await photoReconstruction.inspect(
+            boundedString(body.jobId, "jobId", 36, 36),
+            browserPhotoReconstructionPrincipal(gateway).authorizationId,
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
+        } else if (pathname === "/api/agent/reconstructions/cancel") {
+          const body = exactObject(value, ["jobId", "workspaceId", "confirm"]);
+          if (body.confirm !== true) throw new InvalidRequestError("confirm must be true.");
+          // Ownership is authorization-bound; workspaceId is still required so
+          // stale UI state cannot silently target a different open project.
+          await photoReconstruction.inspect(
+            boundedString(body.jobId, "jobId", 36, 36),
+            browserPhotoReconstructionPrincipal(gateway).authorizationId,
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
+          result = await photoReconstruction.cancel(
+            boundedString(body.jobId, "jobId", 36, 36),
+            browserPhotoReconstructionPrincipal(gateway).authorizationId,
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+          );
+        } else if (pathname === "/api/agent/reconstructions/finalize") {
+          const body = exactObject(value, ["jobId", "workspaceId", "displayName", "expectedOutputSha256"]);
+          result = await photoReconstruction.finalize(
+            boundedString(body.jobId, "jobId", 36, 36),
+            browserPhotoReconstructionPrincipal(gateway),
+            boundedString(body.workspaceId, "workspaceId", 1, 256),
+            {
+              displayName: boundedString(body.displayName, "displayName", 1, 255),
+              expectedOutputSha256: boundedString(body.expectedOutputSha256, "expectedOutputSha256", 71, 71),
+            },
+          );
         } else if (pathname === "/api/agent/assets/candidates/inspect") {
           const body = exactObject(value, ["candidateHandle", "workspaceId"]);
           result = await assetIngress.inspect(
@@ -766,6 +977,7 @@ export function createAgentGatewayHttpHandler(
         if (error instanceof InvalidRequestError) return errorResponse(400, "invalid_request", error.message, undefined, cors);
         if (error instanceof FeedFetchApprovalError) return errorResponse(error.status, error.code, error.message, undefined, cors);
         if (error instanceof FeedFetchError) return errorResponse(error.status, error.code, error.message, error.details, cors);
+        if (error instanceof PhotoReconstructionServiceError) return photoReconstructionErrorResponse(error, cors);
         if (error instanceof AgentAssetIngressError) return assetErrorResponse(error, cors);
         if (error instanceof AgentGatewayError) return errorResponse(statusFor(error), error.code, error.message, error.details, cors);
         return errorResponse(500, "gateway_error", "The local agent gateway could not complete the browser request.", undefined, cors);
@@ -843,6 +1055,124 @@ export function createAgentGatewayHttpHandler(
         });
         return jsonResponse(200, result);
       }
+      if (pathname === "/v1/reconstructions/begin" && request.method === "POST") {
+        const body = exactObject(value, [
+          "session_token",
+          "instruction_digest",
+          "request_id",
+          "workspace_id",
+          "profile",
+          "photos",
+          "approval_token",
+        ]);
+        const approved = approvedRestPhotoReconstructionPrincipal(gateway, body);
+        const validation = await gateway.dispatch("begin_workspace_photo_reconstruction", withoutApprovalProof(body), {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        if (!isSuccessfulWorkspaceResult(validation)) return jsonResponse(200, validation);
+        const principal = validatedPhotoReconstructionPrincipal(validation, approved);
+        const result = await photoReconstruction.begin(principal, {
+          requestId: body.request_id,
+          workspaceId: body.workspace_id,
+          profile: body.profile,
+          photos: Array.isArray(body.photos)
+            ? body.photos.map((photo) => {
+                const item = photo as Record<string, unknown>;
+                return {
+                  photoId: item.photo_id,
+                  mediaType: item.media_type,
+                  byteLength: item.byte_length,
+                  sha256: item.sha256,
+                };
+              })
+            : body.photos,
+        });
+        return jsonResponse(200, { ok: true, data: result });
+      }
+      if (pathname === "/v1/reconstructions/start" && request.method === "POST") {
+        const body = exactObject(value, ["session_token", "instruction_digest", "workspace_id", "job_id", "approval_token"]);
+        const approved = approvedRestPhotoReconstructionPrincipal(gateway, body);
+        const validation = await gateway.dispatch("start_workspace_photo_reconstruction", withoutApprovalProof(body), {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        if (!isSuccessfulWorkspaceResult(validation)) return jsonResponse(200, validation);
+        const principal = validatedPhotoReconstructionPrincipal(validation, approved);
+        const result = await photoReconstruction.start(
+          boundedString(body.job_id, "job_id", 36, 36),
+          principal.authorizationId,
+          boundedString(body.workspace_id, "workspace_id", 1, 256),
+        );
+        return jsonResponse(200, { ok: true, data: result });
+      }
+      if (pathname === "/v1/reconstructions/inspect" && request.method === "POST") {
+        const body = exactObject(value, ["session_token", "instruction_digest", "workspace_id", "job_id", "approval_token"]);
+        const approved = approvedRestPhotoReconstructionPrincipal(gateway, body);
+        const validation = await gateway.dispatch("inspect_workspace_photo_reconstruction", withoutApprovalProof(body), {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        if (!isSuccessfulWorkspaceResult(validation)) return jsonResponse(200, validation);
+        const principal = validatedPhotoReconstructionPrincipal(validation, approved);
+        const result = await photoReconstruction.inspect(
+          boundedString(body.job_id, "job_id", 36, 36),
+          principal.authorizationId,
+          boundedString(body.workspace_id, "workspace_id", 1, 256),
+        );
+        return jsonResponse(200, { ok: true, data: result });
+      }
+      if (pathname === "/v1/reconstructions/cancel" && request.method === "POST") {
+        const body = exactObject(value, ["session_token", "instruction_digest", "workspace_id", "job_id", "confirm", "approval_token"]);
+        if (body.confirm !== true) throw new InvalidRequestError("confirm must be true.");
+        const approved = approvedRestPhotoReconstructionPrincipal(gateway, body);
+        const validation = await gateway.dispatch("cancel_workspace_photo_reconstruction", withoutApprovalProof(body), {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        if (!isSuccessfulWorkspaceResult(validation)) return jsonResponse(200, validation);
+        const principal = validatedPhotoReconstructionPrincipal(validation, approved);
+        await photoReconstruction.inspect(
+          boundedString(body.job_id, "job_id", 36, 36),
+          principal.authorizationId,
+          boundedString(body.workspace_id, "workspace_id", 1, 256),
+        );
+        const result = await photoReconstruction.cancel(
+          boundedString(body.job_id, "job_id", 36, 36),
+          principal.authorizationId,
+          boundedString(body.workspace_id, "workspace_id", 1, 256),
+        );
+        return jsonResponse(200, { ok: true, data: result });
+      }
+      if (pathname === "/v1/reconstructions/finalize" && request.method === "POST") {
+        const body = exactObject(value, [
+          "session_token",
+          "instruction_digest",
+          "workspace_id",
+          "job_id",
+          "display_name",
+          "expected_output_sha256",
+          "approval_token",
+        ]);
+        const approved = approvedRestPhotoReconstructionPrincipal(gateway, body);
+        const validation = await gateway.dispatch("finalize_workspace_photo_reconstruction", withoutApprovalProof(body), {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        if (!isSuccessfulWorkspaceResult(validation)) return jsonResponse(200, validation);
+        const principal = validatedPhotoReconstructionPrincipal(validation, approved);
+        const candidate = await photoReconstruction.finalize(
+          boundedString(body.job_id, "job_id", 36, 36),
+          principal,
+          boundedString(body.workspace_id, "workspace_id", 1, 256),
+          {
+            displayName: boundedString(body.display_name, "display_name", 1, 255),
+            expectedOutputSha256: boundedString(body.expected_output_sha256, "expected_output_sha256", 71, 71),
+          },
+        );
+        const result = await gateway.dispatch("complete_workspace_reconstruction_asset", {
+          candidate_handle: candidate.candidateHandle,
+          workspace_id: body.workspace_id,
+        }, {
+          clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
+        });
+        return jsonResponse(200, result);
+      }
       const command = externalCommand(pathname, request.method, value);
       if (!command) return errorResponse(404, "not_found", "Not found.");
       const instructionClientName = command.name === "get_workspace_instructions" && isObject(command.input)
@@ -856,6 +1186,7 @@ export function createAgentGatewayHttpHandler(
     } catch (error) {
       if (error instanceof BodyTooLargeError) return errorResponse(413, "body_too_large", "Request body is too large.");
       if (error instanceof InvalidRequestError) return errorResponse(400, "invalid_request", error.message);
+      if (error instanceof PhotoReconstructionServiceError) return photoReconstructionErrorResponse(error);
       if (error instanceof AgentAssetIngressError) return assetErrorResponse(error);
       if (error instanceof AgentGatewayError) return errorResponse(statusFor(error), error.code, error.message, error.details);
       return errorResponse(500, "gateway_error", "The local agent gateway could not complete the request.");
@@ -864,7 +1195,23 @@ export function createAgentGatewayHttpHandler(
   return Object.assign(handle, {
     close: async () => {
       feedApprovals.clear();
-      await Promise.all([mcp.close(), assetIngress.close()]);
+      const failures: unknown[] = [];
+      // Reconstruction teardown may still need to revoke staged candidates,
+      // so keep AssetIngress alive until it has settled. A cleanup failure must
+      // not skip the remaining MCP/ingress shutdown work.
+      try {
+        await photoReconstruction.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      const trailing = await Promise.allSettled([mcp.close(), assetIngress.close()]);
+      for (const result of trailing) {
+        if (result.status === "rejected") failures.push(result.reason);
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "The local Agent Gateway could not cleanly release every resource.");
+      }
     },
   });
 }
@@ -927,10 +1274,23 @@ export function createNodeAgentGatewayHttpHandler(
   gateway: AgentGateway,
   options: AgentGatewayHttpOptions,
 ): AgentGatewayNodeHandler {
+  // Validate before allocating ingress/reconstruction resources. JavaScript
+  // callers can bypass the TypeScript contract, so an omitted capability must
+  // still fail closed at runtime rather than expose browser-authority routes.
+  requireBrowserBootstrapToken(options.browserBootstrapToken);
   const assetIngress = options.assetIngress ?? new AgentAssetIngress({
     publicBaseUrl: options.publicBaseUrl,
   });
-  const fetchHandler = createAgentGatewayHttpHandler(gateway, { ...options, assetIngress });
+  const photoReconstruction = options.photoReconstruction ?? new PhotoReconstructionService({
+    publicBaseUrl: options.publicBaseUrl,
+    assetIngress,
+    backend: new ApplePhotoReconstructionBackend(),
+  });
+  const fetchHandler = createAgentGatewayHttpHandler(gateway, {
+    ...options,
+    assetIngress,
+    photoReconstruction,
+  });
   const bodyLimitBytes = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES;
   const handle = async (request: NodeRequestLike, response: NodeResponseLike): Promise<void> => {
     const controller = new AbortController();
@@ -944,7 +1304,11 @@ export function createNodeAgentGatewayHttpHandler(
       const method = request.method ?? "GET";
       const target = new URL(request.url ?? "/", `${options.publicBaseUrl}/`);
       let fetchRequest: Request;
-      if (assetIngress.matchesUploadPath(target.pathname)) {
+      if (
+        assetIngress.matchesUploadPath(target.pathname)
+        || photoReconstruction.matchesUploadPath(target.pathname)
+        || /^\/api\/agent\/reconstructions\/photo-uploads\/[0-9a-f-]{36}$/iu.test(target.pathname)
+      ) {
         const iterator = request[Symbol.asyncIterator]();
         const stream = new ReadableStream<Uint8Array>({
           async pull(streamController) {

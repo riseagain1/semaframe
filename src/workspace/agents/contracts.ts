@@ -6,7 +6,7 @@
  */
 
 export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "2.8" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "2.9" as const;
 /** Final JSON cap for one public inspect_workspace_component result. */
 export const WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES = 1_048_576;
 /**
@@ -54,6 +54,8 @@ export const WORKSPACE_PERMISSION_SCOPES = [
   "workspace:clear",
   /** Gateway-only authorization for one-time, byte-verified Reality Asset imports. */
   "asset:import",
+  /** Non-default authorization for staging photos and running a reconstruction backend. */
+  "asset:reconstruct",
   "effect:data_read",
   "effect:external_write",
   "extension:install",
@@ -94,6 +96,11 @@ export const WORKSPACE_AGENT_TOOL_NAMES = [
   "begin_workspace_asset_import",
   "cancel_workspace_asset_import",
   "complete_workspace_asset_import",
+  "begin_workspace_photo_reconstruction",
+  "start_workspace_photo_reconstruction",
+  "inspect_workspace_photo_reconstruction",
+  "cancel_workspace_photo_reconstruction",
+  "finalize_workspace_photo_reconstruction",
   "begin_workspace_update",
   "submit_workspace_batch",
   "undo_workspace_batch",
@@ -102,6 +109,64 @@ export const WORKSPACE_AGENT_TOOL_NAMES = [
 ] as const;
 
 export type WorkspaceAgentToolName = typeof WORKSPACE_AGENT_TOOL_NAMES[number];
+
+export type WorkspacePhotoReconstructionProfile = "preview" | "balanced" | "quality";
+export type WorkspacePhotoReconstructionMediaType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+  | "image/heic"
+  | "image/heif";
+
+export type WorkspacePhotoReconstructionPhotoInput = Readonly<{
+  photo_id: string;
+  media_type: WorkspacePhotoReconstructionMediaType;
+  byte_length: number;
+  sha256: string;
+}>;
+
+export type BeginWorkspacePhotoReconstructionInput = Readonly<{
+  session_token: string;
+  instruction_digest: string;
+  request_id: string;
+  workspace_id: string;
+  profile: WorkspacePhotoReconstructionProfile;
+  photos: readonly WorkspacePhotoReconstructionPhotoInput[];
+}>;
+
+export type StartWorkspacePhotoReconstructionInput = Readonly<{
+  session_token: string;
+  instruction_digest: string;
+  workspace_id: string;
+  job_id: string;
+}>;
+
+export type InspectWorkspacePhotoReconstructionInput = StartWorkspacePhotoReconstructionInput;
+
+export type CancelWorkspacePhotoReconstructionInput = Readonly<{
+  session_token: string;
+  instruction_digest: string;
+  workspace_id: string;
+  job_id: string;
+  confirm: true;
+}>;
+
+export type FinalizeWorkspacePhotoReconstructionInput = Readonly<{
+  session_token: string;
+  instruction_digest: string;
+  workspace_id: string;
+  job_id: string;
+  display_name: string;
+  expected_output_sha256: string;
+}>;
+
+/** Authorization-only controller response; reconstruction state is owned by the host backend. */
+export type WorkspacePhotoReconstructionAuthorizationData = Readonly<{
+  client_id: string;
+  client_name?: string;
+  workspace_id: string;
+  workspace_revision: number;
+}>;
 
 export type WorkspaceAgentPrincipal = Readonly<{
   sessionId: string;

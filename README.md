@@ -48,7 +48,7 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## Next / unreleased
 
-The next public Agent contract keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes three operational loops:
+The next public Agent contract keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes four operational loops:
 
 | Capability | What it adds |
 | --- | --- |
@@ -57,8 +57,9 @@ The next public Agent contract keeps the v0.3 modeling and Reality foundation, a
 | **Exact approved feed readback** | A revision-preserving `read_workspace_resource_snapshot` tool for canonical inline or HTTP-feed snapshots, gated by `workspace:read` plus non-default `effect:data_read` approval and bounded to exact non-secret results |
 | **Routed spatial movement** | A typed `move_to` action for entities, exact primitives, CAD parts, and assemblies, with scale preservation, atomic event fan-out, endpoint collision and enforced-physics validation, and ordinary renderer transitions |
 | **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid project-schema 1.3 files reopen without weakening history validation |
+| **Photo-set Reality reconstruction** | Human and approval-gated Agent flows for digest-bound photo upload, explicit local reconstruction, bounded progress/cancellation, browser-authoritative preflight, and content-addressed Reality registration |
 
-The development surface is now Workspace Protocol 1.3 with project schema 1.4, 19 MCP tools, Agent Guide 2.8, MCP server 1.8.0, Agent Gateway OpenAPI 1.1.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
+The development surface is now Workspace Protocol 1.3 with project schema 1.4, 24 MCP tools, Agent Guide 2.9, MCP server 1.9.0, Agent Gateway OpenAPI 1.2.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
 
 ## What's new in v0.3
 
@@ -128,7 +129,7 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Universal canvas | Mix navigable Three.js content with DOM/SVG panels on one canvas |
 | Component system | 20 versioned built-ins plus bounded Agent-defined declarative recipes |
 | Parametric modeling | Exact SI primitives plus editable OCCT CAD parts with parameters, bounded constraint sketches, ordered features, assemblies, immutable reusable models, and numeric Inspector controls |
-| Reality capture | Local PLY, SPZ v4, and SOG v2 Gaussian splats with direct two-point metric calibration, content-addressed storage, missing-byte relink, and editable semantic proxies |
+| Reality capture | Local photo-set reconstruction on supported Macs plus PLY, SPZ v4, and SOG v2 import, with direct two-point metric calibration, content-addressed storage, missing-byte relink, and editable semantic proxies |
 | Solid export | OpenUSD USDA assemblies, bounded Manifold STL/OBJ solids, legacy fused STEP, and a verified non-unioned AP242/XCAF CAD handoff package |
 | Spatial reasoning | Revision-bound SemaFrame Spatial Graph 3.2 with transforms, analytic and exact CAD evidence, visual-only Reality nodes, semantic proxies, bounds, colliders, support, and intersection relations |
 | Collision | Asset bounds, explicit boxes, and compound oriented-box colliders with independent enable/trigger controls |
@@ -158,6 +159,9 @@ The built-in component registry contains:
 - npm
 - a modern browser with WebGL support
 - an MCP-capable Agent client for external Agent control
+- for local photo-set reconstruction only: a Mac where RealityKit reports `PhotogrammetrySession.isSupported`, plus Xcode command-line tools providing `xcrun swift`
+
+If that optional Apple Object Capture requirement is unavailable, SemaFrame reports reconstruction as unavailable instead of faking a result. The rest of the Workspace—including prebuilt PLY, SPZ, and SOG Reality import—continues to work.
 
 ### Install and run
 
@@ -344,6 +348,38 @@ Agent import is deliberately split into capabilities:
 4. use `inspect_workspace_asset` for exact safe descriptor rediscovery; then
 5. create a normal `gaussian-splat` component in a prepared Workspace batch: map returned `asset_ref.asset_id` to `props.assetRef.assetId`, copy the digest exactly, and provide explicit calibration.
 
+### Reconstruct from photos
+
+The **Reality** panel can take a local set of JPEG, PNG, WebP, HEIC, or HEIF images through the same bounded reconstruction protocol. For a person, the browser hashes the selected files, uploads them to the loopback worker, starts the job, shows its real phase and progress, and sends the finished candidate back through the existing browser-authoritative Reality preflight and vault. Source images are temporary job inputs: they are never embedded in MCP JSON, Workspace state, history, or a saved project.
+
+An external Agent or MCP client can accept photo files supplied by its user, send only their exact manifests to SemaFrame, and `PUT` each raw image directly to the one-use per-photo grant returned for that manifest. SemaFrame never accepts arbitrary local filesystem paths, arbitrary source URLs, or base64-encoded photo bodies in MCP or REST JSON.
+
+The bundled local backend requires a Mac where RealityKit reports `PhotogrammetrySession.isSupported` and where `xcrun swift` is available. Apple Object Capture first reconstructs a textured mesh; SemaFrame then samples that surface into a bounded Gaussian PLY for its Reality renderer. If the capability probe fails, reconstruction fails closed with an unavailable state. There is currently no bundled Windows, Linux, cloud, CUDA, or native neural-3DGS backend.
+
+The browser-facing capability check is protected by a process-private bootstrap capability injected by the trusted local UI proxy, an exact allowed origin, and CSRF. The bootstrap value is not exposed to browser JavaScript. Gateway handler construction requires a valid 256-bit bootstrap capability and aborts before allocating route resources when it is omitted or malformed, so an accidental configuration omission cannot expose the config/CSRF surface. Successful and failed checks are briefly cached, and concurrent callers are coalesced onto one probe, so opening or re-rendering the Reality panel does not repeatedly launch Object Capture capability work.
+
+An approved Agent must request the non-default `asset:reconstruct` scope and use the explicit five-tool flow:
+
+1. call `begin_workspace_photo_reconstruction` with the current Workspace ID, a stable request ID, a quality profile, and 2–400 unique photo manifests containing exact media type, byte length, and SHA-256;
+2. stream each original image once to its returned one-time `PUT` URL and bearer;
+3. call `start_workspace_photo_reconstruction` only after every upload is byte-, signature-, length-, and digest-verified;
+4. poll `inspect_workspace_photo_reconstruction`, or use `cancel_workspace_photo_reconstruction` with `confirm: true`; then
+5. call `finalize_workspace_photo_reconstruction` with the ready output's exact SHA-256 and a display name. The authoritative browser independently preflights, hashes, stores, and registers the output before returning `asset_ref`.
+
+The begin result's MCP `structuredContent` necessarily contains each short-lived upload URL and bearer once so the external client can perform the `PUT`. SemaFrame redacts those values from the human-readable tool text, project data, and Workspace history. An external MCP client or model provider can still log the structured result it receives, so its own retention and privacy policy remains part of the trust boundary.
+
+The REST reconstruction routes are not a bearer-only shortcut. Every request must also prove an active, browser-approved claim whose approved scopes include `asset:reconstruct`. Unless a custom integration specifically needs REST, use the MCP five-tool flow above so approval, identity, and reconstruction lifecycle stay on the intended contract.
+
+One reconstruction accepts 2–400 photos, at most 64 MiB and 100 megapixels per photo, at most 2 GiB of encoded inputs, and at most 1 billion decoded pixels across the set. The selected Apple profile adds a tighter aggregate decoded-pixel gate: 250 million for `preview`, 600 million for `balanced`, and 1 billion for `quality`. The finished candidate is capped at 256 MiB. The complete Apple working-output tree—Object Capture intermediates plus the generated PLY—is bounded by profile: 1 GiB for `preview`, 4 GiB for `balanced`, and 8 GiB for `quality`. A further 512 MiB free-space reserve is required and rechecked through conversion and private candidate staging.
+
+Native memory is also fail-closed. Before launch, `preview`, `balanced`, and `quality` require respectively 3 GiB, 7 GiB, and 9 GiB of conservatively available system memory: a 2/6/8 GiB aggregate Object Capture process-tree RSS ceiling plus a 1 GiB system reserve. During reconstruction SemaFrame repeatedly rechecks both process-tree RSS and available memory; exceeding either bound, or losing either measurement, stops the dedicated process group and its last observed helpers with a retryable resource error. On macOS the available-memory estimate counts only `vm_stat` free, inactive, and speculative pages. Process RSS does not directly account for every GPU allocation, so the independent whole-system reserve is retained as an additional pressure guard rather than presented as an OS-level cgroup guarantee.
+
+Graceful cancellation, grant revocation, and service shutdown attempt immediate temporary-file cleanup; a cleanup failure remains explicit and retryable instead of being reported as success. An abrupt tab close or network loss cannot guarantee that the browser's cancellation request arrives, so the service retains ownership, expires the job after its bounded two-hour lifetime, and sweeps its inputs. After a hard process exit, dead reconstruction roots are reclaimed on the next service startup once they pass a five-minute safety age.
+
+Reconstruction quality still depends on coverage, overlap, focus, lighting, reflective/transparent surfaces, motion, and the Object Capture backend. Every generated asset starts as `visual_only` and `uncalibrated`, with source scale and coordinates explicitly unknown. It is visual reconstruction—not survey evidence, a collision mesh, a CAD solid, or a manufacturing-ready model. Add a known-distance calibration and editable semantic/CAD proxies before using the scene for metric, collision, physics, feasibility, or export decisions.
+
+Automated repository verification uses valid synthetic image fixtures and a native backend capability probe. A manual macOS validation on August 25, 2026 also completed the browser-approved MCP workflow with all 51 photos from the public [ink-splashed skull photogrammetry test set](https://gitlab.com/photogrammetry-test-sets/skull-turntable-strong-lights-white-background-ink-splashed-textureless-areas): `preview` produced 250,000 splats and `balanced` produced 1,000,000 splats. This is end-to-end workflow evidence, not measured field accuracy or a permanent CI fixture; the source photos and generated artifacts are intentionally not committed.
+
 Current import limits are 256 MiB, 4 million splats, and 128 registered descriptors per Workspace. Project files are metadata/reference packages, not portable Reality Asset archives; copying a project to another browser may require same-digest relinking.
 
 ## Spatial understanding and physics
@@ -428,7 +464,7 @@ Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, 
 
 ## Agent integration
 
-SemaFrame exposes exactly 19 Workspace tools:
+SemaFrame exposes exactly 24 Workspace tools:
 
 | Phase | Tool |
 | --- | --- |
@@ -446,6 +482,11 @@ SemaFrame exposes exactly 19 Workspace tools:
 | Asset import | `begin_workspace_asset_import` |
 | Asset import | `cancel_workspace_asset_import` |
 | Asset import | `complete_workspace_asset_import` |
+| Photo reconstruction | `begin_workspace_photo_reconstruction` |
+| Photo reconstruction | `start_workspace_photo_reconstruction` |
+| Photo reconstruction | `inspect_workspace_photo_reconstruction` |
+| Photo reconstruction | `cancel_workspace_photo_reconstruction` |
+| Photo reconstruction | `finalize_workspace_photo_reconstruction` |
 | Mutate | `begin_workspace_update` |
 | Mutate | `submit_workspace_batch` |
 | History | `undo_workspace_batch` |
@@ -463,7 +504,7 @@ The normal Agent flow is:
 
 Voice, realtime, and multimodal clients use this same contract. Partial model output stays in client-side preview state; only final intent becomes a Workspace transaction. SemaFrame owns validation, rendering, history, permissions, and persistence. It does not bundle a model, speech recognizer, or voice transport.
 
-For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. `npm run agent:mcp` exposes the same Workspace surface over stdio.
+For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. Photo-reconstruction REST calls additionally require the private proof for an active browser-approved `asset:reconstruct` claim; a pairing bearer by itself is insufficient. The generated `npm run agent:mcp` setup is a stdio transport bridge to the exact browser-approved Streamable HTTP MCP offer—not a second REST authority path—so its five reconstruction tools use the same approved claim and non-default scope as a direct HTTP client. The local setup UI keeps these concerns separate: the stdio config contains only `SEMAFRAME_AGENT_MCP_URL`, while a different explicit copy action reveals the credentialed REST config.
 
 ## Protocol and persistence
 
@@ -521,6 +562,12 @@ Hard limits bound main-thread work, memory use, persistence, and replay:
 | Agent-defined recipes | 200 |
 | Registered Reality Assets | 128 |
 | One Reality Asset binary | 256 MiB / 4 million splats |
+| Photo reconstruction set | 2–400 photos / 2 GiB encoded / 1 billion decoded pixels |
+| One reconstruction photo | 64 MiB / 100 megapixels |
+| Reconstruction output candidate | 256 MiB |
+| Apple working-output tree | `preview` 1 GiB / `balanced` 4 GiB / `quality` 8 GiB, plus a 512 MiB free reserve through conversion and candidate staging |
+| Apple decoded pixels | `preview` 250M / `balanced` 600M / `quality` 1B |
+| Apple process-tree RSS | `preview` 2 GiB / `balanced` 6 GiB / `quality` 8 GiB, plus 1 GiB available-memory reserve |
 | Public history summaries | 512 |
 | Recent undoable commands | 64 |
 | Idempotency ledger entries | 4,096 |
@@ -535,11 +582,17 @@ SemaFrame treats the browser as the authoritative host and external clients as s
 Important boundaries include:
 
 - the gateway binds to loopback and starts disabled;
+- every `/api/agent/*` browser-authority route additionally requires a random process-private bootstrap header injected by the local UI proxy; both fetch and Node handler construction fail closed if that capability is absent or malformed, spoofing `Origin` is insufficient, and a public reverse proxy should never expose those browser routes;
 - connection URLs identify offers but do not carry session authority;
 - approvals are bound to the instruction surface, client identity, requested scopes, and browser lease;
 - mutation requires a scoped session plus a short-lived revision-bound transaction;
 - capability values are redacted from diagnostics and excluded from projects and recovery;
 - Agent Reality imports require `asset:import`, an exact user-provided file digest, a one-time upload grant, browser-side preflight, and a browser-owned content-addressed vault;
+- Agent photo reconstruction requires the separate non-default `asset:reconstruct` scope, an exact per-photo manifest, one-time byte-verified uploads, an explicit start, digest-pinned finalization, and browser-owned final preflight; temporary source photos never enter Workspace state or project files;
+- photo upload grants appear once in MCP `structuredContent` because the client needs them for its exact `PUT`, while human-readable tool text, projects, and Workspace history stay redacted; the external client's own structured-result logging remains outside SemaFrame's control;
+- SemaFrame accepts photo bytes only through those one-use grants—not through a local path, source URL, or base64 field—and the reconstruction REST bridge also requires proof of an active approved `asset:reconstruct` claim;
+- browser reconstruction capability probes require the local proxy bootstrap, exact allowed origin, and CSRF, then briefly cache and coalesce duplicate checks;
+- graceful cancellation, revocation, and shutdown clean temporary reconstruction data immediately when possible; abrupt browser loss falls back to the bounded two-hour server job expiry, failed cleanup remains retryable, and startup reclaims dead roots after a five-minute safety age;
 - connector network reads require a person-mediated single-use approval;
 - resource schemas, payloads, paths, transforms, and provenance are bounded and validated;
 - feeds reject private networks, credential-like URLs/content, unsafe redirects, excessive bodies, and long-lived sockets;
@@ -548,7 +601,7 @@ Important boundaries include:
 - declarative recipes have no arbitrary code or network execution;
 - project replacement invalidates ephemeral web activation, feed automation consent, and in-flight refresh work.
 
-This is an application-level local capability model, not an operating-system security boundary. A malicious process already able to impersonate the local browser and access loopback is outside the model.
+This is an application-level local capability model, not an operating-system security boundary. A process that can read another process's environment, modify the trusted local proxy, or otherwise assume the user's local OS authority remains outside the model. When publishing MCP or REST through HTTPS, expose only the required external MCP, OpenAPI, `/v1`, and one-use upload paths—not `/api/agent/*`.
 
 ## Current boundaries
 
@@ -561,6 +614,7 @@ SemaFrame deliberately does not claim the following:
 - **Not structural certification.** Material properties, stress, fatigue, fracture, tolerances, and safety factors are not modeled.
 - **Not full mechanical CAD.** Exact primitives, bounded constraint sketches, a real editable B-rep feature subset, assembly intent, and verified AP242 handoff are available. Robust persistent per-face naming, arbitrary topology selection, evaluated shell/sweep/loft/pattern features, native vendor feature trees, STEP import, GD&T/PMI, drawings, PLM, and FEA are not.
 - **Reality capture is visual evidence, not engineering truth.** Gaussian splats do not provide collision, physics, CAD, material, or certification authority; editable semantic proxies must carry those claims.
+- **Photo reconstruction is local, visual-only, resource-bounded, and platform-bounded.** The bundled backend requires supported macOS Object Capture hardware and Xcode command-line tools. It rejects sets beyond the selected profile's pixel and memory policy and stops work if disk, memory, process-tree supervision, time, total working-tree, conversion, or candidate-staging bounds fail. Apple first produces a textured mesh, which SemaFrame samples into Gaussian PLY; every result begins as `visual_only` and `uncalibrated`. It is not a bundled cross-platform/cloud reconstruction service. A real 51-photo public test set has completed the manual end-to-end workflow, but that does not establish metric or survey accuracy and is not a committed CI fixture.
 - **Project JSON is not a portable splat bundle.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest.
 - **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
 - **Not a bundled AI model.** Model choice, voice, and realtime transport live in the connecting client.
@@ -654,7 +708,7 @@ npm run test:coverage                    # coverage run
 
 `smoke:agent` starts a real Streamable HTTP MCP client and browser. It covers offer creation, approval, instruction-first behavior, multi-tab lease conflict and takeover, Workspace creation, data and event flows, idempotency, undo/redo, persistence, revocation, responsive layout, and capability-secret scans. Focused integration tests additionally exercise a real MCP Reality Asset grant/stream/finalize/create/proxy/SSG/save-reopen flow.
 
-Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, MCP, and OpenAPI.
+Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, photo reconstruction contracts and backend boundaries, MCP, and OpenAPI.
 
 When changing a public contract, update the schema, TypeScript type, controller/adapter, guide, focused regression, and at least one cross-layer test together. A green unit test alone is not sufficient for connection, rendering, persistence, or security changes.
 

@@ -180,26 +180,35 @@ describe("AgentConnectionPage", () => {
     expect(screen.getByRole("button", { name: "Connection URL copied" })).toBeVisible();
   });
 
-  it("reveals the credentialed local setup only through an explicit advanced copy action", async () => {
+  it("keeps the stdio setup uncredentialed and reveals REST authority only through its own copy action", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    const secretSetup = '{"env":{"SEMAFRAME_AGENT_TOKEN":"private-bearer"}}';
-    const onCopySetup = vi.fn(() => ({ mcpConfig: secretSetup }));
+    const mcpSetup = '{"env":{"SEMAFRAME_AGENT_MCP_URL":"http://127.0.0.1/mcp/connect/offer"}}';
+    const restSetup = '{"authorization":"Bearer private-bearer"}';
+    const onCopySetup = vi.fn(() => ({ mcpConfig: mcpSetup }));
+    const onCopyRestSetup = vi.fn(() => ({ restConfig: restSetup }));
 
     const { container } = render(<AgentConnectionPage {...connectionProps({
       connectionUrl: "http://127.0.0.1:4317/mcp/connect/public-offer",
       onCopySetup,
+      onCopyRestSetup,
     })} />);
 
     expect(onCopySetup).not.toHaveBeenCalled();
     expect(container).not.toHaveTextContent("private-bearer");
     await user.click(screen.getByText("Advanced local setup"));
-    await user.click(screen.getByRole("button", { name: "Copy local stdio/REST setup" }));
+    await user.click(screen.getByRole("button", { name: "Copy stdio MCP setup" }));
 
     expect(onCopySetup).toHaveBeenCalledOnce();
-    expect(writeText).toHaveBeenCalledWith(secretSetup);
-    expect(screen.getByRole("button", { name: "Local setup copied" })).toBeVisible();
+    expect(onCopyRestSetup).not.toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledWith(mcpSetup);
+    expect(mcpSetup).not.toContain("private-bearer");
+    expect(screen.getByRole("button", { name: "MCP setup copied" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Copy bearer REST setup" }));
+    expect(onCopyRestSetup).toHaveBeenCalledOnce();
+    expect(writeText).toHaveBeenLastCalledWith(restSetup);
+    expect(screen.getByRole("button", { name: "REST setup copied" })).toBeVisible();
     expect(container).not.toHaveTextContent("private-bearer");
   });
 

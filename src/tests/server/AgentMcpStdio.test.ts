@@ -13,14 +13,18 @@ import { describe, expect, it } from "vitest";
 const PROJECT_ROOT = process.cwd();
 const EXPECTED_TOOLS = [
   "begin_workspace_asset_import",
+  "begin_workspace_photo_reconstruction",
   "begin_workspace_update",
   "cancel_workspace_asset_import",
+  "cancel_workspace_photo_reconstruction",
   "complete_workspace_asset_import",
+  "finalize_workspace_photo_reconstruction",
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_asset",
   "inspect_workspace_component",
   "inspect_workspace_model",
+  "inspect_workspace_photo_reconstruction",
   "inspect_workspace_physics",
   "inspect_workspace_space",
   "query_spatial_placement",
@@ -29,6 +33,7 @@ const EXPECTED_TOOLS = [
   "read_workspace_resource_snapshot",
   "redo_workspace_batch",
   "simulate_workspace_physics",
+  "start_workspace_photo_reconstruction",
   "submit_workspace_batch",
   "undo_workspace_batch",
 ];
@@ -51,8 +56,8 @@ function serverParameters(): StdioServerParameters {
     cwd: PROJECT_ROOT,
     env: {
       ...getDefaultEnvironment(),
-      SEMAFRAME_AGENT_GATEWAY_URL: "http://127.0.0.1:9",
-      SEMAFRAME_AGENT_TOKEN: "stdio-negotiation-test-token",
+      // Tool discovery is local and does not contact the lazy upstream.
+      SEMAFRAME_AGENT_MCP_URL: "http://127.0.0.1:9/mcp/stdio-negotiation-test",
     },
     stderr: "pipe",
   };
@@ -104,7 +109,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
     expect(result.era).toBe("legacy");
     expect(result.protocolVersion).toMatch(/^2025-/u);
     expect(result.discoverResult).toBeUndefined();
-    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.8.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.9.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);
@@ -120,7 +125,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
       supportedVersions: ["2026-07-28"],
       resultType: "complete",
     });
-    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.8.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.9.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);

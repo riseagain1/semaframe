@@ -162,6 +162,7 @@ describe("Reality Asset Agent MCP vertical slice", () => {
     const handle = createAgentGatewayHttpHandler(gateway, {
       allowedOrigins: [ORIGIN],
       publicBaseUrl: PUBLIC_URL,
+      browserBootstrapToken: "b".repeat(43),
       assetIngress,
     });
     handlers.push(handle);

@@ -1,12 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import type { WorkspaceAgentToolName } from "../../src/workspace/agents";
+import type {
+  BeginWorkspacePhotoReconstructionInput,
+  CancelWorkspacePhotoReconstructionInput,
+  FinalizeWorkspacePhotoReconstructionInput,
+  InspectWorkspacePhotoReconstructionInput,
+  StartWorkspacePhotoReconstructionInput,
+  WorkspaceAgentToolName,
+} from "../../src/workspace/agents";
 import {
   WORKSPACE_MCP_SERVER_INFO,
   registerWorkspaceTools,
   type WorkspaceMcpBackendResult,
   type WorkspaceMcpClientContext,
 } from "../workspace/WorkspaceMcpTools";
-import type { AgentCommandName } from "./contracts";
 
 export const AGENT_MCP_SERVER_INFO = WORKSPACE_MCP_SERVER_INFO;
 
@@ -25,19 +31,24 @@ export const AGENT_REST_PATHS = Object.freeze({
   begin_workspace_asset_import: "/v1/assets/imports/begin",
   cancel_workspace_asset_import: "/v1/assets/imports/cancel",
   complete_workspace_asset_import: "/v1/assets/imports/complete",
+  begin_workspace_photo_reconstruction: "/v1/reconstructions/begin",
+  start_workspace_photo_reconstruction: "/v1/reconstructions/start",
+  inspect_workspace_photo_reconstruction: "/v1/reconstructions/inspect",
+  cancel_workspace_photo_reconstruction: "/v1/reconstructions/cancel",
+  finalize_workspace_photo_reconstruction: "/v1/reconstructions/finalize",
   begin_workspace_update: "/v1/workspace/updates/begin",
   submit_workspace_batch: "/v1/workspace/updates/submit",
   undo_workspace_batch: "/v1/workspace/undo",
   redo_workspace_batch: "/v1/workspace/redo",
   read_workspace_events: "/v1/workspace/events",
-} as const satisfies Record<AgentCommandName, string>);
+} as const satisfies Record<WorkspaceAgentToolName, string>);
 
 export type AgentMcpBackendResult = WorkspaceMcpBackendResult;
 export type AgentMcpClientContext = WorkspaceMcpClientContext;
 
 export type AgentMcpBackend = Readonly<{
   dispatch(
-    name: AgentCommandName,
+    name: WorkspaceAgentToolName,
     input: unknown,
     client: AgentMcpClientContext,
   ): Promise<AgentMcpBackendResult>;
@@ -47,6 +58,26 @@ export type AgentMcpBackend = Readonly<{
   ): Promise<AgentMcpBackendResult>;
   cancelAssetImport?(
     input: unknown,
+    client: AgentMcpClientContext,
+  ): Promise<AgentMcpBackendResult>;
+  beginPhotoReconstruction?(
+    input: BeginWorkspacePhotoReconstructionInput,
+    client: AgentMcpClientContext,
+  ): Promise<AgentMcpBackendResult>;
+  startPhotoReconstruction?(
+    input: StartWorkspacePhotoReconstructionInput,
+    client: AgentMcpClientContext,
+  ): Promise<AgentMcpBackendResult>;
+  inspectPhotoReconstruction?(
+    input: InspectWorkspacePhotoReconstructionInput,
+    client: AgentMcpClientContext,
+  ): Promise<AgentMcpBackendResult>;
+  cancelPhotoReconstruction?(
+    input: CancelWorkspacePhotoReconstructionInput,
+    client: AgentMcpClientContext,
+  ): Promise<AgentMcpBackendResult>;
+  finalizePhotoReconstruction?(
+    input: FinalizeWorkspacePhotoReconstructionInput,
     client: AgentMcpClientContext,
   ): Promise<AgentMcpBackendResult>;
 }>;
@@ -76,6 +107,26 @@ export function createAgentMcpServer(
     } : {}),
     ...(backend.cancelAssetImport ? {
       cancelAssetImport: (input: unknown, client: AgentMcpClientContext) => backend.cancelAssetImport!(input, client),
+    } : {}),
+    ...(backend.beginPhotoReconstruction ? {
+      beginPhotoReconstruction: (input: BeginWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+        backend.beginPhotoReconstruction!(input, client),
+    } : {}),
+    ...(backend.startPhotoReconstruction ? {
+      startPhotoReconstruction: (input: StartWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+        backend.startPhotoReconstruction!(input, client),
+    } : {}),
+    ...(backend.inspectPhotoReconstruction ? {
+      inspectPhotoReconstruction: (input: InspectWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+        backend.inspectPhotoReconstruction!(input, client),
+    } : {}),
+    ...(backend.cancelPhotoReconstruction ? {
+      cancelPhotoReconstruction: (input: CancelWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+        backend.cancelPhotoReconstruction!(input, client),
+    } : {}),
+    ...(backend.finalizePhotoReconstruction ? {
+      finalizePhotoReconstruction: (input: FinalizeWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+        backend.finalizePhotoReconstruction!(input, client),
     } : {}),
   }, {
     protocolEra,
