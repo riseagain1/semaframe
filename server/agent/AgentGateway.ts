@@ -1,7 +1,10 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DEFAULT_WORKSPACE_AGENT_SCOPES } from "../../src/workspace/agents/contracts";
+import {
+  DEFAULT_WORKSPACE_AGENT_SCOPES,
+  WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT,
+} from "../../src/workspace/agents/contracts";
 import {
   AGENT_GATEWAY_VERSION,
   AGENT_INSTRUCTION_VERSION,
@@ -231,7 +234,9 @@ function safeInstructionInput(name: AgentCommandName, input: unknown): unknown {
   const clientId = safeClientId(typeof body.client_id === "string" ? body.client_id : undefined);
   const clientName = safeClientName(typeof body.client_name === "string" ? body.client_name : undefined);
   const requestedScopes = Array.isArray(body.requested_scopes)
-    ? body.requested_scopes.filter((scope): scope is string => typeof scope === "string").slice(0, 20)
+    ? body.requested_scopes
+      .filter((scope): scope is string => typeof scope === "string")
+      .slice(0, WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT)
     : undefined;
   return {
     ...(clientId ? { client_id: clientId } : {}),
@@ -538,7 +543,9 @@ export class AgentGateway {
         clientId: client.clientId ?? (typeof body.client_id === "string" ? body.client_id : undefined),
         clientName: client.clientName ?? (typeof body.client_name === "string" ? body.client_name : undefined),
         requestedScopes: Array.isArray(body.requested_scopes)
-          ? body.requested_scopes.filter((scope): scope is string => typeof scope === "string").slice(0, 20)
+          ? body.requested_scopes
+            .filter((scope): scope is string => typeof scope === "string")
+            .slice(0, WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT)
           : DEFAULT_WORKSPACE_AGENT_SCOPES,
       });
       if (authorization) return authorization;

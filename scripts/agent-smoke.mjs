@@ -311,6 +311,7 @@ const stack = spawn("npm", ["run", "dev"], {
     SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
     SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
     SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
+    SEMAFRAME_DISABLE_HMR: "1",
   },
 });
 const browser = spawn(browserExecutable(), [
@@ -576,6 +577,7 @@ try {
   const expectedTools = [
     "get_workspace_instructions", "inspect_workspace", "inspect_workspace_component", "read_workspace_resource_snapshot", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
     "undo_workspace_batch", "redo_workspace_batch", "read_workspace_events", "begin_workspace_photo_reconstruction", "start_workspace_photo_reconstruction", "inspect_workspace_photo_reconstruction", "cancel_workspace_photo_reconstruction", "finalize_workspace_photo_reconstruction",
+    "inspect_voice_relay", "prepare_voice_relay_setup", "run_voice_relay_diagnostics", "request_voice_relay_arm", "inspect_xr_readiness", "prepare_xr_session", "request_enter_xr", "wait_for_xr_session_state", "request_exit_xr", "get_live_xr_context",
   ];
   for (const required of expectedTools) {
     if (!toolNames.has(required)) throw new Error(`Streamable HTTP MCP is missing ${required}.`);
@@ -1048,7 +1050,7 @@ try {
       /get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u.test(JSON.stringify(openApi))) {
     throw new Error("Agent OpenAPI discovery document is incomplete.");
   }
-  console.log("Agent browser smoke passed: exclusive twenty-four-tool Workspace MCP/OpenAPI contract, explicit approval, exact snapshot-read and photo-reconstruction discovery, SSG 3.2 and physics inspect/stable-placement/settle discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
+  console.log("Agent browser smoke passed: exclusive thirty-four-tool MCP and twenty-five-route OpenAPI contract, explicit approval, exact snapshot-read and photo-reconstruction discovery, SSG 3.2 and physics inspect/stable-placement/settle discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
 } catch (error) {
   const safeLogs = diagnosticText(processLogs.join(""));
   if (safeLogs.trim()) console.error(safeLogs.slice(-4_000));

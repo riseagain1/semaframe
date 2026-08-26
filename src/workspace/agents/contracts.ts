@@ -6,7 +6,7 @@
  */
 
 export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "2.9" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "3.0" as const;
 /** Final JSON cap for one public inspect_workspace_component result. */
 export const WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES = 1_048_576;
 /**
@@ -59,7 +59,18 @@ export const WORKSPACE_PERMISSION_SCOPES = [
   "effect:data_read",
   "effect:external_write",
   "extension:install",
+  /** May request a user-visible Voice Relay setup/arm flow; never grants OS consent. */
+  "host:voice_relay_setup",
+  /** May prepare XR projection and request a user-visible enter/exit action. */
+  "host:xr_prepare",
 ] as const;
+
+/**
+ * Bounded transport capacity for one permission request. It intentionally
+ * leaves reviewed headroom above the current enum so adding a scope cannot
+ * make the advertised complete permission set impossible to request.
+ */
+export const WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT = 32;
 
 export type WorkspacePermissionScope = typeof WORKSPACE_PERMISSION_SCOPES[number];
 
@@ -79,6 +90,10 @@ export const DEFAULT_WORKSPACE_AGENT_SCOPES = [
   "event:connect",
   "view:present",
   "asset:import",
+  // These scopes only allow a visible setup/entry request. The user still
+  // confirms the target, OS permissions, Relay arm, and WebXR gesture.
+  "host:voice_relay_setup",
+  "host:xr_prepare",
 ] as const satisfies readonly WorkspacePermissionScope[];
 
 export const WORKSPACE_AGENT_TOOL_NAMES = [

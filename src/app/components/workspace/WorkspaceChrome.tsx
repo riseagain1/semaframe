@@ -1,5 +1,5 @@
 import { Boxes, Database, PackageOpen, PanelRightClose, ScanLine, SlidersHorizontal, TimerReset } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkspaceRenderComponent } from "../../../workspace/renderer";
 import type { ComponentResizePolicy } from "../../../workspace/components";
 import type { World3DPlacement } from "../../../workspace/components";
@@ -51,7 +51,7 @@ import type {
   PhotoReconstructionProfile,
 } from "../../../reconstruction/contracts";
 
-type WorkspacePanel = "library" | "inspector" | "models" | "reality" | "sources" | null;
+export type WorkspacePanel = "library" | "inspector" | "models" | "reality" | "sources" | null;
 
 export type WorkspaceChromeProps = Readonly<{
   catalog: readonly ComponentLibraryItem[];
@@ -61,7 +61,11 @@ export type WorkspaceChromeProps = Readonly<{
   bindingTargets?: readonly WorkspaceSourceBindingTarget[];
   bindingDiagnostics?: readonly ResourceBindingDiagnostic[];
   disabled?: boolean;
-  onCreate: (typeId: string, options?: ComponentCreationOptions) => void;
+  panelState?: WorkspacePanel;
+  onPanelStateChange?: (panel: WorkspacePanel) => void;
+  configureRequestId?: string;
+  onConfigureRequestChange?: (componentId: string | undefined) => void;
+  onCreate: (typeId: string, options?: ComponentCreationOptions) => string | undefined;
   onAction: (request: ComponentActionRequest) => void;
   onUpdate: (request: WorkspaceComponentUpdateRequest) => boolean | void;
   resizePolicy?: ComponentResizePolicy;
@@ -171,15 +175,36 @@ export function WorkspaceChrome({
   onUnbindSource,
   onDeleteSource,
   sourcesOnly = false,
+  panelState,
+  onPanelStateChange,
+  configureRequestId,
+  onConfigureRequestChange,
 }: WorkspaceChromeProps) {
-  const [panel, setPanel] = useState<WorkspacePanel>(null);
+  const [localPanel, setLocalPanel] = useState<WorkspacePanel>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const [localConfigureRequestId, setLocalConfigureRequestId] = useState<string>();
+  const panel = panelState === undefined ? localPanel : panelState;
+  const pendingConfigureId = onConfigureRequestChange
+    ? configureRequestId
+    : localConfigureRequestId;
+  const setPanel = useCallback((next: WorkspacePanel) => {
+    if (panelState === undefined) setLocalPanel(next);
+    else onPanelStateChange?.(next);
+  }, [onPanelStateChange, panelState]);
+  const setPendingConfigureId = useCallback((next: string | undefined) => {
+    if (onConfigureRequestChange) onConfigureRequestChange(next);
+    else setLocalConfigureRequestId(next);
+  }, [onConfigureRequestChange]);
 
   useEffect(() => {
     if (!disabled) return;
-    setPanel(null);
     onCancelRealityMeasurement?.();
   }, [disabled, onCancelRealityMeasurement]);
+  useEffect(() => {
+    if (!pendingConfigureId || selected?.id !== pendingConfigureId) return;
+    setPanel("inspector");
+    setPendingConfigureId(undefined);
+  }, [pendingConfigureId, selected, setPanel, setPendingConfigureId]);
   useEffect(() => {
     if (!sourcesOnly) return;
     if (panel && panel !== "sources") setPanel(null);
@@ -197,7 +222,14 @@ export function WorkspaceChrome({
     }
   }, [disabled, realityMeasurement, sourcesOnly]);
 
-  const toggle = (next: Exclude<WorkspacePanel, null>) => setPanel((current) => current === next ? null : next);
+  const closePanel = () => {
+    setPendingConfigureId(undefined);
+    setPanel(null);
+  };
+  const toggle = (next: Exclude<WorkspacePanel, null>) => {
+    setPendingConfigureId(undefined);
+    setPanel(panel === next ? null : next);
+  };
   const startRealityMeasurement = onStartRealityMeasurement
     ? (componentId: string) => {
         const started = onStartRealityMeasurement(componentId);
@@ -206,8 +238,9 @@ export function WorkspaceChrome({
       }
     : undefined;
   const createFromLibrary = (typeId: string, options?: ComponentCreationOptions) => {
-    onCreate(typeId, options);
-    if (catalog.find((item) => item.typeId === typeId)?.configureOnCreate) setPanel("inspector");
+    const configureOnCreate = catalog.find((item) => item.typeId === typeId)?.configureOnCreate === true;
+    const createdId = onCreate(typeId, options);
+    if (configureOnCreate && createdId) setPendingConfigureId(createdId);
   };
   return (
     <>
@@ -235,7 +268,14 @@ export function WorkspaceChrome({
         {realityMeasurementStatus(realityMeasurement)}
       </p>}
       {panel && (
-        <div id="workspace-tool-panel" className="workspace-tool-panel" role="region" aria-label={`${panel} panel`}>
+        <div
+          id="workspace-tool-panel"
+          className="workspace-tool-panel"
+          role="region"
+          aria-label={`${panel} panel`}
+          aria-disabled={disabled || undefined}
+          inert={disabled || undefined}
+        >
           <header className="workspace-tool-panel__header">
             <strong>{{
               library: "Components",
@@ -244,7 +284,7 @@ export function WorkspaceChrome({
               reality: "Reality",
               sources: "Sources",
             }[panel]}</strong>
-            <button className="workspace-tool-panel__close" type="button" aria-label={`Close ${panel} panel`} onClick={() => setPanel(null)}>
+            <button className="workspace-tool-panel__close" type="button" aria-label={`Close ${panel} panel`} onClick={closePanel}>
               <PanelRightClose size={17} />
             </button>
           </header>

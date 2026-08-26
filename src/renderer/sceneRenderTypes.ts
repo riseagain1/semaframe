@@ -8,6 +8,7 @@
 
 import type { ParametricPrimitive } from "../workspace/modeling/parametricGeometry";
 import type { CadPartDefinitionV1 } from "../workspace/modeling/cad";
+import type { SpatialCollisionConfig } from "../workspace/spatial/spatialTypes";
 
 export type JSONScalar = string | number | boolean | null;
 export type EntityId = string;
@@ -115,7 +116,10 @@ export type EntityRenderGeometry =
       castShadow: boolean;
       receiveShadow: boolean;
     }
-  | { kind: "assembly" }
+  | {
+      kind: "assembly";
+      collisionPolicy: "external_only" | "all" | "none";
+    }
   | {
       kind: "reality";
       asset?: Readonly<{
@@ -142,6 +146,8 @@ export type EntityState = {
   state: CharacterState | PropState | EffectState | GenericState;
   /** Exact render source. Omitted for manifest-pinned asset entities. */
   renderGeometry?: EntityRenderGeometry;
+  /** Renderer projection of durable collision intent; absent legacy entities are non-blocking. */
+  collision?: SpatialCollisionConfig;
   parentId?: EntityId;
   parentSocket?: string;
   tags: string[];

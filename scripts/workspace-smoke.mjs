@@ -200,6 +200,39 @@ function clickButtonWithAriaLabel(label) {
   })()`;
 }
 
+async function clickVisibleButtonWithPointer(cdp, label) {
+  const point = await cdp.evaluate(`(async () => {
+    const button = document.querySelector('button[aria-label=${JSON.stringify(label)}]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return null;
+    button.scrollIntoView({ block: 'center', inline: 'center' });
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    const rect = button.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || (hit !== button && !button.contains(hit))) return null;
+    return { x, y };
+  })()`);
+  if (!point) return false;
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    clickCount: 1,
+  });
+  return true;
+}
+
 function setInspectorNumber(label, value) {
   return `(() => {
     const input = [...document.querySelectorAll('.workspace-inspector__dimension-grid label')]
@@ -378,6 +411,7 @@ const stack = spawn("npm", ["run", "dev"], {
     SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
     SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
     SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
+    SEMAFRAME_DISABLE_HMR: "1",
   },
 });
 const browser = spawn(browserExecutable(), [
@@ -472,7 +506,7 @@ try {
   if (initialUi.panelLabel !== "Workspace" || initialUi.canvasLabel !== "Universal 2D and 3D workspace canvas" || !initialUi.hasWebGlCanvas || !initialUi.hasTools || !initialUi.hasAgentControls || initialUi.hasLegacyModeSwitch) {
     throw new Error(`The unified hybrid Workspace did not open with its human and Agent controls: ${JSON.stringify(initialUi)}`);
   }
-  if (!await cdp.evaluate(clickExactButton("Components"))) throw new Error("Component library was unavailable.");
+  await poll(cdp, clickExactButton("Components"), "enabled Component library control");
   await poll(
     cdp,
     "Boolean([...document.querySelectorAll('.workspace-library button strong')].some((item) => item.textContent?.trim() === '3D Stage')) && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 0",
@@ -492,13 +526,16 @@ try {
     "one-stage human palette invariant",
   );
   if (!await cdp.evaluate(`(() => {
-    const button = document.querySelector('button[aria-label="Close library panel"]');
+    const panel = document.querySelector('.workspace-tool-panel');
+    if (!panel) return true;
+    const button = panel.querySelector('.workspace-tool-panel__close');
     if (!(button instanceof HTMLButtonElement)) return false;
     button.click();
     return true;
   })()`)) throw new Error("Component library could not be closed.");
+  await poll(cdp, "!document.querySelector('.workspace-tool-panel')", "closed component panel");
 
-  if (!await cdp.evaluate(clickExactButton("Mixed demo"))) throw new Error("Mixed demo control was unavailable.");
+  await poll(cdp, clickExactButton("Mixed demo"), "enabled Mixed demo control");
   await poll(
     cdp,
     "Boolean(document.querySelector('[data-workspace-component-type=\"timer\"] .workspace-timer') && [...document.querySelectorAll('.workspace-component-tree [role=treeitem]')].some((item) => item.textContent?.trim() === 'Work desk') && [...document.querySelectorAll('.workspace-component-tree [role=treeitem]')].some((item) => item.textContent?.trim() === 'Presenter'))",
@@ -515,19 +552,22 @@ try {
   if (mixedUi.componentCount !== 4 || mixedUi.timerPlacement !== "viewport" || mixedUi.timerPhase !== "idle" || mixedUi.timerReadout !== "05:00" || !mixedUi.revision?.includes("rev 2")) {
     throw new Error(`Mixed demo did not commit as one complete hybrid Workspace batch: ${JSON.stringify(mixedUi)}`);
   }
-  if (!await cdp.evaluate(clickExactButton("Components"))) throw new Error("Component library was unavailable after creating a stage.");
+  await poll(cdp, clickExactButton("Components"), "enabled Component library control after creating a stage");
   const duplicateStageVisible = await cdp.evaluate(
     "[...document.querySelectorAll('.workspace-library button strong')].some((item) => item.textContent?.trim() === '3D Stage')",
   );
   if (duplicateStageVisible) throw new Error("The component library offered a duplicate 3D Stage.");
   if (!await cdp.evaluate(`(() => {
-    const button = document.querySelector('button[aria-label="Close library panel"]');
+    const panel = document.querySelector('.workspace-tool-panel');
+    if (!panel) return true;
+    const button = panel.querySelector('.workspace-tool-panel__close');
     if (!(button instanceof HTMLButtonElement)) return false;
     button.click();
     return true;
   })()`)) throw new Error("Component library could not be closed after the stage check.");
+  await poll(cdp, "!document.querySelector('.workspace-tool-panel')", "closed component panel after the stage check");
 
-  if (!await cdp.evaluate(clickExactButton("Components"))) throw new Error("Component library was unavailable for the video resize flow.");
+  await poll(cdp, clickExactButton("Components"), "enabled Component library control for the video resize flow");
   if (!await cdp.evaluate(`(() => {
     const label = [...document.querySelectorAll('.workspace-library button strong')]
       .find((item) => item.textContent?.trim() === 'Video Player');
@@ -538,10 +578,17 @@ try {
   })()`)) throw new Error("The normal component-library path could not create a video player.");
   await poll(
     cdp,
-    "Boolean(document.querySelector('[data-workspace-component-type=\"video-player\"] .workspace-video-player') && document.querySelector('.workspace-inspector__resize'))",
+    "Boolean(document.querySelector('[data-workspace-component-type=\"video-player\"] .workspace-video-player') && document.querySelector('.workspace-inspector__resize') && !document.querySelector('.workspace-tool-panel')?.matches('[inert], [aria-disabled=\"true\"]'))",
     "new video player and its resize Inspector",
   );
-  if (!await cdp.evaluate(clickButtonWithAriaLabel("Load YouTube player demo"))) {
+  if (!await cdp.evaluate(`(() => {
+    const button = document.querySelector('.workspace-tool-panel__close');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`)) throw new Error("The video Inspector could not be closed before the real pointer activation check.");
+  await poll(cdp, "!document.querySelector('.workspace-tool-panel')", "closed video Inspector before activation");
+  if (!await clickVisibleButtonWithPointer(cdp, "Load YouTube player demo")) {
     throw new Error("The video player activation facade was unavailable.");
   }
   await poll(
@@ -553,6 +600,8 @@ try {
     window.__workspaceSmokeActiveVideoFrame = document.querySelector('[data-workspace-component-type="video-player"] iframe');
     window.__workspaceSmokeActiveVideoSrc = window.__workspaceSmokeActiveVideoFrame?.src;
   })()`);
+  await poll(cdp, clickExactButton("Inspector"), "enabled video Inspector control after activation");
+  await poll(cdp, "Boolean(document.querySelector('.workspace-inspector__resize'))", "reopened video resize Inspector");
 
   const beforeVideoResizeText = await captureWorkspaceProject(cdp, "video-resize-before");
   if (!await cdp.evaluate(setInspectorNumber("Width", 640))) {
@@ -893,7 +942,7 @@ try {
     return true;
   })()`)) throw new Error("The presentation timer could not be started.");
   await poll(cdp, "Boolean(document.querySelector('.workspace-timer.is-running button[aria-label=\"Pause timer\"]'))", "running timer state");
-  await poll(cdp, "document.querySelector('.workspace-timer__readout')?.textContent?.trim() !== '05:00'", "live timer countdown", 4_000);
+  await poll(cdp, "Boolean(document.querySelector('.workspace-timer__readout') && document.querySelector('.workspace-timer__readout')?.textContent?.trim() !== '05:00')", "live timer countdown", 4_000);
   const runningUi = await cdp.evaluate(`({
     phase: document.querySelector('.workspace-timer__phase')?.textContent?.trim(),
     readout: document.querySelector('.workspace-timer__readout')?.textContent?.trim(),

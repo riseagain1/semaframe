@@ -20,6 +20,9 @@ import {
   PhotoReconstructionService,
   PhotoReconstructionServiceError,
 } from "../reconstruction/PhotoReconstructionService";
+import {
+  hostControlScopeForCommand,
+} from "../../src/agent/hostControlContracts";
 
 const AGENT_PHOTO_RECONSTRUCTION_SCOPE = "asset:reconstruct" as const;
 
@@ -110,6 +113,38 @@ export function createAgentMcpHttpHandler(
       const pathname = requestInfo ? new URL(requestInfo.url).pathname : "";
       return createAgentMcpServer({
         dispatch: (name, input, client) => gateway.dispatchOffer(pathname, name, input, client),
+        hostControl: async (name, input, client) => {
+          const body = hostControlInput(input);
+          const validation = await gateway.dispatchOffer(
+            pathname,
+            "inspect_workspace",
+            {
+              session_token: body.session_token,
+              instruction_digest: body.instruction_digest,
+            },
+            client,
+          );
+          if (!successfulWorkspaceResult(validation.payload)) return validation;
+          if (!validation.payload.data || typeof validation.payload.data !== "object" ||
+              Array.isArray(validation.payload.data) ||
+              (validation.payload.data as Record<string, unknown>).workspace_id !== body.workspace_id) {
+            return {
+              responseOk: false,
+              status: 409,
+              payload: {
+                ok: false,
+                error: {
+                  code: "host_workspace_mismatch",
+                  message: "The host-control request does not match the open Workspace.",
+                  retryable: true,
+                  required_action: "inspect_workspace",
+                },
+              },
+            };
+          }
+          gateway.requireApprovedClientScope(hostControlScopeForCommand(name));
+          return gateway.dispatchOffer(pathname, name, input, client);
+        },
         ...(options.assetIngress ? {
           beginAssetImport: async (input, client) => {
             const validation = await gateway.dispatchOffer(
@@ -372,6 +407,26 @@ export function createAgentMcpHttpHandler(
     },
     close: () => mcp.close(),
   });
+}
+
+function hostControlInput(value: unknown): Readonly<{
+  session_token: string;
+  instruction_digest: string;
+  workspace_id: string;
+}> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AgentGatewayError("invalid_request", "The host-control input is invalid.");
+  }
+  const body = value as Record<string, unknown>;
+  if (typeof body.session_token !== "string" || typeof body.instruction_digest !== "string" ||
+      typeof body.workspace_id !== "string") {
+    throw new AgentGatewayError("invalid_request", "The host-control capability envelope is invalid.");
+  }
+  return {
+    session_token: body.session_token,
+    instruction_digest: body.instruction_digest,
+    workspace_id: body.workspace_id,
+  };
 }
 
 type AssetImportMcpInput = Readonly<{

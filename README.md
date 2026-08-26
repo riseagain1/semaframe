@@ -48,7 +48,7 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## Next / unreleased
 
-The next public Agent contract keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes four operational loops:
+The next public Agent contract keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes the next operational loops:
 
 | Capability | What it adds |
 | --- | --- |
@@ -58,8 +58,9 @@ The next public Agent contract keeps the v0.3 modeling and Reality foundation, a
 | **Routed spatial movement** | A typed `move_to` action for entities, exact primitives, CAD parts, and assemblies, with scale preservation, atomic event fan-out, endpoint collision and enforced-physics validation, and ordinary renderer transitions |
 | **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid project-schema 1.3 files reopen without weakening history validation |
 | **Photo-set Reality reconstruction** | Human and approval-gated Agent flows for digest-bound photo upload, explicit local reconstruction, bounded progress/cancellation, browser-authoritative preflight, and content-addressed Reality registration |
+| **Cross-platform XR renderer** | A separately paired WebXR client with revisioned Workspace replication, collision-safe teleport, renderer-neutral live panels, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, fresh authenticated spatial context, renderer-only build reveals, resumable Reality assets, reconnect, and a fail-closed Windows PCVR Ultra gate |
 
-The development surface is now Workspace Protocol 1.3 with project schema 1.4, 24 MCP tools, Agent Guide 2.9, MCP server 1.9.0, Agent Gateway OpenAPI 1.2.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
+The development surface is now Workspace Protocol 1.3 with project schema 1.4, 24 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.0, MCP server 1.9.0, Agent Gateway OpenAPI 1.2.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
 
 ## What's new in v0.3
 
@@ -85,6 +86,7 @@ Together, these capabilities support one inspectable workflow: import captured c
 - [A practical Jarvis-like workspace](#a-practical-jarvis-like-workspace)
 - [What it can do](#what-it-can-do)
 - [Quick start](#quick-start)
+- [XR and PCVR viewer](#xr-and-pcvr-viewer)
 - [First Agent connection](#first-agent-connection)
 - [Product tour](#product-tour)
 - [Core model](#core-model)
@@ -139,6 +141,7 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Interaction | Typed actions and events routed atomically across 2D and 3D components |
 | Animation | Discoverable spatial clips, durable playback state, bounded transitions, completion events, and reduced-motion support |
 | Web and media | User-activated sandboxed website panels plus normalized YouTube, Vimeo, MP4, and WebM video |
+| XR rendering | Separately paired desktop/WebXR client with revisioned projection, controller input, teleport, live 2D panels in 3D, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, live ephemeral spatial context, renderer-only build reveals, and fail-closed performance tiers |
 | Agent control | Approval-gated Streamable HTTP MCP, OpenAPI 3.1, and a stdio bridge |
 | Persistence | Direct Workspace project files with deterministic replay, migration, undo/redo, and validated provenance |
 
@@ -186,9 +189,14 @@ Useful alternatives:
 
 ```bash
 npm run dev:vite          # browser UI only
+npm run dev:xr            # browser host + gateway + separate XR renderer
+npm run dev:xr:client     # separate XR renderer only
 npm run agent:gateway     # one-shot gateway
 npm run agent:mcp         # stdio MCP bridge
 npm run build             # production build
+npm run build:xr          # standalone XR production bundle in dist-xr/
+npm run build:voice-relay # native macOS or Windows Voice Relay helper
+npm run build:all         # typecheck and build both production origins
 npm run preview           # preview the production bundle
 ```
 
@@ -197,6 +205,123 @@ npm run preview           # preview the production bundle
 Before a connection completes, SemaFrame intentionally shows only the Agent connection interface—not an empty editable Workspace. The existing project remains preserved, but the canvas is unlocked only after an approved Agent completes the instruction handshake.
 
 This makes ownership explicit: the browser is authoritative, while the external Agent receives scoped access to the open Workspace.
+
+## XR and PCVR viewer
+
+SemaFrame XR is a separate renderer for the same authoritative Workspace—not a second editor, a forked project, or an XR-only scene format. The host publishes revisioned semantic snapshots and deltas; the renderer draws them, presents bounded live panels, and returns typed selection, activation, panel-action, and authenticated ephemeral pose context for host-side validation. The relay supplies renderer provenance outside the client-controlled message payload, so the host can bind every action and pose to the exact paired renderer instead of trusting a claimed source.
+
+```mermaid
+flowchart LR
+    Host["Authoritative browser · :4173<br/>WorkspaceStore, human approval, Agent"]
+    Relay["Loopback XR relay · :8788<br/>pairing, epoch, scoped routes"]
+    XR["Separate renderer origin · :4174<br/>desktop simulator or WebXR"]
+
+    Host -->|trusted authority session<br/>snapshots and deltas| Relay
+    Relay -->|renderer-scoped session<br/>no browser bootstrap| XR
+    XR -->|typed input and ephemeral context| Relay
+    Relay -->|revalidated by host| Host
+```
+
+### Local quick start
+
+```bash
+npm run dev:xr
+```
+
+This starts the authoritative app at [http://127.0.0.1:4173](http://127.0.0.1:4173), the loopback gateway at `http://127.0.0.1:8788`, and the standalone renderer at [http://127.0.0.1:4174/xr.html](http://127.0.0.1:4174/xr.html). Create a one-time XR pairing link in the host, then open it in the renderer. Without an immersive runtime the same client remains available as an explicitly labeled non-immersive desktop simulator.
+
+The Node 22 launcher and gateway load an optional repository-root `.env` before reading configuration. Existing shell variables always win, a missing file is ignored, and child-process control variables such as `NODE_OPTIONS`, `npm_execpath`, `PATH`, and `SystemRoot` are accepted only from the shell (including differently cased Windows variants). `.env.example` is the XR/local-launch quick-start template; `.env.agent.example` documents the optional gateway policy settings you can copy into `.env` and is not a second automatically loaded file.
+
+The XR client intentionally lives on a different origin. Its Vite proxy exposes only `/api/xr`; it never receives the private browser-authority bootstrap header and cannot call `/api/agent`. Keep `VITE_XR_GATEWAY_ORIGIN` blank for this same-origin proxy arrangement. A direct gateway origin is an advanced deployment option and must be an exact credential-free HTTP(S) origin protected by the deployment boundary.
+
+### Physical headset or PCVR setup
+
+WebXR requires a secure context when the renderer is opened from another device. Configure an HTTPS URL reachable by the headset, use a certificate trusted by that device, and allow that exact renderer origin at the relay:
+
+```bash
+export VITE_XR_PUBLIC_URL=https://your-workstation.example:4174/xr.html
+export SEMAFRAME_XR_ALLOWED_ORIGINS=https://your-workstation.example:4174
+export SEMAFRAME_XR_HTTPS_CERT=/absolute/path/to/trusted-certificate.pem
+export SEMAFRAME_XR_HTTPS_KEY=/absolute/path/to/private-key.pem
+npm run dev:xr
+```
+
+Do not use a wildcard allowed origin and do not expose the loopback gateway's `/api/agent` routes. A production deployment should terminate trusted HTTPS in front of the XR origin and proxy only `/api/xr` back to the loopback service. The headset opens `VITE_XR_PUBLIC_URL`; `VITE_XR_GATEWAY_ORIGIN` normally remains blank. `dist-xr/` is static content and cannot carry HTTP response headers itself: its CDN or reverse proxy must reproduce `XR_STANDALONE_SECURITY_HEADERS` from `vite.xr.config.ts`, including CSP, Permissions-Policy, no-store, no-referrer, nosniff, and anti-framing headers. The HTML meta CSP is defense in depth, not a replacement for those headers.
+
+Pairing secrets use the URL fragment (`xr.html#pair=…`), so browsers do not send them in the initial HTTP request. The entrypoint removes the secret from address history before React or the network transport starts. The secret is single-use; after pairing resolves, the transport retains only an opaque session credential in memory. Authority restart or revocation invalidates the renderer epoch and requires fresh pairing. Reconnect can replay only a current checkpoint or bounded revision deltas. Authenticated lifecycle presence is retained as a bounded transition sequence, so an Agent waiting on `ended` cannot miss it when `replica_ready` follows in the same poll.
+
+### Capability and validation matrix
+
+| Path | Current behavior | Validation boundary |
+| --- | --- | --- |
+| Desktop simulator on macOS, Windows, or Linux | Pairing, live revision replication, ordinary 3D navigation, HTML panel fallback, reconnect, and typed inputs | Automated contracts and browser-neutral renderer tests; it is deliberately marked non-immersive |
+| Standalone headset WebXR | `immersive-vr`, local-floor reference space, controller rays, selection/activation, teleport, and balanced render budgets | Implemented against WebXR interfaces; physical Quest/controller comfort and runtime compatibility still require device testing |
+| Windows PCVR | Uses the same standards-based Chromium/WebXR client with the active OpenXR runtime | Implemented path; Meta Horizon Link, SteamVR/browser combinations, cable/Air Link latency, and GPU stability still require representative Windows hardware |
+| macOS | Full Workspace authority, relay, and desktop renderer are available; immersive mode appears only if the browser reports `immersive-vr` | There is no claim that macOS provides a supported PCVR runtime, and Windows Ultra is unavailable |
+| World-space 2D panels | Text, number, chart, and button presentations mirror approved Workspace data; actions are revision-bound and reauthorized by the host | Confirmation-required actions receive a short-lived, one-use confirmation panel inside XR; stale, declined, replayed, wrong-renderer, or changed-revision proofs fail closed |
+| Voice-capable Agent | GPT Live or another voice Agent listens through the computer microphone and uses the ordinary approved Workspace tools; SemaFrame adds no audio bridge | Microphone, realtime transport, model, and interruption behavior belong to the connecting Agent client |
+| Optional Voice Relay | Controller squeeze, hand pinch, or the fallback button starts browser speech capture; one final transcript is staged in an explicitly selected text-only Agent composer and still requires confirm or cancel in XR | Off by default; browser speech support, OS Accessibility/UI Automation, a compatible desktop Agent window, diagnostics, and a per-session human arm are required |
+| Windows PCVR Ultra | Higher splat/mesh budgets, 90 Hz target, full framebuffer scale, shadows, and expensive lighting | Locked by default. A label or configuration flag cannot unlock it |
+
+Balanced XR accepts bounded SPZ v4, SOG v2, and Gaussian PLY—including the PLY produced by the bundled Apple photo-reconstruction path. The renderer rejects before download when an asset exceeds 96 MiB, an estimated 768 MiB of GPU data, 1.5 million splats, or spherical-harmonics degree 2; the scene keeps a deterministic placeholder instead. These are XR playback budgets, not changes to the Workspace's broader import limits.
+
+Windows PCVR Ultra requires a current physical Windows x64 probe, hardware acceleration, an active Meta Horizon Link OpenXR runtime, immersive Chromium WebXR, and a sustained reference benchmark. Qualification is deliberately split across two explicit user actions: **Check Ultra** runs the native capability probe, then **Start Ultra benchmark** opens the measured immersive session. No native probe or headset session starts merely because the viewer was opened. The policy checks at least 60 seconds of 90 Hz evidence, p95 frame time, dropped frames, process/GPU memory headroom, native driver throttling telemetry, and runtime disconnects. Probe and benchmark evidence is re-evaluated immediately before entry and at least every 10 minutes; a fingerprinted receipt must still match both. Stale, changed, missing, or failed evidence degrades safely to Balanced XR while preserving the Workspace. The standalone entry does not synthesize evidence or offer a force switch.
+
+The bundled Ultra evidence provider is intentionally narrow in v1: the gateway must run on Windows x64, Meta Horizon Link must be the active OpenXR runtime, and exactly one NVIDIA adapter must be observable through the Authenticode-valid NVIDIA-signed `System32\nvidia-smi.exe`. The provider never searches `PATH`; a missing, relocated, unsigned, non-NVIDIA-signed, or multi-GPU telemetry path fails closed to Balanced XR. Declare the physical transport before starting the combined gateway/viewer stack:
+
+```powershell
+$env:SEMAFRAME_XR_ULTRA_TRANSPORT = "link_cable" # or "air_link"
+npm run dev:xr
+```
+
+That variable is an operator assertion describing the connection intended to be measured; v1 does not natively distinguish cable from Air Link or detect a mid-run link-mode change. It is not an eligibility override. Native probing is exposed only to an already-paired renderer. Adapter fingerprints use a process-private HMAC scoped to that authenticated renderer session, so the same GPU does not expose a stable cross-session identifier. Probe/sample subprocesses are globally single-flight, while each renderer and route has a bounded five-second cooldown with explicit HTTP 429 responses; the benchmark's normal samples are approximately six seconds apart. Thermal failure considers only NVIDIA's hardware/software thermal-slowdown reasons—idle and power-cap clock reasons are not treated as heat. Because the provider cannot reliably bind WebXR to one adapter on a multi-NVIDIA system, those systems remain Balanced XR. Ultra also remains unavailable when any probe, telemetry sample, or benchmark check cannot be established. AMD/Intel telemetry and non-Meta OpenXR runtimes remain Balanced XR in this first implementation. Passing the reference workload is a qualification heuristic for the bundled Ultra profile, not a promise that every multi-million-splat or high-triangle scene will sustain 90 Hz; scene-specific profiling and the physical hardware gate still apply.
+
+The automated suite can validate protocol parsing, origin policy, one-time pairing, credential isolation, revision/epoch handling, reconnect, renderer state, panel DTOs/actions, speech state, locomotion math, asset budgets, and the Ultra decision policy. It cannot establish headset comfort, tracking quality, microphone behavior, real motion-to-photon latency, driver compatibility, or thermal stability on hardware that was not present during the run. SemaFrame XR has no hardware certification today; treat every Quest and Windows PCVR device/browser/runtime/GPU combination as a separate physical validation gate before calling it production-ready.
+
+### Agent-guided XR and optional Voice Relay
+
+A voice-capable Agent such as GPT Live uses the computer microphone directly and continues through the ordinary approved Workspace MCP tools. There is no headset-to-SemaFrame-to-Agent audio bridge in that path: microphone permission, streaming speech, interruption, and model replies remain the responsibility of the connecting voice client.
+
+Voice Relay is a separate, optional fallback for a text-only Agent interface. It is off by default and follows an explicit sequence:
+
+1. On the trusted desktop, prepare setup, grant any required operating-system Accessibility permission yourself, and choose one compatible Agent window from sanitized labels.
+2. Run diagnostics. The optional no-send test inserts a random nonce only into an empty composer, reads it back exactly, and removes it without pressing Send.
+3. Explicitly arm that confirmed target for the current local session. XR cannot select a desktop window or arm the Relay.
+4. In immersive XR, hold push-to-talk and release to finish speech recognition. The bounded final transcript—not microphone audio—is staged into the exact empty Agent composer and displayed for review.
+5. Choose **Confirm and send** or **Cancel** in XR. Confirm revalidates the target, unchanged draft digest, and exact Send control before one activation; cancel removes only the unchanged staged draft. A changed, missing, expired, or ambiguous target fails closed.
+6. When the target exposes a bounded reply region, XR can show the reply as subtitles. In-headset text-to-speech is optional, can be switched off, and can be interrupted by the next push-to-talk turn. Short earcons can be muted independently; visual and controller-haptic state feedback remains available.
+
+Only compatible, ordinary application windows are candidates. The native helpers reject SemaFrame itself, terminal and system/credential surfaces, and secure or password fields; they revalidate the process, window, composer, and Send control before sensitive operations. Target selection, the no-send draft test, and arming each consume a separate one-use proof created by a trusted desktop confirmation. If confirmation reaches the native boundary and the Send outcome becomes unknowable, SemaFrame does not retry. The Relay's transcript copy is bounded and volatile, leaves Relay memory after send/cancel/expiry, and never enters Workspace state, project files, undo history, or exports.
+
+The Agent can help without acquiring those human capabilities. With the separately approved `host:voice_relay_setup` and `host:xr_prepare` scopes it can inspect readiness, prepare setup, request diagnostics or a Relay arm, prepare a same-device or remote-headset XR session, and request entry or exit. SemaFrame turns each sensitive request into a visible host action; only the person can choose the target, grant OS permission, arm desktop control, open a headset link, or provide the trusted browser gesture required by WebXR. Remote XR inspect, prepare, enter, exit, and wait results expose a sanitized `lifecycle_sequence`; pass it back as `after_sequence` to `wait_for_xr_session_state` to consume the next exact transition even when multiple phases arrive between Agent calls.
+
+### Live XR spatial context
+
+During an active immersive session, aim a controller ray at a real rendered surface and press **A/X** to place or replace one Spatial Pin; press **B/Y** to clear it. The voice-confirmation modal keeps priority over those buttons, and an empty ray is a visible miss rather than an invented coordinate. The paired renderer publishes Agent-readable user state at a bounded 250 ms cadence through its renderer-scoped credential, with an immediate update when the person places or clears the Pin and latest-only coalescing when transport is slower. The host returns only a fresh same-device or paired-headset sample and rejects stale, queued-too-long, future-dated, revision-mismatched, disconnected, or unauthenticated context.
+
+One approved `get_live_xr_context` call returns the complete Agent-readable user snapshot through a dedicated MCP output schema. `data.context.headPose` is the current HMD/camera pose; `playerCapsule` is the room-scale body/clearance volume; and every `trackedInputs[]` entry has a stable `sourceId`, handedness, tracking state, target-ray mode and pose, optional grip pose, its own optional ray and real surface hit, plus observable select, squeeze, face-button, and thumbstick state. `primaryInputSourceId` identifies the source mirrored by the compatibility `primaryRay`/`rayHit`, while `activeInputSourceId` identifies the most recently active source; neither depends on array order. Selection and the latest Spatial Pin are included when present.
+
+The result exposes its own freshness evidence instead of requiring the Agent to infer timing: `data.age_ms` is already the conservative end-to-end age—paired-headset transport/host receipt age plus renderer `sourceAgeMs`, or `sourceAgeMs` alone for same-device XR—so an Agent must not add `sourceAgeMs` again. `sampleSequence` orders snapshots, and `sourceTimestampBasis` states whether the source timestamp uses a performance time origin, Unix epoch, or an unknown legacy clock. Aggregate/head/input tracking and session-visibility states distinguish tracked evidence from limited, emulated, unavailable, lost, hidden, or unknown state. Agents should require an acceptable age, tracking quality, and matching Workspace revision before acting. When present, `data.context.spatialPin` contains the point at full numeric precision in metre-based `workspace-world-rub` coordinates, its surface normal and hit kind, source controller identity, placement revision, and optional target component.
+
+The Spatial Pin is a latest-only deictic reference: placing another replaces it, and clearing it, leaving XR, changing revision, disconnecting the paired renderer, or replacing the project removes it. Its structured coordinate is exact within the current Workspace frame, while `authority: "render-interaction-estimate"` records that the hit came from rendered geometry or Reality LOD—not an analytic CAD face, survey measurement, or manufacturing tolerance. The rounded coordinate label visible in the headset is presentation only; Agents use the full-precision structured value.
+
+This complete context is explicitly ephemeral and persistence-forbidden. It contains no audio or transcript and never mutates the Workspace, project file, undo history, or export. To keep a Pin deliberately, the person or an authorized Agent must perform a normal revisioned Workspace transaction: copy the current pinned `annotation` manifest from `begin_workspace_update`, create a `world3d` annotation whose placement position is the Pin's `workspacePositionM`, and submit that batch. The resulting annotation—not the live Pin—is ordinary editable, saveable Workspace state.
+
+### Renderer-only materialization
+
+When one live semantic commit adds visible 3D entities, the renderer can present them as a deterministic 2.0–3.9 second build reveal. Lightweight Reality, asset, parametric, collider, or fallback proxies establish location first; committed entities then appear in bounded hierarchy-aware order. Renderers support `full`, `subtle`, and `off` presentation modes.
+
+Materialization is presentation only. It creates no Workspace operations or per-frame revisions and cannot change transforms, collision/physics truth, dirty state, history, saved projects, OpenUSD/CAD exports, or Agent inspection. Initial load, project open, reconnect, and context recovery project the current authority immediately; the same live batch is not replayed as a new build sequence.
+
+### Voice Relay native helper
+
+Voice Relay uses a small local helper: macOS Accessibility APIs on macOS and UI Automation on Windows. Build the helper for the current platform with:
+
+```bash
+npm run build:voice-relay
+```
+
+`npm run dev` builds the optional helper when needed unless `SEMAFRAME_VOICE_RELAY_SKIP_BUILD=1`; if it cannot be built, the rest of SemaFrame remains available and Voice Relay reports unavailable. A packaged launcher must pin the shipped helper with `SEMAFRAME_VOICE_RELAY_HELPER_SHA256` (and may select an absolute `SEMAFRAME_VOICE_RELAY_HELPER_PATH`). `SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER=1` is a development/test-only escape hatch, not a production setting. Native Voice Relay is unavailable on Linux; XR and all non-Relay Workspace behavior remain cross-platform.
 
 ## First Agent connection
 
@@ -464,7 +589,11 @@ Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, 
 
 ## Agent integration
 
-SemaFrame exposes exactly 24 Workspace tools:
+SemaFrame exposes 24 authoritative Workspace MCP tools. When the browser-backed
+host-control surface is available, the same approved connection also exposes 10
+ephemeral Voice Relay and XR preparation tools. Host-control calls prepare or
+inspect a user-visible local action; they are not a second mutation path, and
+the Agent still changes the scene only through Workspace transaction tools.
 
 | Phase | Tool |
 | --- | --- |
@@ -492,6 +621,16 @@ SemaFrame exposes exactly 24 Workspace tools:
 | History | `undo_workspace_batch` |
 | History | `redo_workspace_batch` |
 | Events | `read_workspace_events` |
+| Host voice | `inspect_voice_relay` |
+| Host voice | `prepare_voice_relay_setup` |
+| Host voice | `run_voice_relay_diagnostics` |
+| Host voice | `request_voice_relay_arm` |
+| Host XR | `inspect_xr_readiness` |
+| Host XR | `prepare_xr_session` |
+| Host XR | `request_enter_xr` |
+| Host XR | `wait_for_xr_session_state` |
+| Host XR | `request_exit_xr` |
+| Host XR | `get_live_xr_context` |
 
 The normal Agent flow is:
 
@@ -502,7 +641,11 @@ The normal Agent flow is:
 5. submit one bounded atomic operation batch;
 6. retry safely with the same request ID, or inspect the new revision before continuing.
 
-Voice, realtime, and multimodal clients use this same contract. Partial model output stays in client-side preview state; only final intent becomes a Workspace transaction. SemaFrame owns validation, rendering, history, permissions, and persistence. It does not bundle a model, speech recognizer, or voice transport.
+Host preparation stays outside Workspace persistence. Read-only readiness and fresh-context calls require `workspace:read`; setup or entry requests additionally require the separately approved `host:voice_relay_setup` or `host:xr_prepare` scope. A successful request can return a required user action, but it cannot grant OS permission, choose or arm a desktop target, or synthesize a WebXR gesture.
+
+For a remote headset, retain the returned `lifecycle_sequence` and supply it as `after_sequence` to `wait_for_xr_session_state`. The host reads a bounded authenticated transition log rather than sampling only the latest label, so short states such as `ended` remain observable even if `replica_ready` is already current. Same-device XR keeps the simpler local state wait.
+
+Voice, realtime, and multimodal clients use this same contract. Partial model output stays in client-side preview state; only final intent becomes a Workspace transaction. SemaFrame owns validation, rendering, history, permissions, and persistence. It does not bundle an AI model or cloud speech provider; voice-capable Agents use their own computer-microphone path, while optional Voice Relay uses browser speech support and the local helper described above.
 
 For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. Photo-reconstruction REST calls additionally require the private proof for an active browser-approved `asset:reconstruct` claim; a pairing bearer by itself is insufficient. The generated stdio setup loads the TypeScript bridge in the configured Node process—without an npm or `tsx` CLI wrapper that could orphan the bridge when an MCP host terminates it—and connects to the exact browser-approved Streamable HTTP MCP offer. Signal shutdown and stdin EOF both abort an in-flight upstream request. It is not a second REST authority path, so its five reconstruction tools use the same approved claim and non-default scope as a direct HTTP client. The local setup UI keeps these concerns separate: the stdio config contains only `SEMAFRAME_AGENT_MCP_URL`, while a different explicit copy action reveals the credentialed REST config.
 
@@ -599,7 +742,15 @@ Important boundaries include:
 - web and video content begins behind an explicit user-activation facade;
 - event routes reauthorize their target actions and cannot call non-routable host signals;
 - declarative recipes have no arbitrary code or network execution;
-- project replacement invalidates ephemeral web activation, feed automation consent, and in-flight refresh work.
+- project replacement invalidates ephemeral web activation, feed automation consent, and in-flight refresh work;
+- the standalone XR origin receives no browser-authority bootstrap capability, pairs through a single-use fragment secret, and uses only session-scoped relay routes;
+- renderer inputs never mutate the Workspace directly: the authoritative browser checks session epoch, revision, input schema, target/action availability, and required human confirmation again;
+- live XR pose context is accepted only from the exact paired renderer session and exact allowed origin, remains revision- and freshness-bound, contains no audio or transcript, and is never persisted;
+- Voice Relay setup, target selection, diagnostics, and arming are desktop-only; target configuration, the no-send composer test, and arm each require an action-bound, one-use proof minted only after a trusted local confirmation;
+- the paired XR session can inspect an armed Relay, stage one bounded transcript, confirm or cancel that exact stage, and observe a bounded reply, but it cannot discover windows, choose a target, run diagnostics, arm desktop automation, or obtain the private browser bootstrap capability;
+- native Relay helpers accept only an integrity-pinned packaged binary outside development, reject SemaFrame, terminal, system/credential, and secure-input surfaces, and revalidate exact process-owned composer and Send controls before use;
+- Relay staging requires an empty composer and exact read-back; Send occurs only after XR confirmation of the unchanged digest, cancellation never clears changed text, and an unknown send outcome is not retried;
+- authority disconnect, revocation, or epoch change invalidates renderer authority instead of silently promoting a headset into a second Workspace host.
 
 This is an application-level local capability model, not an operating-system security boundary. A process that can read another process's environment, modify the trusted local proxy, or otherwise assume the user's local OS authority remains outside the model. When publishing MCP or REST through HTTPS, expose only the required external MCP, OpenAPI, `/v1`, and one-use upload paths—not `/api/agent/*`.
 
@@ -617,7 +768,10 @@ SemaFrame deliberately does not claim the following:
 - **Photo reconstruction is local, visual-only, resource-bounded, and platform-bounded.** The bundled backend requires supported macOS Object Capture hardware and Xcode command-line tools. It rejects sets beyond the selected profile's pixel and memory policy and stops work if disk, memory, process-tree supervision, time, total working-tree, conversion, or candidate-staging bounds fail. Apple first produces a textured mesh, which SemaFrame samples into Gaussian PLY; every result begins as `visual_only` and `uncalibrated`. It is not a bundled cross-platform/cloud reconstruction service. A real 51-photo public test set has completed the manual end-to-end workflow, but that does not establish metric or survey accuracy and is not a committed CI fixture.
 - **Project JSON is not a portable splat bundle.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest.
 - **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
-- **Not a bundled AI model.** Model choice, voice, and realtime transport live in the connecting client.
+- **Not a bundled AI model or speech service.** A voice-capable Agent owns its computer-microphone and realtime path. Optional Voice Relay depends on the XR browser's speech implementation, which may be vendor- and network-dependent; SemaFrame does not claim offline recognition.
+- **Not universal desktop automation.** Voice Relay targets only compatible standard Agent windows on macOS or Windows after a no-send diagnostic and per-session arm. Application accessibility trees can change, Linux has no native helper, and the Relay is not an arbitrary-window macro system.
+- **Not universal XR hardware certification.** The standards-based viewer and safety contracts have automated coverage, but each headset, browser/OpenXR runtime, controller mapping, link mode, microphone, and GPU tier still needs physical validation.
+- **Not automatic Ultra by GPU name.** Windows PCVR Ultra remains Balanced until fresh measured probe and benchmark evidence produces a matching eligibility receipt; macOS, unknown runtimes, stale evidence, and failed runs cannot override the gate.
 - **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project format.
 
 ## Architecture and code map
@@ -654,6 +808,7 @@ Key invariants:
 - Timed and routed actions store resolved effects so replay does not depend on wall-clock execution.
 - Resources carry host-validated hashes and provenance while secrets remain outside the Workspace.
 - One coherent intent is one atomic batch and one user undo step; host settlement is excluded from user undo history.
+- Live XR context and materialization timing are renderer/host ephemera, never Workspace or project authority.
 
 The Three.js layer still uses a compact internal spatial render DTO. It is not another Store, public protocol, persistence format, or Agent API.
 
@@ -664,7 +819,9 @@ src/
   app/                    React application, connection gate, panels, host signals
   agent/                  Browser-side Agent Gateway client
   assets/                 Registered spatial asset catalog
-  renderer/               Three.js renderer and render-only scene DTOs
+  renderer/               Three.js renderer, render-only scene DTOs, and live-commit materialization
+  voice-relay/            Bounded Relay contracts, HTTP client, and XR state machine
+  xr/                     WebXR client, paired relay, panels, speech, live context, assets, locomotion, and Ultra gate
   workspace/
     agents/               Agent controller, guide, scopes, public capability adapter
     assets/               Reality Asset preflight, hashing, validation, and browser vault
@@ -679,9 +836,12 @@ src/
     spatial/              Bounds, contact geometry, and spatial index
     state/                 WorkspaceStore, state model, limits, and utilities
 server/
-  agent/                  Loopback gateway, MCP transport, approvals, OpenAPI
+  agent/                  Loopback gateway, MCP transport, approvals, host control, OpenAPI
+  voice-relay/            Volatile Relay service, HTTP adapter, native protocol, and helper verification
+  xr/                     Session-scoped authority/renderer relay and strict HTTP adapter
   feed/                   Bounded public HTTPS feed runtime and approval store
   workspace/              REST/MCP Workspace tool adapters
+native/voice-relay/       macOS Accessibility and Windows UI Automation helpers
 public/                    SemaFrame SVG, favicon, app icons, and social preview assets
 scripts/                  Development launcher, stdio bridge, browser smoke tests
 integrations/             Installable Agent skill metadata and instructions
@@ -695,6 +855,11 @@ integrations/             Installable Agent skill metadata and instructions
 npm run typecheck                       # TypeScript project check
 npm test -- --run --maxWorkers=2       # deterministic bounded full test run
 npm run build                           # production bundle
+npm run build:xr                        # standalone XR bundle (dist-xr/)
+npm run build:voice-relay               # native helper for current macOS/Windows host
+npm run dev:xr                          # host, gateway, and separate XR dev origin
+npm run test:xr:launcher                # launcher/env contract tests on this host
+npm run smoke:xr:launcher               # execute the shell-free npm launcher path
 npm run test:cad:bundle                 # assert lazy Worker/WASM packaging and no duplicate/inlined OCCT binary
 npm run test:csg:bundle                 # assert the Manifold Worker uses one external fingerprinted WASM binary
 npm run test:reality:runtime            # verify Reality runtime lifecycle and the lazy Spark/Three bundle boundary
@@ -708,7 +873,7 @@ npm run test:coverage                    # coverage run
 
 `smoke:agent` starts a real Streamable HTTP MCP client and browser. It covers offer creation, approval, instruction-first behavior, multi-tab lease conflict and takeover, Workspace creation, data and event flows, idempotency, undo/redo, persistence, revocation, responsive layout, and capability-secret scans. Focused integration tests additionally exercise a real MCP Reality Asset grant/stream/finalize/create/proxy/SSG/save-reopen flow.
 
-Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, photo reconstruction contracts and backend boundaries, MCP, and OpenAPI.
+Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, materialization planning/control, Voice Relay contracts and security boundaries, XR context validation, photo reconstruction contracts and backend boundaries, MCP, and OpenAPI.
 
 When changing a public contract, update the schema, TypeScript type, controller/adapter, guide, focused regression, and at least one cross-layer test together. A green unit test alone is not sufficient for connection, rendering, persistence, or security changes.
 

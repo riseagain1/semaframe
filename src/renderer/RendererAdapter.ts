@@ -4,6 +4,7 @@ import type {
   SceneOperation,
   SceneState,
 } from "./sceneRenderTypes";
+import type { MaterializationMode, RenderPresentationContext } from "./materialization";
 
 /** Internal renderer boundary for Workspace-projected spatial state. */
 export interface RendererAdapter {
@@ -15,9 +16,11 @@ export interface RendererAdapter {
     delta: SceneDelta,
     state?: Readonly<SceneState>,
     operations?: readonly SceneOperation[],
+    presentation?: RenderPresentationContext,
   ): Promise<void>;
 
   resize(): void;
+  setMaterializationMode?(mode: MaterializationMode): void;
   dispose(): void;
 }
 

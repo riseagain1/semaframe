@@ -15,6 +15,10 @@ import {
   type PhotoReconstructionWarningCode,
   type PhotoUploadGrant,
 } from "../reconstruction/contracts";
+import {
+  AGENT_HOST_CONTROL_COMMAND_NAMES,
+  type AgentHostControlCommandName,
+} from "./hostControlContracts";
 
 export const AGENT_GATEWAY_COMMAND_NAMES = [
   "get_workspace_instructions",
@@ -41,11 +45,12 @@ export const AGENT_GATEWAY_COMMAND_NAMES = [
   "undo_workspace_batch",
   "redo_workspace_batch",
   "read_workspace_events",
+  ...AGENT_HOST_CONTROL_COMMAND_NAMES,
   // Host-internal attested handoff. It is never exposed as an MCP/REST tool.
   "complete_workspace_reconstruction_asset",
 ] as const;
 
-export type AgentGatewayCommandName = (typeof AGENT_GATEWAY_COMMAND_NAMES)[number];
+export type AgentGatewayCommandName = (typeof AGENT_GATEWAY_COMMAND_NAMES)[number] | AgentHostControlCommandName;
 
 export type AgentGatewayCommand = Readonly<{
   id: string;
@@ -135,6 +140,17 @@ export type AgentGatewayStatus =
   | "applying"
   | "disconnected";
 
+export type VoiceRelayConfirmedHostAction =
+  | "voice_relay_accessibility"
+  | "voice_relay_configure_target"
+  | "voice_relay_draft_round_trip"
+  | "voice_relay_arm";
+
+export type VoiceRelayHostActionGrant = Readonly<{
+  token: string;
+  expiresAtMs: number;
+}>;
+
 export type AgentGatewayCommandContext = Readonly<{ signal: AbortSignal }>;
 
 export type AgentGatewayCommandHandler = (
@@ -181,6 +197,7 @@ export type AgentGatewayEndpoints = Readonly<{
   photoReconstructionCancel: string;
   photoReconstructionFinalize: string;
   photoReconstructionUploadPrefix: string;
+  voiceRelayHostActionMint: string;
 }>;
 
 export class AgentGatewayError extends Error {
@@ -241,6 +258,7 @@ const DEFAULT_ENDPOINTS: AgentGatewayEndpoints = {
   photoReconstructionCancel: "/api/agent/reconstructions/cancel",
   photoReconstructionFinalize: "/api/agent/reconstructions/finalize",
   photoReconstructionUploadPrefix: "/api/agent/reconstructions/photo-uploads",
+  voiceRelayHostActionMint: "/api/agent/host-actions/voice-relay/mint",
 };
 
 const CLIENT_INSTANCE_ID_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/;
@@ -249,6 +267,15 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseVoiceRelayHostActionGrant(value: unknown): VoiceRelayHostActionGrant {
+  if (!isRecord(value) || !exactKeys(value, ["token", "expiresAtMs"])
+    || typeof value.token !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(value.token)
+    || !Number.isSafeInteger(value.expiresAtMs) || Number(value.expiresAtMs) < Date.now()) {
+    throw new AgentGatewayError("invalid_response", "The gateway returned an invalid Voice Relay confirmation grant.");
+  }
+  return Object.freeze({ token: value.token, expiresAtMs: Number(value.expiresAtMs) });
 }
 
 function parseFeedApprovalToken(value: unknown, expected: HostFeedFetchRequest): string {
@@ -866,6 +893,29 @@ export class AgentGatewayClient {
     // retry once without enabling external agent control.
     await this.fetchConfig(signal);
     return approvedFetch();
+  }
+
+  /**
+   * Mints a short-lived, one-use proof after the desktop has displayed and the
+   * human has confirmed the matching HostAction. The token is accepted only by
+   * the exact Voice Relay action and is never exposed to an external Agent.
+   */
+  async mintVoiceRelayHostAction(
+    action: VoiceRelayConfirmedHostAction,
+    signal?: AbortSignal,
+  ): Promise<VoiceRelayHostActionGrant> {
+    if (action !== "voice_relay_accessibility"
+      && action !== "voice_relay_configure_target"
+      && action !== "voice_relay_arm"
+      && action !== "voice_relay_draft_round_trip") {
+      throw new AgentGatewayError("invalid_configuration", "The Voice Relay host action is invalid.");
+    }
+    await this.ensureConfig(signal);
+    return parseVoiceRelayHostActionGrant(await this.postJson(
+      this.endpoints.voiceRelayHostActionMint,
+      { action },
+      signal,
+    ));
   }
 
   /**

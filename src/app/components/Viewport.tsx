@@ -13,6 +13,7 @@ export type ViewportProps = {
   onResetView: () => void;
   onZoomIn?: () => void;
   onZoomOut?: () => void;
+  xrControl?: ReactNode;
   children?: ReactNode;
 };
 
@@ -49,7 +50,7 @@ function exitDocumentFullscreen(): Promise<void> | void {
 }
 
 export const Viewport = forwardRef<HTMLDivElement, ViewportProps>(function Viewport(
-  { status, entityCount, revision, agentControlStatus, interactionDisabled = false, onFrameAll, onResetView, onZoomIn, onZoomOut, children },
+  { status, entityCount, revision, agentControlStatus, interactionDisabled = false, onFrameAll, onResetView, onZoomIn, onZoomOut, xrControl, children },
   ref,
 ) {
   const [showHelp, setShowHelp] = useState(false);
@@ -227,6 +228,7 @@ export const Viewport = forwardRef<HTMLDivElement, ViewportProps>(function Viewp
         {onZoomOut && <button type="button" onClick={onZoomOut} title="Zoom out (-)" aria-label="Zoom out"><ZoomOut size={17} /></button>}
         <button type="button" onClick={onResetView} title="Reset view" aria-label="Reset view"><RotateCcw size={16} /></button>
         <button ref={helpButtonRef} type="button" onClick={() => setShowHelp((value) => !value)} title="Camera controls" aria-label="Camera controls" aria-expanded={showHelp} aria-controls="viewport-help"><HelpCircle size={17} /></button>
+        {xrControl}
         <button
           ref={fullscreenButtonRef}
           type="button"

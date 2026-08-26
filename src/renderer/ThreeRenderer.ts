@@ -1,3 +1,5 @@
+/// <reference types="webxr" />
+
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -52,11 +54,72 @@ import {
   type RealityMeasurementPoint,
   type RealitySplatInstanceDescriptor,
 } from "./reality";
-import {
-  createCadWorkerKernel,
-  type CadKernel,
-} from "../workspace/modeling";
+import { createCadWorkerKernel } from "../workspace/modeling/cadWorkerClient";
+import type { CadKernel } from "../workspace/modeling/cadKernel";
 import type { CadPartEvaluationResultV1 } from "../workspace/modeling/cad";
+import type {
+  XRControllerRay,
+  XRInputActionState,
+  XRInputTrackingState,
+  XRPose,
+  XRRayHit,
+  XRSessionVisibilityState,
+  XRSpatialPin,
+  XRSpatialContextSnapshot,
+  XRTargetRayMode,
+  XRTrackedInput,
+  XRUserTrackingState,
+} from "../xr/client/contracts";
+import {
+  XRVoiceFeedbackLayer,
+  XRSpatialPinLayer,
+  XRWorldPanelLayer,
+  type ThreeRendererXRPanelAction,
+  type ThreeRendererXRPanelWarning,
+  type ThreeRendererXRPushToTalkEvent,
+  type ThreeRendererXRVoiceFeedback,
+  type ThreeRendererXRVoiceHapticCue,
+  type ThreeRendererXRWorldPanel,
+} from "./xr";
+import {
+  isXRTeleportBlockingEntity,
+  isXRTeleportWalkableEnvironmentObject,
+  planThreeRendererTeleport,
+} from "./xr/XRTeleportPlanner";
+import {
+  MaterializationController,
+  MaterializationLayer,
+  materializationAssetBounds,
+  planMaterialization,
+  type MaterializationMode,
+  type RenderPresentationContext,
+} from "./materialization";
+
+export type {
+  ThreeRendererXRPanelAction,
+  ThreeRendererXRPanelWarning,
+  ThreeRendererXRPushToTalkEvent,
+  ThreeRendererXRVoiceFeedback,
+  ThreeRendererXRVoiceHapticCue,
+  ThreeRendererXRWorldPanel,
+} from "./xr";
+
+export type ThreeRendererXRConfig = Readonly<{
+  referenceSpaceType?: "local" | "local-floor" | "bounded-floor";
+  framebufferScaleFactor?: number;
+  foveation?: number;
+  targetFrameRateHz?: number;
+  teleport?: boolean;
+}>;
+
+export type ThreeRendererXRTeleport = Readonly<{
+  position: Readonly<{ x: number; y: number; z: number }>;
+}>;
+
+export type ThreeRendererXRSpatialPinEvent = Readonly<{
+  action: "placed" | "cleared";
+  pin?: XRSpatialPin;
+}>;
 
 export type ThreeRendererOptions = {
   getSceneState?: () => Readonly<SceneState>;
@@ -64,10 +127,22 @@ export type ThreeRendererOptions = {
   onActivateEntity?: (entityId: EntityId) => void;
   onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (completion: AnimationCompletion) => void;
+  onXRTeleport?: (event: ThreeRendererXRTeleport) => void;
+  onXRPanelAction?: (event: ThreeRendererXRPanelAction) => void;
+  onXRPanelWarning?: (warning: ThreeRendererXRPanelWarning) => void;
+  onXRPushToTalk?: (event: ThreeRendererXRPushToTalkEvent) => void;
+  /** Renderer-only XR reference changed; the host may publish a fresh context immediately. */
+  onXRSpatialPinChange?: (event: ThreeRendererXRSpatialPinEvent) => void;
   onStatus?: (status: RendererStatus) => void;
   pixelRatioCap?: number;
   shadows?: boolean;
+  /** Enables effects such as bloom that are intentionally omitted in bounded XR mode. */
+  expensiveLighting?: boolean;
   reducedMotion?: boolean;
+  /** Renderer-local live-commit reveal. It never changes Workspace state or export. */
+  materializationMode?: MaterializationMode;
+  /** Bounded shared proxy budget; individual assets never allocate their own effect material. */
+  materializationMaxProxyInstances?: number;
   assetRegistry?: AssetRegistry;
   gltfAssetLoader?: GltfAssetLoader;
   /** Host-owned immutable byte provider. Undefined means Reality layers render as placeholders. */
@@ -99,8 +174,44 @@ type RealityMeasurementSession = {
   complete: boolean;
 };
 
+type XRControllerEvent = Readonly<{ type?: string; data?: XRInputSource }>;
+type XRControllerObject = THREE.Object3D & Readonly<{
+  addEventListener(type: string, listener: (event: XRControllerEvent) => void): void;
+  removeEventListener(type: string, listener: (event: XRControllerEvent) => void): void;
+}>;
+
+type XRControllerMetadata = Readonly<{
+  input: "controller" | "hand";
+  handedness: "left" | "right" | "none";
+}>;
+
+type XRGamepadHapticActuatorLike = Readonly<{
+  pulse(value: number, duration: number): Promise<boolean> | boolean;
+}>;
+
+type XRGamepadLike = Gamepad & Readonly<{
+  hapticActuators?: readonly XRGamepadHapticActuatorLike[];
+  vibrationActuator?: XRGamepadHapticActuatorLike;
+}>;
+
+type XRControllerHandlers = Readonly<Record<
+  "connected" | "disconnected" | "select" | "selectstart" | "selectend" | "squeezestart" | "squeezeend",
+  (event: XRControllerEvent) => void
+>>;
+
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(7.5, 5.2, 8.5);
 const DEFAULT_CAMERA_TARGET = new THREE.Vector3(0, 0.8, 0);
+const ENTITY_LOAD_TIMEOUT_MS = 45_000;
+const XR_ACTIVE_AXIS_DELTA = 0.15;
+const EMPTY_XR_INPUT_ACTIONS: XRInputActionState = Object.freeze({
+  available: false,
+  selectPressed: false,
+  squeezePressed: false,
+  primaryButtonPressed: false,
+  secondaryButtonPressed: false,
+  thumbstickPressed: false,
+  thumbstick: Object.freeze({ x: 0, y: 0 }),
+});
 
 export class ThreeRenderer implements RendererAdapter {
   private readonly options: ThreeRendererOptions;
@@ -124,6 +235,10 @@ export class ThreeRenderer implements RendererAdapter {
   private keyboardTarget: HTMLElement | null = null;
   private readonly clock = new THREE.Clock();
   private readonly tweens = new Set<ActiveTween>();
+  private materializationMode: MaterializationMode;
+  private materializationLayer: MaterializationLayer | null = null;
+  private materializationController: MaterializationController | null = null;
+  private lastMaterializationBatchKey: string | null = null;
   private selectedEntityId: EntityId | null = null;
   private selectionHelper: THREE.BoxHelper | null = null;
   private pointerOrigin: PointerOrigin | null = null;
@@ -132,6 +247,8 @@ export class ThreeRenderer implements RendererAdapter {
   private disposed = false;
   private lifecycleToken = 0;
   private stateRenderQueue: Promise<void> = Promise.resolve();
+  private stateRenderGeneration = 0;
+  private activeStateRenderAbort: AbortController | null = null;
   private readonly renderOrigin = new THREE.Vector3();
   private readonly navigationBoundsCenter = DEFAULT_CAMERA_TARGET.clone();
   private navigationBoundsRadius = 2;
@@ -142,6 +259,47 @@ export class ThreeRenderer implements RendererAdapter {
   private realityMeasurementSession: RealityMeasurementSession | null = null;
   private realityMeasurementOverlay: THREE.Group | null = null;
   private realityMeasurementSequence = 0;
+  private readonly xrRig = new THREE.Group();
+  private readonly xrControllers: XRControllerObject[] = [];
+  private readonly xrControllerGrips: THREE.Object3D[] = [];
+  private readonly xrControllerHandlers = new Map<XRControllerObject, XRControllerHandlers>();
+  private readonly xrControllerMetadata = new Map<XRControllerObject, XRControllerMetadata>();
+  private readonly xrControllerByInputSource = new Map<XRInputSource, XRControllerObject>();
+  private readonly xrInputSourceByController = new Map<XRControllerObject, XRInputSource>();
+  private readonly xrGripByInputSource = new Map<XRInputSource, THREE.Object3D>();
+  private readonly xrGripByController = new Map<XRControllerObject, THREE.Object3D>();
+  private readonly xrInputSourceIds = new Map<XRInputSource, string>();
+  private readonly xrInputTrackingStates = new Map<XRInputSource, XRInputTrackingState>();
+  private readonly xrGripTrackingStates = new Map<XRInputSource, XRInputTrackingState>();
+  private readonly xrPreviousActionStates = new Map<XRInputSource, XRInputActionState>();
+  private readonly xrSelectPressedSources = new Set<XRInputSource>();
+  private readonly xrSqueezePressedSources = new Set<XRInputSource>();
+  private xrInputSourceSequence = 0;
+  private xrActiveInputSource: XRInputSource | null = null;
+  private xrFrameSampleSequence = 0;
+  private xrLastFrameTimestampMs = 0;
+  private xrHeadPoseState: XRInputTrackingState = "unknown";
+  private xrActivePushToTalk: Readonly<{ controller: XRControllerObject; metadata: XRControllerMetadata }> | null = null;
+  private xrLifecycleQueue: Promise<void> = Promise.resolve();
+  private xrSession: XRSession | null = null;
+  private xrReferenceSpaceType: "local" | "local-floor" | "bounded-floor" = "local-floor";
+  private xrTeleportEnabled = true;
+  private xrLastEntitySelect: Readonly<{ entityId: EntityId; atMs: number }> | null = null;
+  private xrCameraParent: THREE.Object3D | null = null;
+  private xrCameraPosition: THREE.Vector3 | null = null;
+  private xrCameraQuaternion: THREE.Quaternion | null = null;
+  private xrWorldPanelLayer: XRWorldPanelLayer | null = null;
+  private xrVoiceFeedbackLayer: XRVoiceFeedbackLayer | null = null;
+  private xrSpatialPinLayer: XRSpatialPinLayer | null = null;
+  private xrSpatialPin: XRSpatialPin | undefined;
+  private xrSpatialPinSequence = 0;
+  private pendingXRVoiceFeedback: ThreeRendererXRVoiceFeedback = Object.freeze({ phase: "hidden" });
+  private xrVoiceButtonFrame: number | null = null;
+  private readonly xrVoiceButtonStates = new Map<XRInputSource, Readonly<{ confirm: boolean; cancel: boolean }>>();
+  private pendingXRWorldPanels: readonly ThreeRendererXRWorldPanel[] = Object.freeze([]);
+  private pendingXRWorkspaceRevision: number | undefined;
+  private xrPanelActionHandler: ThreeRendererOptions["onXRPanelAction"];
+  private xrPanelWarningHandler: ThreeRendererOptions["onXRPanelWarning"];
 
   private readonly handleReducedMotionChange = (event: MediaQueryListEvent): void => {
     this.setReducedMotion(event.matches);
@@ -152,6 +310,9 @@ export class ThreeRenderer implements RendererAdapter {
     this.assets = options.assetRegistry ?? DEFAULT_ASSET_REGISTRY;
     this.gltfAssets = options.gltfAssetLoader ?? new GltfAssetLoader();
     this.reducedMotion = options.reducedMotion ?? false;
+    this.materializationMode = options.materializationMode ?? "full";
+    this.xrPanelActionHandler = options.onXRPanelAction;
+    this.xrPanelWarningHandler = options.onXRPanelWarning;
   }
 
   async initialize(container: HTMLElement): Promise<void> {
@@ -169,8 +330,34 @@ export class ThreeRenderer implements RendererAdapter {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xe1e5e1);
     this.scene = scene;
+    this.xrRig.name = "semaframe-xr-player-rig";
     this.entityLayer.name = "scene-entities";
     scene.add(this.entityLayer);
+    const materializationLayer = new MaterializationLayer(
+      this.entityLayer,
+      optionsProxyBudget(this.options.materializationMaxProxyInstances),
+    );
+    this.materializationLayer = materializationLayer;
+    this.materializationController = new MaterializationController(materializationLayer);
+    const xrWorldPanelLayer = new XRWorldPanelLayer({
+      document: container.ownerDocument,
+      onAction: (event) => this.xrPanelActionHandler?.(event),
+      onWarning: (warning) => {
+        this.xrPanelWarningHandler?.(warning);
+      },
+    });
+    this.xrWorldPanelLayer = xrWorldPanelLayer;
+    xrWorldPanelLayer.worldRoot.position.copy(this.renderOrigin).multiplyScalar(-1);
+    scene.add(xrWorldPanelLayer.worldRoot);
+    this.xrRig.add(xrWorldPanelLayer.viewerRoot);
+    xrWorldPanelLayer.setPanels(this.pendingXRWorldPanels, this.pendingXRWorkspaceRevision);
+    const xrVoiceFeedbackLayer = new XRVoiceFeedbackLayer(container.ownerDocument);
+    this.xrVoiceFeedbackLayer = xrVoiceFeedbackLayer;
+    scene.add(xrVoiceFeedbackLayer.root);
+    const xrSpatialPinLayer = new XRSpatialPinLayer(container.ownerDocument);
+    this.xrSpatialPinLayer = xrSpatialPinLayer;
+    this.entityLayer.add(xrSpatialPinLayer.root);
+    scene.add(xrSpatialPinLayer.hudRoot);
 
     const camera = new THREE.PerspectiveCamera(44, 1, 0.04, 300);
     camera.position.copy(DEFAULT_CAMERA_POSITION);
@@ -271,21 +458,26 @@ export class ThreeRenderer implements RendererAdapter {
   }
 
   async renderState(state: Readonly<SceneState>): Promise<void> {
-    return this.enqueueStateRender((isCurrent) => this.renderStateNow(state, isCurrent));
+    return this.enqueueStateRender((isCurrent, signal) => this.renderStateNow(state, isCurrent, signal));
   }
 
   private async renderStateNow(
     state: Readonly<SceneState>,
     isCurrent: () => boolean,
+    signal: AbortSignal,
   ): Promise<void> {
     this.requireInitialized();
+    // Opening/loading a full state is not a live commit. Finish any superseded
+    // pass and project the snapshot directly so reconnects never replay it.
+    this.materializationController?.cancel(true);
+    this.lastMaterializationBatchKey = null;
     this.clearRealityMeasurement(false);
     this.cancelTweens();
     for (const [id, root] of this.entities) this.disposeManagedEntity(id, root);
     this.entities.clear();
     this.currentState = state;
     this.rebuildEnvironment(state.environment);
-    await Promise.all([...state.entities.values()].map((entity) => this.ensureEntity(entity)));
+    await Promise.all([...state.entities.values()].map((entity) => this.ensureEntity(entity, isCurrent, signal)));
     if (!isCurrent()) return;
     this.reconcileHierarchy(state);
     for (const entity of state.entities.values()) {
@@ -305,15 +497,28 @@ export class ThreeRenderer implements RendererAdapter {
     delta: SceneDelta,
     state?: Readonly<SceneState>,
     operations: readonly SceneOperation[] = [],
+    presentation?: RenderPresentationContext,
   ): Promise<void> {
-    return this.enqueueStateRender((isCurrent) => this.applyDeltaNow(delta, state, operations, isCurrent));
+    // A newer authoritative revision cancels the old presentation immediately,
+    // even while an asynchronous asset from the prior queue entry is loading.
+    if (sceneDeltaHasSemanticChange(delta)) this.materializationController?.cancel(true);
+    return this.enqueueStateRender((isCurrent, signal) => this.applyDeltaNow(
+      delta,
+      state,
+      operations,
+      presentation,
+      isCurrent,
+      signal,
+    ));
   }
 
   private async applyDeltaNow(
     delta: SceneDelta,
     state?: Readonly<SceneState>,
     operations: readonly SceneOperation[] = [],
+    presentation?: RenderPresentationContext,
     isCurrent: () => boolean = () => true,
+    signal: AbortSignal = new AbortController().signal,
   ): Promise<void> {
     this.requireInitialized();
     this.replacedEntityIds.clear();
@@ -323,6 +528,40 @@ export class ThreeRenderer implements RendererAdapter {
     }
     const previousState = this.currentState;
     this.currentState = nextState;
+    const semanticChange = sceneDeltaHasSemanticChange(delta);
+    if (semanticChange) this.materializationController?.cancel(true);
+    const materializationBatchKey = presentation?.batchKey
+      ?? `revision:${delta.fromRevision}->${delta.toRevision}`;
+    const materializationMode = this.materializationMode;
+    const shouldMaterialize = presentation?.delivery === "live_commit"
+      && materializationMode !== "off"
+      && !this.reducedMotion
+      && delta.added.length > 0
+      && materializationBatchKey !== this.lastMaterializationBatchKey;
+    if (shouldMaterialize) {
+      const plan = planMaterialization({
+        state: nextState,
+        addedEntityIds: delta.added,
+        batchKey: materializationBatchKey,
+        mode: materializationMode,
+        resolveAssetBounds: (assetId) => {
+          const record = this.assets.get(assetId);
+          if (!record) return undefined;
+          const originRule = record.runtime?.originRule ?? "ground_center";
+          return materializationAssetBounds(
+            { x: 0, y: originRule === "ground_center" ? record.bounds.height / 2 : 0, z: 0 },
+            { x: record.bounds.width, y: record.bounds.height, z: record.bounds.depth },
+          );
+        },
+      });
+      if (plan.entries.length) {
+        this.materializationController?.begin(plan);
+        this.lastMaterializationBatchKey = materializationBatchKey;
+      }
+    } else if (semanticChange && presentation?.delivery !== "live_commit") {
+      this.lastMaterializationBatchKey = null;
+    }
+    try {
     const measurement = this.realityMeasurementSession;
     if (measurement) {
       const changedSpatialIds = new Set<EntityId>([...delta.removed, ...delta.updated]);
@@ -336,7 +575,9 @@ export class ThreeRenderer implements RendererAdapter {
       }
     }
     if (delta.environmentChanged) {
-      const timing = timingForEnvironment(operations, this.reducedMotion);
+      const timing = timingForEnvironment(operations, this.reducedMotion) ?? (shouldMaterialize
+        ? { startAfterMs: 0, durationMs: 300, easing: "ease_out" as const }
+        : undefined);
       if (previousState && timing) {
         this.transitionEnvironment(previousState.environment, nextState.environment, timing);
       } else {
@@ -346,6 +587,7 @@ export class ThreeRenderer implements RendererAdapter {
 
     for (const id of delta.removed) {
       if (this.realityMeasurementSession?.componentId === id) this.cancelRealityMeasurement();
+      this.materializationController?.detach(id);
       this.cancelTweensForEntity(id);
       const root = this.entities.get(id);
       if (this.selectedEntityId === id) this.setSelectedEntity(null);
@@ -363,21 +605,26 @@ export class ThreeRenderer implements RendererAdapter {
 
     await Promise.all(delta.added.map(async (id) => {
       const entity = nextState.entities.get(id);
-      if (entity) await this.ensureEntity(entity);
+      if (!entity) return;
+      const root = await this.ensureEntity(entity, isCurrent, signal);
+      if (!isCurrent()) return;
+      if (this.materializationController?.isActive()) root.visible = false;
+      this.attachMaterializationRoots(nextState, delta.added, materializationBatchKey);
     }));
     // Updated entities may change their authoritative render source (for
     // example an asset ID, or delete/recreate under the same component ID).
     await Promise.all(delta.updated.map(async (id) => {
       const entity = nextState.entities.get(id);
-      if (entity) await this.ensureEntity(entity);
+      if (entity) await this.ensureEntity(entity, isCurrent, signal);
     }));
     // Defensive reconciliation also covers repaired/idempotent deltas from external stores.
     await Promise.all([...nextState.entities].map(async ([id, entity]) => {
-      if (!this.entities.has(id)) await this.ensureEntity(entity);
+      if (!this.entities.has(id)) await this.ensureEntity(entity, isCurrent, signal);
     }));
     if (!isCurrent()) return;
 
     this.reconcileHierarchy(nextState);
+    this.attachMaterializationRoots(nextState, delta.added, materializationBatchKey);
     // Replacing a parent render root temporarily detaches managed descendants
     // so their GPU resources are not disposed with the parent. Restore their
     // authoritative local transforms after hierarchy reconciliation.
@@ -400,22 +647,25 @@ export class ThreeRenderer implements RendererAdapter {
         easing: "ease_in_out" as const,
       };
       const previousEntity = previousState?.entities.get(id);
-      this.applyEntityPresentation(entity, root, Boolean(previousEntity));
-      if (!delta.added.includes(id) && previousEntity) {
+      const added = delta.added.includes(id);
+      const materializingAdded = added
+        && this.materializationController?.isActive() === true
+        && root.userData.materializationBatchKey === materializationBatchKey;
+      if (!materializingAdded) this.applyEntityPresentation(entity, root, Boolean(previousEntity));
+      if (!added && previousEntity) {
         this.transitionEntityVisualEffects(root, previousEntity, entity, timing);
       }
       if (animationGeneration(previousEntity) !== animationGeneration(entity)) {
-        root.userData.animationNotBeforeSeconds = this.clock.elapsedTime + timing.startAfterMs / 1_000;
+        const materializationDelayMs = materializingAdded
+          ? this.materializationController?.remainingRevealMs(id) ?? 0
+          : 0;
+        root.userData.animationNotBeforeSeconds = this.clock.elapsedTime
+          + Math.max(timing.startAfterMs, materializationDelayMs) / 1_000;
       }
-      if (delta.added.includes(id)) {
+      if (added) {
         const target = this.targetTransform(entity);
         this.setEntityTransform(root, target, false);
-        root.visible = isEntityVisuallyPresent(entity);
-        const desiredScale = root.scale.clone();
-        root.scale.setScalar(0.001);
-        this.scheduleTween(timing, (progress) => {
-          root.scale.copy(desiredScale).multiplyScalar(progress);
-        }, entityTweenKey(id, "transform"));
+        if (!materializingAdded) root.visible = isEntityVisuallyPresent(entity);
       } else {
         this.setEntityTransform(root, this.targetTransform(entity), true, timing);
       }
@@ -435,6 +685,13 @@ export class ThreeRenderer implements RendererAdapter {
     }
     this.refreshSelectionHelper();
     this.refreshPostProcessing();
+    } catch (error) {
+      // The semantic commit is already authoritative. Presentation failures,
+      // including an async asset decoder rejection, must restore every root and
+      // remove renderer-only proxies before the error reaches the caller.
+      if (shouldMaterialize) this.materializationController?.cancel(true);
+      throw error;
+    }
   }
 
   resize(): void {
@@ -507,9 +764,334 @@ export class ThreeRenderer implements RendererAdapter {
     this.controls.update();
   }
 
+  /**
+   * Attach a user-activated WebXR session to this renderer. The Workspace
+   * remains authoritative outside the renderer; locomotion and rays are
+   * presentation-only until a host callback commits a semantic action.
+   */
+  async enterXR(session: XRSession, config: ThreeRendererXRConfig = {}): Promise<void> {
+    return this.enqueueXRLifecycle(() => this.enterXRNow(session, config));
+  }
+
+  private async enterXRNow(session: XRSession, config: ThreeRendererXRConfig): Promise<void> {
+    if (!this.renderer || !this.scene || !this.camera || !this.controls || this.disposed) {
+      throw new Error("ThreeRenderer must be initialized before entering XR");
+    }
+    if (this.xrSession === session && this.renderer.xr.isPresenting) return;
+    if (this.xrSession) throw new Error("Another XR session is already active");
+
+    const scale = config.framebufferScaleFactor ?? 0.85;
+    if (!Number.isFinite(scale) || scale < 0.5 || scale > 1) {
+      throw new RangeError("XR framebuffer scale factor must be between 0.5 and 1");
+    }
+    const foveation = config.foveation ?? 0.6;
+    if (!Number.isFinite(foveation) || foveation < 0 || foveation > 1) {
+      throw new RangeError("XR foveation must be between 0 and 1");
+    }
+
+    this.xrSession = session;
+    this.xrReferenceSpaceType = config.referenceSpaceType ?? "local-floor";
+    this.xrTeleportEnabled = config.teleport ?? true;
+    this.xrFrameSampleSequence = 0;
+    this.xrLastFrameTimestampMs = 0;
+    this.xrHeadPoseState = "unknown";
+    this.xrActiveInputSource = null;
+    this.xrPreviousActionStates.clear();
+    this.xrSelectPressedSources.clear();
+    this.xrSqueezePressedSources.clear();
+    this.xrCameraParent = this.camera.parent;
+    this.xrCameraPosition = this.camera.position.clone();
+    this.xrCameraQuaternion = this.camera.quaternion.clone();
+    this.xrRig.position.set(0, 0, 0);
+    this.xrRig.quaternion.identity();
+    this.scene.add(this.xrRig);
+    this.xrRig.attach(this.camera);
+    this.controls.enabled = false;
+    this.renderer.xr.enabled = true;
+    this.renderer.xr.setReferenceSpaceType(this.xrReferenceSpaceType);
+    this.renderer.xr.setFramebufferScaleFactor(scale);
+    this.installXRControllers();
+    this.xrWorldPanelLayer?.setVisible(true);
+    session.addEventListener("end", this.handleXRSessionEnd, { once: true });
+    try {
+      await this.renderer.xr.setSession(session);
+      this.renderer.xr.setFoveation(foveation);
+      await requestXRTargetFrameRate(session, config.targetFrameRateHz);
+      this.xrVoiceFeedbackLayer?.setFeedback(this.pendingXRVoiceFeedback);
+      this.xrSpatialPinLayer?.showEntryHint();
+      this.startXRVoiceButtonLoop(session);
+    } catch (error) {
+      await this.cleanupXRSession(session);
+      throw error;
+    }
+  }
+
+  async exitXR(): Promise<void> {
+    return this.enqueueXRLifecycle(() => this.exitXRNow());
+  }
+
+  private async exitXRNow(): Promise<void> {
+    const session = this.xrSession;
+    if (!session) return;
+    try {
+      await session.end();
+    } finally {
+      await this.cleanupXRSession(session);
+    }
+  }
+
+  isXRPresenting(): boolean {
+    return Boolean(this.xrSession && this.renderer?.xr.isPresenting);
+  }
+
+  /** Capture semantic-space XR facts without persisting or mutating Workspace state. */
+  captureXRSpatialContext(): XRSpatialContextSnapshot | undefined {
+    if (!this.xrSession || !this.renderer?.xr.isPresenting || !this.camera) return undefined;
+    const liveCamera = this.renderer.xr.getCamera();
+    const headPosition = liveCamera.getWorldPosition(new THREE.Vector3()).add(this.renderOrigin);
+    const headOrientation = liveCamera.getWorldQuaternion(new THREE.Quaternion());
+    const headPose = xrPose(headPosition, headOrientation);
+    const sources = Array.from(this.xrSession.inputSources);
+    const trackedInputs: XRTrackedInput[] = [];
+    const rayBySource = new Map<XRInputSource, ReturnType<ThreeRenderer["captureXRRay"]>>();
+    for (const source of sources) {
+      const controller = this.xrControllerByInputSource.get(source);
+      if (!controller) continue;
+      controller.updateWorldMatrix(true, false);
+      const position = controller.getWorldPosition(new THREE.Vector3()).add(this.renderOrigin);
+      const orientation = controller.getWorldQuaternion(new THREE.Quaternion());
+      const trackingState = this.xrInputTrackingStates.get(source) ?? "unknown";
+      const grip = this.xrGripByInputSource.get(source);
+      const gripTrackingState = this.xrGripTrackingStates.get(source);
+      const gripPose = grip && (gripTrackingState === "tracked" || gripTrackingState === "emulated")
+        ? xrPose(
+          grip.getWorldPosition(new THREE.Vector3()).add(this.renderOrigin),
+          grip.getWorldQuaternion(new THREE.Quaternion()),
+        )
+        : undefined;
+      const ray = trackingState === "tracked" || trackingState === "emulated"
+        ? this.captureXRRay(controller)
+        : undefined;
+      if (ray) rayBySource.set(source, ray);
+      const actions = this.captureXRInputActions(source);
+      trackedInputs.push(Object.freeze({
+        sourceId: this.xrSourceId(source),
+        handedness: source.handedness || "none",
+        trackingState,
+        targetRayMode: xrTargetRayMode(source.targetRayMode),
+        targetRayPose: xrPose(position, orientation),
+        ...(gripPose ? { gripPose } : {}),
+        ...(ray ? {
+          ray: ray.primaryRay,
+          ...(ray.rayHit ? { rayHit: ray.rayHit } : {}),
+        } : {}),
+        actions,
+      }));
+    }
+
+    const mappedSources = sources.filter((source) => this.xrControllerByInputSource.has(source));
+    const trackedSources = mappedSources.filter((source) => (
+      this.xrInputTrackingStates.get(source) === "tracked" && rayBySource.has(source)
+    ));
+    const emulatedSources = mappedSources.filter((source) => (
+      this.xrInputTrackingStates.get(source) === "emulated" && rayBySource.has(source)
+    ));
+    const primarySource = trackedSources.find(({ handedness }) => handedness === "right")
+      ?? trackedSources[0]
+      ?? emulatedSources.find(({ handedness }) => handedness === "right")
+      ?? emulatedSources[0];
+    const activeSource = this.xrActiveInputSource
+      && mappedSources.includes(this.xrActiveInputSource)
+      ? this.xrActiveInputSource
+      : undefined;
+    const ray = primarySource ? rayBySource.get(primarySource) : undefined;
+    const rigFloor = this.xrRig.getWorldPosition(new THREE.Vector3()).add(this.renderOrigin);
+    const playerHeight = THREE.MathUtils.clamp(headPosition.y - rigFloor.y, 1.2, 2.4);
+    const sessionVisibility = xrSessionVisibility(this.xrSession.visibilityState);
+    const sourceAgeMs = this.xrFrameSampleSequence === 0
+      ? 0
+      : Math.max(0, performanceNow() - this.xrLastFrameTimestampMs);
+    const trackingState = xrUserTrackingState(
+      this.xrHeadPoseState,
+      trackedInputs.map((input) => input.trackingState),
+      sessionVisibility,
+    );
+    return Object.freeze({
+      sampleSequence: this.xrFrameSampleSequence,
+      tracking: Object.freeze({
+        state: trackingState,
+        headPoseState: this.xrHeadPoseState,
+        sourceTimestampMs: this.xrLastFrameTimestampMs,
+        sourceTimestampBasis: this.xrFrameSampleSequence === 0 ? "unknown" : "performance-time-origin",
+        sourceAgeMs,
+        sessionVisibility,
+      }),
+      referenceSpace: this.xrReferenceSpaceType,
+      headPose,
+      trackedInputs: Object.freeze(trackedInputs),
+      ...(primarySource ? { primaryInputSourceId: this.xrSourceId(primarySource) } : {}),
+      ...(activeSource ? { activeInputSourceId: this.xrSourceId(activeSource) } : {}),
+      ...(ray ? { primaryRay: ray.primaryRay, ...(ray.rayHit ? { rayHit: ray.rayHit } : {}) } : {}),
+      ...(this.xrSpatialPin ? { spatialPin: this.xrSpatialPin } : {}),
+      playerCapsule: Object.freeze({
+        // Room-scale walking changes the HMD's X/Z independently of the rig.
+        // The reference-space floor remains authoritative for Y.
+        feet: Object.freeze({ x: headPosition.x, y: rigFloor.y, z: headPosition.z }),
+        radius: 0.3,
+        height: playerHeight,
+      }),
+    });
+  }
+
+  /** Preserve the runtime's own XR animation-frame clock and pose health. */
+  private recordXRFrameSample(time: number, frame: XRFrame | undefined): void {
+    if (!frame || !Number.isFinite(time) || time < 0 || !this.renderer || !this.xrSession) return;
+    this.xrFrameSampleSequence += 1;
+    this.xrLastFrameTimestampMs = time;
+    const sources = Array.from(this.xrSession.inputSources);
+    for (const source of sources) {
+      this.updateXRInputActivity(source, this.captureXRInputActions(source));
+    }
+    for (const source of this.xrPreviousActionStates.keys()) {
+      if (!sources.includes(source)) {
+        this.xrPreviousActionStates.delete(source);
+      }
+    }
+    if (this.xrActiveInputSource && !sources.includes(this.xrActiveInputSource)) {
+      this.xrActiveInputSource = null;
+    }
+    const xrManager = this.renderer.xr as THREE.WebXRManager & Readonly<{
+      getReferenceSpace?(): XRReferenceSpace | null;
+    }>;
+    const referenceSpace = xrManager.getReferenceSpace?.();
+    if (!referenceSpace) {
+      this.xrHeadPoseState = "unknown";
+      return;
+    }
+    try {
+      const viewerPose = frame.getViewerPose(referenceSpace);
+      this.xrHeadPoseState = viewerPose
+        ? viewerPose.emulatedPosition ? "emulated" : "tracked"
+        : "unavailable";
+    } catch {
+      this.xrHeadPoseState = "unknown";
+    }
+
+    for (const source of sources) {
+      this.xrInputTrackingStates.set(
+        source,
+        xrFramePoseState(frame, source.targetRaySpace, referenceSpace),
+      );
+      if (source.gripSpace) {
+        this.xrGripTrackingStates.set(
+          source,
+          xrFramePoseState(frame, source.gripSpace, referenceSpace),
+        );
+      } else {
+        this.xrGripTrackingStates.set(source, "unavailable");
+      }
+    }
+    for (const source of this.xrInputTrackingStates.keys()) {
+      if (!sources.includes(source)) this.xrInputTrackingStates.delete(source);
+    }
+    for (const source of this.xrGripTrackingStates.keys()) {
+      if (!sources.includes(source)) this.xrGripTrackingStates.delete(source);
+    }
+  }
+
+  private captureXRInputActions(source: XRInputSource): XRInputActionState {
+    const gamepad = source.gamepad;
+    // Only the WebXR standard mapping has stable semantic indices. Unknown
+    // vendor layouts stay explicitly unavailable instead of being guessed.
+    const available = Boolean(gamepad && String(gamepad.mapping) === "xr-standard");
+    if (!gamepad || !available) return EMPTY_XR_INPUT_ACTIONS;
+    return Object.freeze({
+      available: true,
+      selectPressed: this.xrSelectPressedSources.has(source) || xrButtonPressed(gamepad, 0),
+      squeezePressed: this.xrSqueezePressedSources.has(source) || xrButtonPressed(gamepad, 1),
+      primaryButtonPressed: xrButtonPressed(gamepad, 4),
+      secondaryButtonPressed: xrButtonPressed(gamepad, 5),
+      thumbstickPressed: xrButtonPressed(gamepad, 3),
+      thumbstick: Object.freeze({
+        x: xrAxis(gamepad, 2),
+        y: xrAxis(gamepad, 3),
+      }),
+    });
+  }
+
+  private updateXRInputActivity(source: XRInputSource, actions: XRInputActionState): void {
+    const previous = this.xrPreviousActionStates.get(source);
+    this.xrPreviousActionStates.set(source, actions);
+    if (previous && xrActionActivityChanged(previous, actions)) {
+      this.xrActiveInputSource = source;
+    }
+  }
+
+  /** Replace the renderer-only immersive projection for one Workspace revision. */
+  setXRWorldPanels(
+    panels: readonly ThreeRendererXRWorldPanel[],
+    workspaceRevision?: number,
+  ): void {
+    if (this.xrSpatialPin && workspaceRevision !== this.xrSpatialPin.placedAtWorkspaceRevision) {
+      this.clearXRSpatialPin(false, true);
+    }
+    this.pendingXRWorldPanels = Object.freeze([...panels]);
+    this.pendingXRWorkspaceRevision = workspaceRevision;
+    this.xrWorldPanelLayer?.setPanels(this.pendingXRWorldPanels, workspaceRevision);
+  }
+
+  setXRPanelActionHandler(handler: ThreeRendererOptions["onXRPanelAction"]): void {
+    this.xrPanelActionHandler = handler;
+  }
+
+  setXRPanelWarningHandler(handler: ThreeRendererOptions["onXRPanelWarning"]): void {
+    this.xrPanelWarningHandler = handler;
+  }
+
+  setXRVoiceFeedback(feedback: ThreeRendererXRVoiceFeedback): void {
+    this.pendingXRVoiceFeedback = Object.freeze({ ...feedback });
+    this.xrVoiceFeedbackLayer?.setFeedback(this.isXRPresenting()
+      ? this.pendingXRVoiceFeedback
+      : Object.freeze({ phase: "hidden" }));
+  }
+
+  setMaterializationMode(mode: MaterializationMode): void {
+    this.materializationMode = mode;
+    if (mode === "off") this.materializationController?.cancel(true);
+  }
+
+  /** Best-effort WebXR haptics. Visual feedback always remains authoritative. */
+  pulseXRVoiceHaptics(cue: ThreeRendererXRVoiceHapticCue): void {
+    if (!this.xrSession) return;
+    const pattern = cue === "draft_ready"
+      ? [{ intensity: 0.28, durationMs: 35, delayMs: 0 }, { intensity: 0.35, durationMs: 45, delayMs: 80 }]
+      : cue === "error"
+        ? [{ intensity: 0.5, durationMs: 45, delayMs: 0 }, { intensity: 0.5, durationMs: 45, delayMs: 70 }, { intensity: 0.5, durationMs: 55, delayMs: 140 }]
+        : [{
+            intensity: cue === "sent" || cue === "reply_ready" ? 0.42 : 0.25,
+            durationMs: cue === "sent" || cue === "reply_ready" ? 75 : 35,
+            delayMs: 0,
+          }];
+    for (const source of this.xrSession.inputSources) {
+      const gamepad = source.gamepad as XRGamepadLike | undefined;
+      const actuator = gamepad?.hapticActuators?.[0] ?? gamepad?.vibrationActuator;
+      if (!actuator) continue;
+      for (const pulse of pattern) {
+        globalThis.setTimeout(() => {
+          try {
+            void Promise.resolve(actuator.pulse(pulse.intensity, pulse.durationMs)).catch(() => undefined);
+          } catch {
+            // Haptics are an optional cue; unsupported runtimes keep visual/audio feedback.
+          }
+        }, pulse.delayMs);
+      }
+    }
+  }
+
   setSelectedEntity(entityId: EntityId | null, notify = true): void {
     if (entityId !== null && (!this.entities.has(entityId)
-      || !isEntityVisuallyPresent(this.currentState?.entities.get(entityId)))) entityId = null;
+      || !isEntityVisuallyPresent(this.currentState?.entities.get(entityId))
+      || this.materializationController?.isEntityInteractive(entityId) === false)) entityId = null;
     if (this.realityMeasurementSession && this.realityMeasurementSession.componentId !== entityId) {
       this.cancelRealityMeasurement();
     }
@@ -526,6 +1108,7 @@ export class ThreeRenderer implements RendererAdapter {
     const entity = this.currentState?.entities.get(entityId);
     if (!this.renderer || !this.scene || !entity
       || !isEntityVisuallyPresent(entity)
+      || this.materializationController?.isEntityInteractive(entityId) === false
       || entity.renderGeometry?.kind !== "reality"
       || !entity.renderGeometry.asset
       || !this.realityRuntime?.getHandle(entityId)
@@ -569,9 +1152,30 @@ export class ThreeRenderer implements RendererAdapter {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    const activeXRSession = this.xrSession;
+    if (activeXRSession) {
+      void activeXRSession.end().catch(() => undefined);
+      void this.cleanupXRSession(activeXRSession);
+    }
+    this.xrWorldPanelLayer?.dispose();
+    this.xrWorldPanelLayer = null;
+    this.xrVoiceFeedbackLayer?.dispose();
+    this.xrVoiceFeedbackLayer = null;
+    this.xrSpatialPinLayer?.dispose();
+    this.xrSpatialPinLayer = null;
+    this.xrSpatialPin = undefined;
+    this.pendingXRVoiceFeedback = Object.freeze({ phase: "hidden" });
+    this.pendingXRWorldPanels = Object.freeze([]);
+    this.pendingXRWorkspaceRevision = undefined;
     this.clearRealityMeasurement(false);
     this.lifecycleToken += 1;
+    this.activeStateRenderAbort?.abort("renderer_disposed");
+    this.activeStateRenderAbort = null;
     this.cancelTweens();
+    this.materializationController?.dispose();
+    this.materializationController = null;
+    this.materializationLayer = null;
+    this.lastMaterializationBatchKey = null;
     this.reducedMotionQuery?.removeEventListener?.("change", this.handleReducedMotionChange);
     this.reducedMotionQuery = null;
     this.resizeObserver?.disconnect();
@@ -646,6 +1250,7 @@ export class ThreeRenderer implements RendererAdapter {
       tween.complete?.();
       this.tweens.delete(tween);
     }
+    this.materializationController?.cancel(true);
   }
 
   private requireInitialized(): void {
@@ -654,18 +1259,40 @@ export class ThreeRenderer implements RendererAdapter {
     }
   }
 
-  private enqueueStateRender(task: (isCurrent: () => boolean) => Promise<void>): Promise<void> {
+  private enqueueStateRender(
+    task: (isCurrent: () => boolean, signal: AbortSignal) => Promise<void>,
+  ): Promise<void> {
     const lifecycleToken = this.lifecycleToken;
-    const isCurrent = () => !this.disposed && lifecycleToken === this.lifecycleToken;
+    const generation = this.stateRenderGeneration + 1;
+    this.stateRenderGeneration = generation;
+    this.activeStateRenderAbort?.abort("superseded_state_render");
+    for (const controller of this.realityLoads.values()) controller.abort("superseded_state_render");
+    const abort = new AbortController();
+    this.activeStateRenderAbort = abort;
+    const isCurrent = () => !this.disposed
+      && !abort.signal.aborted
+      && lifecycleToken === this.lifecycleToken
+      && generation === this.stateRenderGeneration;
     const queued = this.stateRenderQueue.then(async () => {
       if (!isCurrent()) return;
-      await task(isCurrent);
+      try {
+        await task(isCurrent, abort.signal);
+      } catch (error) {
+        if (!abort.signal.aborted) throw error;
+      } finally {
+        if (this.activeStateRenderAbort === abort) this.activeStateRenderAbort = null;
+      }
     });
     this.stateRenderQueue = queued.catch(() => undefined);
     return queued;
   }
 
-  private async ensureEntity(entity: EntityState): Promise<ProceduralEntity> {
+  private async ensureEntity(
+    entity: EntityState,
+    isCurrent: () => boolean = () => !this.disposed,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<ProceduralEntity> {
+    if (!isCurrent() || signal.aborted) throw new DOMException("Entity render was superseded.", "AbortError");
     const existing = this.entities.get(entity.id);
     const identity = entityRenderIdentity(entity);
     if (existing?.userData.renderIdentity === identity && existing.userData.realityAssetMissing !== true) {
@@ -691,15 +1318,23 @@ export class ThreeRenderer implements RendererAdapter {
       // being recreated while its old GPU root is temporarily absent.
       this.realityRuntime?.remove(entity.id);
       const controller = new AbortController();
+      const abortRealityLoad = () => controller.abort(signal.reason ?? "superseded_state_render");
+      signal.addEventListener("abort", abortRealityLoad, { once: true });
       this.realityLoads.set(entity.id, controller);
       let root: ProceduralEntity;
       try {
-        root = await this.createRealityEntity(entity, controller.signal);
+        root = await this.waitForEntityRoot(
+          entity,
+          this.createRealityEntity(entity, controller.signal),
+          signal,
+          () => controller.abort("entity_load_deadline"),
+        );
       } finally {
+        signal.removeEventListener("abort", abortRealityLoad);
         if (this.realityLoads.get(entity.id) === controller) this.realityLoads.delete(entity.id);
       }
-      if (this.disposed || controller.signal.aborted) {
-        this.disposeManagedEntity(entity.id, root);
+      if (this.disposed || controller.signal.aborted || !isCurrent()) {
+        this.disposeAbandonedEntityRoot(entity, root);
         return root;
       }
       root.userData.renderIdentity = identity;
@@ -708,9 +1343,9 @@ export class ThreeRenderer implements RendererAdapter {
       return root;
     }
     if (entity.renderGeometry?.kind === "cad") {
-      const root = await this.createCadEntity(entity);
-      if (this.disposed) {
-        disposeObject(root);
+      const root = await this.waitForEntityRoot(entity, this.createCadEntity(entity), signal);
+      if (this.disposed || !isCurrent()) {
+        this.disposeAbandonedEntityRoot(entity, root);
         return root;
       }
       root.userData.renderIdentity = identity;
@@ -722,8 +1357,9 @@ export class ThreeRenderer implements RendererAdapter {
     let root: ProceduralEntity;
     if (record?.source === "bundled" && record.runtime) {
       try {
-        root = await this.gltfAssets.instantiate(record, entity);
+        root = await this.waitForEntityRoot(entity, this.gltfAssets.instantiate(record, entity), signal);
       } catch (error) {
+        if (signal.aborted || !isCurrent()) throw error;
         root = createProceduralEntity(entity);
         const reason = error instanceof Error ? error.message : "unknown asset loading error";
         this.options.onStatus?.({
@@ -739,14 +1375,68 @@ export class ThreeRenderer implements RendererAdapter {
     } else {
       root = createProceduralEntity(entity);
     }
-    if (this.disposed) {
-      disposeObject(root);
+    if (this.disposed || !isCurrent()) {
+      this.disposeAbandonedEntityRoot(entity, root);
       return root;
     }
     root.userData.renderIdentity = identity;
     this.entityLayer.add(root);
     this.entities.set(entity.id, root);
     return root;
+  }
+
+  private waitForEntityRoot(
+    entity: EntityState,
+    pending: Promise<ProceduralEntity>,
+    signal: AbortSignal,
+    onAbandon: () => void = () => undefined,
+  ): Promise<ProceduralEntity> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        globalThis.clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+      };
+      const abandon = (cause: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        onAbandon();
+        reject(cause);
+      };
+      const abort = () => abandon(new DOMException("Entity render was superseded.", "AbortError"));
+      const timer = globalThis.setTimeout(() => {
+        abandon(new Error(`Entity ${entity.id} did not finish rendering within ${ENTITY_LOAD_TIMEOUT_MS}ms.`));
+      }, ENTITY_LOAD_TIMEOUT_MS);
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+      void pending.then((root) => {
+        if (settled) {
+          this.disposeAbandonedEntityRoot(entity, root);
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(root);
+      }, (cause) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(cause);
+      });
+    });
+  }
+
+  private disposeAbandonedEntityRoot(entity: EntityState, root: ProceduralEntity): void {
+    if (this.entities.get(entity.id) === root) return;
+    if (entity.renderGeometry?.kind === "reality") {
+      const handle = this.realityRuntime?.getHandle(entity.id);
+      if (handle?.root === root) {
+        this.realityRuntime?.remove(entity.id);
+        return;
+      }
+    }
+    disposeObject(root);
   }
 
   private applyEntityPresentation(
@@ -777,6 +1467,42 @@ export class ThreeRenderer implements RendererAdapter {
       glowSpread: entity.appearance.glowSpread ?? 0.5,
     });
     if (!deferVisibility) root.visible = isEntityVisuallyPresent(entity);
+  }
+
+  /**
+   * Attach ready roots only after their entire parent chain exists. This keeps
+   * asynchronously loaded children at their authoritative local transform and
+   * prevents a one-frame flash in the entity layer while a parent is loading.
+   */
+  private attachMaterializationRoots(
+    state: Readonly<SceneState>,
+    addedEntityIds: readonly EntityId[],
+    batchKey: string,
+  ): void {
+    const controller = this.materializationController;
+    if (!controller?.isActive()) return;
+    this.reconcileHierarchy(state);
+    for (const id of addedEntityIds) {
+      const entity = state.entities.get(id);
+      const root = this.entities.get(id);
+      if (!entity || !root || !this.entityAncestorsAreReady(entity, state)) continue;
+      this.setEntityTransform(root, this.targetTransform(entity), false);
+      if (root.userData.materializationBatchKey === batchKey) continue;
+      this.applyEntityPresentation(entity, root, true);
+      root.userData.materializationBatchKey = batchKey;
+      controller.attach(id, root, entityVisualEffects(entity), isEntityVisuallyPresent(entity));
+    }
+  }
+
+  private entityAncestorsAreReady(entity: EntityState, state: Readonly<SceneState>): boolean {
+    const visited = new Set<EntityId>([entity.id]);
+    let parentId = entity.parentId;
+    while (parentId) {
+      if (visited.has(parentId) || !this.entities.has(parentId)) return false;
+      visited.add(parentId);
+      parentId = state.entities.get(parentId)?.parentId;
+    }
+    return true;
   }
 
   private async createRealityEntity(entity: EntityState, signal: AbortSignal): Promise<ProceduralEntity> {
@@ -927,7 +1653,10 @@ export class ThreeRenderer implements RendererAdapter {
     return root;
   }
 
-  private async reconcileRealityAfterContextRestore(isCurrent: () => boolean): Promise<void> {
+  private async reconcileRealityAfterContextRestore(
+    isCurrent: () => boolean,
+    signal: AbortSignal,
+  ): Promise<void> {
     const runtime = this.realityRuntime;
     const state = this.currentState;
     if (!runtime || !state || !isCurrent() || runtime.snapshot().contextLost) return;
@@ -949,7 +1678,7 @@ export class ThreeRenderer implements RendererAdapter {
         this.entityLayer.add(root);
         this.entities.set(entity.id, root);
       } else {
-        root = await this.ensureEntity(entity);
+        root = await this.ensureEntity(entity, isCurrent, signal);
       }
       if (!isCurrent()) return;
       this.applyEntityPresentation(entity, root);
@@ -1306,6 +2035,7 @@ export class ThreeRenderer implements RendererAdapter {
     this.renderOrigin.copy(next);
     const renderedOrigin = next.clone().multiplyScalar(-1);
     this.entityLayer.position.copy(renderedOrigin);
+    this.xrWorldPanelLayer?.worldRoot.position.copy(renderedOrigin);
     this.environmentRoot?.position.copy(renderedOrigin);
     for (const root of this.fadingEnvironmentRoots) root.position.copy(renderedOrigin);
     this.lightingRoot?.position.copy(renderedOrigin);
@@ -1394,8 +2124,9 @@ export class ThreeRenderer implements RendererAdapter {
     return false;
   }
 
-  private renderFrame = (time: number): void => {
+  private renderFrame = (time: number, frame?: XRFrame): void => {
     if (!this.renderer || !this.scene || !this.camera || !this.controls || this.disposed) return;
+    this.materializationController?.update(time);
     for (const tween of [...this.tweens]) {
       if (time < tween.startedAt) continue;
       const rawProgress = tween.durationMs === 0 ? 1 : (time - tween.startedAt) / tween.durationMs;
@@ -1429,16 +2160,569 @@ export class ThreeRenderer implements RendererAdapter {
         }
       }
     }
-    this.controls.update();
-    this.rebaseFromLiveTarget();
+    if (!this.renderer.xr.isPresenting) {
+      this.controls.update();
+      this.rebaseFromLiveTarget();
+    } else {
+      this.recordXRFrameSample(time, frame);
+      this.xrVoiceFeedbackLayer?.updatePose(this.renderer.xr.getCamera());
+      this.xrSpatialPinLayer?.update(this.renderer.xr.getCamera());
+    }
     this.updateAdaptiveClipping();
     this.selectionHelper?.update();
-    if (this.composer) this.composer.render();
+    // EffectComposer is not assumed to be multiview-safe. XR uses the direct
+    // renderer path; Standard desktop rendering retains the existing effects.
+    if (this.composer && !this.renderer.xr.isPresenting) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   };
 
+  private installXRControllers(): void {
+    if (!this.renderer || !this.scene || this.xrControllers.length) return;
+    for (let index = 0; index < 2; index += 1) {
+      const controller = this.renderer.xr.getController(index) as XRControllerObject;
+      const xrManager = this.renderer.xr as THREE.WebXRManager & Readonly<{
+        getControllerGrip?(controllerIndex: number): THREE.Object3D;
+      }>;
+      const grip = xrManager.getControllerGrip?.(index);
+      controller.name = `xr-controller-${index}`;
+      if (grip) {
+        grip.name = `xr-controller-grip-${index}`;
+        this.xrGripByController.set(controller, grip);
+        this.xrControllerGrips.push(grip);
+        this.xrRig.add(grip);
+      }
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -1),
+      ]);
+      const material = new THREE.LineBasicMaterial({ color: 0x68d5ff, transparent: true, opacity: 0.85 });
+      const ray = new THREE.Line(geometry, material);
+      ray.name = "xr-target-ray";
+      ray.scale.z = 5;
+      ray.raycast = () => undefined;
+      controller.add(ray);
+      const handlers: XRControllerHandlers = {
+        connected: (event) => {
+          const source = event.data;
+          const previousSource = this.xrInputSourceByController.get(controller);
+          if (previousSource) {
+            this.xrControllerByInputSource.delete(previousSource);
+            this.xrGripByInputSource.delete(previousSource);
+            this.xrInputTrackingStates.delete(previousSource);
+            this.xrGripTrackingStates.delete(previousSource);
+            this.xrPreviousActionStates.delete(previousSource);
+            this.xrSelectPressedSources.delete(previousSource);
+            this.xrSqueezePressedSources.delete(previousSource);
+            if (this.xrActiveInputSource === previousSource) this.xrActiveInputSource = null;
+          }
+          if (source) {
+            this.xrControllerByInputSource.set(source, controller);
+            this.xrInputSourceByController.set(controller, source);
+            if (grip) this.xrGripByInputSource.set(source, grip);
+            this.xrSourceId(source);
+          }
+          this.xrControllerMetadata.set(controller, Object.freeze({
+            input: source?.hand ? "hand" : "controller",
+            handedness: source?.handedness === "left" || source?.handedness === "right"
+              ? source.handedness
+              : "none",
+          }));
+        },
+        disconnected: () => {
+          this.releaseXRPushToTalk(controller, "cancelled");
+          const source = this.xrInputSourceByController.get(controller);
+          if (source) {
+            this.xrControllerByInputSource.delete(source);
+            this.xrGripByInputSource.delete(source);
+            this.xrInputSourceIds.delete(source);
+            this.xrInputTrackingStates.delete(source);
+            this.xrGripTrackingStates.delete(source);
+            this.xrPreviousActionStates.delete(source);
+            this.xrSelectPressedSources.delete(source);
+            this.xrSqueezePressedSources.delete(source);
+            if (this.xrActiveInputSource === source) this.xrActiveInputSource = null;
+          }
+          this.xrInputSourceByController.delete(controller);
+          this.xrControllerMetadata.delete(controller);
+        },
+        select: () => {
+          this.markXRInputActive(controller);
+          if (this.xrControllerMetadata.get(controller)?.input !== "hand") this.handleXRSelect(controller);
+        },
+        selectstart: () => {
+          this.markXRInputActive(controller, "select", true);
+          if (this.xrControllerMetadata.get(controller)?.input === "hand") {
+            if (this.dispatchXRVoiceModalAction(controller, "hand_select")) return;
+            this.pressXRPushToTalk(controller);
+          }
+        },
+        selectend: () => {
+          this.markXRInputActive(controller, "select", false);
+          if (this.xrControllerMetadata.get(controller)?.input === "hand") {
+            this.releaseXRPushToTalk(controller, "released");
+          }
+        },
+        squeezestart: () => {
+          this.markXRInputActive(controller, "squeeze", true);
+          if (this.xrControllerMetadata.get(controller)?.input !== "hand") {
+            this.pressXRPushToTalk(controller);
+          }
+        },
+        squeezeend: () => {
+          this.markXRInputActive(controller, "squeeze", false);
+          if (this.xrControllerMetadata.get(controller)?.input !== "hand") {
+            this.releaseXRPushToTalk(controller, "released");
+          }
+        },
+      };
+      for (const [type, handler] of Object.entries(handlers)) {
+        controller.addEventListener(type, handler);
+      }
+      this.xrControllerHandlers.set(controller, handlers);
+      this.xrRig.add(controller);
+      this.xrControllers.push(controller);
+    }
+  }
+
+  private markXRInputActive(
+    controller: XRControllerObject,
+    action?: "select" | "squeeze",
+    pressed?: boolean,
+  ): void {
+    const source = this.xrInputSourceByController.get(controller);
+    if (!source) return;
+    this.xrActiveInputSource = source;
+    if (action === "select") {
+      if (pressed) this.xrSelectPressedSources.add(source);
+      else this.xrSelectPressedSources.delete(source);
+    }
+    if (action === "squeeze") {
+      if (pressed) this.xrSqueezePressedSources.add(source);
+      else this.xrSqueezePressedSources.delete(source);
+    }
+  }
+
+  private pressXRPushToTalk(controller: XRControllerObject): void {
+    if (this.xrActivePushToTalk) return;
+    const metadata = this.xrControllerMetadata.get(controller)
+      ?? Object.freeze({ input: "controller", handedness: "none" } as const);
+    this.xrActivePushToTalk = Object.freeze({ controller, metadata });
+    this.options.onXRPushToTalk?.(Object.freeze({ phase: "pressed", ...metadata }));
+  }
+
+  private releaseXRPushToTalk(
+    controller: XRControllerObject,
+    phase: "released" | "cancelled",
+  ): void {
+    const active = this.xrActivePushToTalk;
+    if (!active || active.controller !== controller) return;
+    this.xrActivePushToTalk = null;
+    this.options.onXRPushToTalk?.(Object.freeze({ phase, ...active.metadata }));
+  }
+
+  private captureXRRay(controller: XRControllerObject): Readonly<{
+    primaryRay: XRControllerRay;
+    rayHit?: XRRayHit;
+  }> {
+    controller.updateWorldMatrix(true, false);
+    const renderOrigin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
+    const semanticOrigin = renderOrigin.clone().add(this.renderOrigin);
+    const direction = new THREE.Vector3(0, 0, -1).transformDirection(controller.matrixWorld).normalize();
+    const maxDistance = 40;
+    const primaryRay: XRControllerRay = Object.freeze({
+      origin: xrVec3(semanticOrigin),
+      direction: xrVec3(direction),
+      maxDistance,
+    });
+    const raycaster = new THREE.Raycaster(renderOrigin, direction, 0, maxDistance);
+    const interactiveRoots = [...this.entities].flatMap(([id, root]) => root.visible
+      && isEntityVisuallyPresent(this.currentState?.entities.get(id))
+      && this.materializationController?.isEntityInteractive(id) !== false ? [root] : []);
+    const intersections = raycaster.intersectObjects(interactiveRoots, true);
+    const candidates: XRRayHit[] = [];
+    const entityHit = intersections.find((entry) => {
+      const entityId = entry.object.userData.entityId;
+      if (typeof entityId !== "string") return false;
+      // A Reality layer's transparent bounds proxy is for cheap selection,
+      // not a visible surface and therefore cannot authorize a coordinate pin.
+      return this.currentState?.entities.get(entityId)?.renderGeometry?.kind !== "reality";
+    });
+    if (entityHit) {
+      const normal = worldNormalForIntersection(entityHit);
+      candidates.push(Object.freeze({
+        kind: "component",
+        targetId: entityHit.object.userData.entityId as EntityId,
+        point: xrVec3(entityHit.point.clone().add(this.renderOrigin)),
+        normal: xrVec3(normal),
+        distance: entityHit.distance,
+      }));
+    }
+    const realityCandidateIds = new Set(intersections.flatMap((entry) => {
+      const entityId = entry.object.userData.entityId;
+      return entry.object.userData.realitySelectionProxy === true && typeof entityId === "string"
+        ? [entityId]
+        : [];
+    }));
+    for (const entityId of realityCandidateIds) {
+      try {
+        const realityHit = this.realityRuntime?.raycastSurface(entityId, raycaster);
+        if (!realityHit) continue;
+        candidates.push(Object.freeze({
+          kind: "component",
+          targetId: entityId,
+          point: xrVec3(new THREE.Vector3(
+            realityHit.worldPoint.x,
+            realityHit.worldPoint.y,
+            realityHit.worldPoint.z,
+          ).add(this.renderOrigin)),
+          // Spark exposes a visual LOD hit point but no stable surface normal.
+          // Facing the marker back toward the ray is an explicit presentation
+          // estimate; the context remains render-interaction-estimate authority.
+          normal: xrVec3(direction.clone().negate()),
+          distance: realityHit.cameraDistance,
+        }));
+      } catch {
+        // A failed visual-surface query is a miss. Never fall back to the
+        // invisible bounds proxy or invent a point at an arbitrary ray depth.
+      }
+    }
+    const surfaceHit = this.environmentRoot
+      ? raycaster.intersectObject(this.environmentRoot, true)[0]
+      : undefined;
+    if (surfaceHit) {
+      const normal = worldNormalForIntersection(surfaceHit);
+      candidates.push(Object.freeze({
+        kind: normal.y >= 0.55 ? "ground" : "surface",
+        point: xrVec3(surfaceHit.point.clone().add(this.renderOrigin)),
+        normal: xrVec3(normal),
+        distance: surfaceHit.distance,
+      }));
+    }
+    const rayHit = candidates.reduce<XRRayHit | undefined>((nearest, candidate) => (
+      !nearest || candidate.distance < nearest.distance ? candidate : nearest
+    ), undefined);
+    // Empty space is deliberately a miss: maxDistance describes the query
+    // bound, not a user-observed surface and not a substitute coordinate.
+    if (!rayHit) return Object.freeze({ primaryRay });
+    return Object.freeze({
+      primaryRay,
+      rayHit,
+    });
+  }
+
+  private xrSourceId(source: XRInputSource): string {
+    const current = this.xrInputSourceIds.get(source);
+    if (current) return current;
+    const id = `input-${++this.xrInputSourceSequence}-${source.handedness || "none"}`;
+    this.xrInputSourceIds.set(source, id);
+    return id;
+  }
+
+  private placeXRSpatialPin(controller: XRControllerObject, source: XRInputSource): boolean {
+    const workspaceRevision = this.pendingXRWorkspaceRevision;
+    const ray = this.captureXRRay(controller);
+    if (!Number.isSafeInteger(workspaceRevision) || (workspaceRevision ?? -1) < 0 || !ray.rayHit) {
+      this.xrSpatialPinLayer?.showMiss();
+      this.pulseXRSpatialPin(source, false);
+      return false;
+    }
+    const hit = ray.rayHit;
+    const pinSequence = ++this.xrSpatialPinSequence;
+    const pin: XRSpatialPin = Object.freeze({
+      pinId: `xr-pin-${pinSequence.toString(36)}`,
+      pinSequence,
+      workspacePositionM: Object.freeze({ ...hit.point }),
+      surfaceNormal: Object.freeze({ ...hit.normal }),
+      hitKind: hit.kind,
+      ...(hit.targetId ? { targetComponentId: hit.targetId } : {}),
+      sourceId: this.xrSourceId(source),
+      handedness: source.handedness || "none",
+      placedAtMs: Date.now(),
+      placedAtWorkspaceRevision: workspaceRevision!,
+      coordinateSpace: "workspace-world-rub",
+      units: "metre",
+      authority: "render-interaction-estimate",
+    });
+    this.xrSpatialPin = pin;
+    this.xrSpatialPinLayer?.setPin(pin);
+    this.pulseXRSpatialPin(source, true);
+    this.options.onXRSpatialPinChange?.(Object.freeze({ action: "placed", pin }));
+    return true;
+  }
+
+  private clearXRSpatialPin(showFeedback: boolean, notify: boolean): boolean {
+    if (!this.xrSpatialPin) return false;
+    this.xrSpatialPin = undefined;
+    this.xrSpatialPinLayer?.clear(showFeedback);
+    if (notify) this.options.onXRSpatialPinChange?.(Object.freeze({ action: "cleared" }));
+    return true;
+  }
+
+  private pulseXRSpatialPin(source: XRInputSource, success: boolean): void {
+    const gamepad = source.gamepad as XRGamepadLike | undefined;
+    const actuator = gamepad?.hapticActuators?.[0] ?? gamepad?.vibrationActuator;
+    if (!actuator) return;
+    try {
+      void Promise.resolve(actuator.pulse(success ? 0.38 : 0.55, success ? 65 : 40)).catch(() => undefined);
+    } catch {
+      // The visible marker/status remains authoritative when haptics are absent.
+    }
+  }
+
+  private handleXRSelect(controller: XRControllerObject): void {
+    if (!this.scene || !this.camera || !this.renderer?.xr.isPresenting) return;
+    if (this.dispatchXRVoiceModalAction(controller, "select")) return;
+    controller.updateMatrixWorld(true);
+    const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
+    const direction = new THREE.Vector3(0, 0, -1)
+      .transformDirection(controller.matrixWorld)
+      .normalize();
+    const raycaster = new THREE.Raycaster(origin, direction, 0, 40);
+    // Immersive panels are a foreground interaction layer. Any panel hit is
+    // consumed before selecting a world entity or teleporting through it.
+    if (this.xrWorldPanelLayer?.activateFirstHit(raycaster)) return;
+    const interactiveRoots = [...this.entities].flatMap(([id, root]) => root.visible
+      && isEntityVisuallyPresent(this.currentState?.entities.get(id))
+      && this.materializationController?.isEntityInteractive(id) !== false
+      ? [root]
+      : []);
+    const entityHit = raycaster.intersectObjects(interactiveRoots, true)
+      .find((entry) => typeof entry.object.userData.entityId === "string");
+    if (entityHit) {
+      const entityId = entityHit.object.userData.entityId as EntityId;
+      const now = globalThis.performance?.now?.() ?? Date.now();
+      const activate = this.xrLastEntitySelect?.entityId === entityId
+        && now - this.xrLastEntitySelect.atMs <= 650;
+      this.setSelectedEntity(entityId);
+      if (activate) {
+        this.xrLastEntitySelect = null;
+        this.options.onActivateEntity?.(entityId);
+      } else {
+        this.xrLastEntitySelect = Object.freeze({ entityId, atMs: now });
+      }
+      return;
+    }
+    this.xrLastEntitySelect = null;
+    this.setSelectedEntity(null);
+    if (!this.xrTeleportEnabled
+      || this.xrReferenceSpaceType === "local"
+      || !this.environmentRoot
+      || !this.currentState) return;
+    const groundHit = raycaster.intersectObject(this.environmentRoot, true)
+      .find((entry) => {
+        if (!isXRTeleportWalkableEnvironmentObject(entry.object)) return false;
+        return worldNormalForIntersection(entry).y >= 0.55;
+      });
+    if (!groundHit) return;
+
+    const colliderEntities: Array<{
+      id: string;
+      root: THREE.Object3D;
+      collision: NonNullable<EntityState["collision"]>;
+    }> = [];
+    for (const id of this.entities.keys()) {
+      // A rendered root without matching semantic state is unsafe to omit.
+      if (!this.currentState.entities.has(id)) return;
+    }
+    for (const [id, entity] of this.currentState.entities) {
+      if (!isEntityVisuallyPresent(entity)
+        || !isXRTeleportBlockingEntity(entity, this.currentState.entities)) continue;
+      const root = this.entities.get(id) ?? this.materializationController?.getCollisionRoot(id);
+      // A visible physical entity that has not produced render bounds yet is
+      // still a potential collider, so teleport waits instead of guessing.
+      if (!root?.visible) return;
+      colliderEntities.push({ id, root, collision: entity.collision! });
+    }
+    // The WebXR camera carries the current HMD pose. The base perspective
+    // camera can lag or omit the per-frame viewer offset on some runtimes.
+    const cameraWorld = new THREE.Vector3();
+    this.renderer.xr.getCamera().getWorldPosition(cameraWorld);
+    const rigWorld = new THREE.Vector3();
+    this.xrRig.getWorldPosition(rigWorld);
+    const plan = planThreeRendererTeleport({
+      rayOrigin: origin,
+      rayDirection: direction,
+      maxDistance: 40,
+      headWorldPosition: cameraWorld,
+      rigWorldPosition: rigWorld,
+      renderOrigin: this.renderOrigin,
+      walkableSurface: groundHit.object,
+      environmentRoot: this.environmentRoot,
+      entities: colliderEntities,
+    });
+    if (!plan.valid) return;
+    this.xrRig.position.x += plan.rigDelta.x;
+    this.xrRig.position.y += plan.rigDelta.y;
+    this.xrRig.position.z += plan.rigDelta.z;
+    this.options.onXRTeleport?.({
+      position: plan.targetFeet,
+    });
+  }
+
+  private dispatchXRVoiceModalAction(
+    controller: XRControllerObject,
+    source: "select" | "confirm_button" | "cancel_button" | "hand_select",
+  ): boolean {
+    const actions = this.pendingXRVoiceFeedback.actions ?? [];
+    const metadata = this.xrControllerMetadata.get(controller)
+      ?? Object.freeze({ input: "controller", handedness: "none" } as const);
+    let phase: ThreeRendererXRPushToTalkEvent["phase"] | undefined;
+    const hasCancel = actions.includes("cancel") || actions.includes("stop");
+    const primaryPhase = actions.includes("confirm")
+      ? "confirmed"
+      : actions.includes("replay")
+        ? "replay"
+        : undefined;
+    if (source === "hand_select" && hasCancel && primaryPhase) {
+      // Hand tracking has no A/B buttons. Keep the staged-draft decision
+      // unambiguous: right pinch performs the primary action; left pinch
+      // cancels. A runtime that reports no handedness gets the primary action.
+      phase = metadata.handedness === "left" ? "cancelled" : primaryPhase;
+    } else if (source === "hand_select" && hasCancel) {
+      phase = "cancelled";
+    } else if (source === "hand_select" && primaryPhase) {
+      phase = primaryPhase;
+    } else if (source === "cancel_button" && hasCancel) {
+      phase = "cancelled";
+    } else if (source !== "cancel_button") {
+      phase = primaryPhase;
+    }
+    if (!phase) return false;
+    this.options.onXRPushToTalk?.(Object.freeze({ phase, ...metadata }));
+    return true;
+  }
+
+  private startXRVoiceButtonLoop(session: XRSession): void {
+    const animationSession = session as XRSession & Readonly<{
+      requestAnimationFrame?(callback: XRFrameRequestCallback): number;
+      cancelAnimationFrame?(handle: number): void;
+    }>;
+    if (!animationSession.requestAnimationFrame) return;
+    if (this.xrVoiceButtonFrame !== null) animationSession.cancelAnimationFrame?.(this.xrVoiceButtonFrame);
+    this.xrVoiceButtonStates.clear();
+    const tick = () => {
+      if (this.xrSession !== session) return;
+      const sources = Array.from(session.inputSources);
+      for (let index = 0; index < sources.length; index += 1) {
+        const source = sources[index]!;
+        const gamepad = source.gamepad;
+        if (!gamepad) continue;
+        const next = Object.freeze({
+          confirm: Boolean(gamepad.buttons[4]?.pressed),
+          cancel: Boolean(gamepad.buttons[5]?.pressed),
+        });
+        const previous = this.xrVoiceButtonStates.get(source)
+          ?? Object.freeze({ confirm: next.confirm, cancel: next.cancel });
+        const controller = this.xrControllerByInputSource.get(source);
+        if (controller && next.confirm && !previous.confirm) {
+          this.markXRInputActive(controller);
+          if (!this.dispatchXRVoiceModalAction(controller, "confirm_button")) {
+            this.placeXRSpatialPin(controller, source);
+          }
+        }
+        if (controller && next.cancel && !previous.cancel) {
+          this.markXRInputActive(controller);
+          if (!this.dispatchXRVoiceModalAction(controller, "cancel_button")
+            && this.clearXRSpatialPin(true, true)) this.pulseXRSpatialPin(source, true);
+        }
+        this.xrVoiceButtonStates.set(source, next);
+      }
+      for (const source of this.xrVoiceButtonStates.keys()) {
+        if (!sources.includes(source)) this.xrVoiceButtonStates.delete(source);
+      }
+      this.xrVoiceButtonFrame = animationSession.requestAnimationFrame!(tick);
+    };
+    this.xrVoiceButtonFrame = animationSession.requestAnimationFrame(tick);
+  }
+
+  private readonly handleXRSessionEnd = (): void => {
+    const session = this.xrSession;
+    if (session) void this.enqueueXRLifecycle(() => this.cleanupXRSession(session));
+  };
+
+  private async cleanupXRSession(session: XRSession): Promise<void> {
+    if (this.xrSession !== session) return;
+    if (this.xrVoiceButtonFrame !== null) {
+      session.cancelAnimationFrame?.(this.xrVoiceButtonFrame);
+      this.xrVoiceButtonFrame = null;
+    }
+    this.xrVoiceButtonStates.clear();
+    this.clearXRSpatialPin(false, false);
+    this.xrSpatialPinLayer?.clear(false);
+    session.removeEventListener("end", this.handleXRSessionEnd);
+    this.xrWorldPanelLayer?.setVisible(false);
+    this.xrVoiceFeedbackLayer?.setFeedback(Object.freeze({ phase: "hidden" }));
+    if (this.xrActivePushToTalk) {
+      this.releaseXRPushToTalk(this.xrActivePushToTalk.controller, "cancelled");
+    }
+    for (const controller of this.xrControllers.splice(0)) {
+      const handlers = this.xrControllerHandlers.get(controller);
+      if (handlers) for (const [type, handler] of Object.entries(handlers)) {
+        controller.removeEventListener(type, handler);
+      }
+      this.xrControllerHandlers.delete(controller);
+      this.xrControllerMetadata.delete(controller);
+      controller.traverse((object) => {
+        if (object instanceof THREE.Line) {
+          object.geometry.dispose();
+          const material = object.material;
+          if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+          else material.dispose();
+        }
+      });
+      controller.removeFromParent();
+    }
+    for (const grip of this.xrControllerGrips.splice(0)) grip.removeFromParent();
+    this.xrControllerByInputSource.clear();
+    this.xrInputSourceByController.clear();
+    this.xrGripByInputSource.clear();
+    this.xrGripByController.clear();
+    this.xrInputSourceIds.clear();
+    this.xrInputTrackingStates.clear();
+    this.xrGripTrackingStates.clear();
+    this.xrPreviousActionStates.clear();
+    this.xrSelectPressedSources.clear();
+    this.xrSqueezePressedSources.clear();
+    this.xrActiveInputSource = null;
+    this.xrFrameSampleSequence = 0;
+    this.xrLastFrameTimestampMs = 0;
+    this.xrHeadPoseState = "unknown";
+    if (this.camera) {
+      if (this.xrCameraParent) this.xrCameraParent.add(this.camera);
+      else this.camera.removeFromParent();
+      if (this.xrCameraPosition) this.camera.position.copy(this.xrCameraPosition);
+      if (this.xrCameraQuaternion) this.camera.quaternion.copy(this.xrCameraQuaternion);
+      this.camera.updateMatrixWorld(true);
+    }
+    this.xrRig.removeFromParent();
+    this.controls && (this.controls.enabled = true);
+    if (this.renderer) {
+      this.renderer.xr.enabled = false;
+      if (this.renderer.xr.getSession() === session) {
+        await this.renderer.xr.setSession(null).catch(() => undefined);
+      }
+    }
+    this.xrSession = null;
+    this.xrLastEntitySelect = null;
+    this.xrCameraParent = null;
+    this.xrCameraPosition = null;
+    this.xrCameraQuaternion = null;
+  }
+
+  private enqueueXRLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.xrLifecycleQueue.then(operation, operation);
+    this.xrLifecycleQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   private refreshPostProcessing(): void {
     if (!this.renderer || !this.scene || !this.camera) return;
+    if (this.options.expensiveLighting === false) {
+      this.composer?.dispose();
+      this.composer = null;
+      this.bloomPass = null;
+      return;
+    }
     const values = [
       ...[...(this.currentState?.entities.values() ?? [])].map((entity) => ({
         intensity: entity.appearance.glowIntensity ?? 0,
@@ -1569,6 +2853,7 @@ export class ThreeRenderer implements RendererAdapter {
     if (!raycaster) return undefined;
     const interactiveRoots = [...this.entities].flatMap(([id, root]) => root.visible
       && isEntityVisuallyPresent(this.currentState?.entities.get(id))
+      && this.materializationController?.isEntityInteractive(id) !== false
       ? [root]
       : []);
     const intersections = raycaster.intersectObjects(interactiveRoots, true);
@@ -1804,6 +3089,9 @@ export class ThreeRenderer implements RendererAdapter {
 
   private handleContextLost = (event: Event): void => {
     event.preventDefault();
+    // GPU presentation helpers are not replayed after restoration. Semantic
+    // roots are completed now and the restored context renders final state.
+    this.materializationController?.cancel(true);
     this.cancelRealityMeasurement();
     this.realityRuntime?.handleContextLost(event);
     // Runtime disposal removes these roots from the scene immediately. Removing
@@ -1825,7 +3113,7 @@ export class ThreeRenderer implements RendererAdapter {
     void runtime.handleContextRestored()
       .then(() => runtime.snapshot().contextLost
         ? undefined
-        : this.enqueueStateRender((isCurrent) => this.reconcileRealityAfterContextRestore(isCurrent)))
+        : this.enqueueStateRender((isCurrent, signal) => this.reconcileRealityAfterContextRestore(isCurrent, signal)))
       .catch((error) => {
         this.options.onStatus?.({
           kind: "error",
@@ -2001,6 +3289,113 @@ function vector(value: Vec3): THREE.Vector3 {
   return new THREE.Vector3(value.x, value.y, value.z);
 }
 
+function xrVec3(value: THREE.Vector3): Readonly<{ x: number; y: number; z: number }> {
+  return Object.freeze({ x: value.x, y: value.y, z: value.z });
+}
+
+function xrPose(position: THREE.Vector3, orientation: THREE.Quaternion): XRPose {
+  return Object.freeze({
+    position: xrVec3(position),
+    orientation: Object.freeze({
+      x: orientation.x,
+      y: orientation.y,
+      z: orientation.z,
+      w: orientation.w,
+    }),
+  });
+}
+
+function xrFramePoseState(
+  frame: XRFrame,
+  space: XRSpace,
+  referenceSpace: XRReferenceSpace,
+): XRInputTrackingState {
+  try {
+    const pose = frame.getPose(space, referenceSpace);
+    if (!pose) return "unavailable";
+    return pose.emulatedPosition ? "emulated" : "tracked";
+  } catch {
+    return "unknown";
+  }
+}
+
+function xrTargetRayMode(value: unknown): XRTargetRayMode {
+  return value === "gaze"
+    || value === "tracked-pointer"
+    || value === "screen"
+    || value === "transient-pointer"
+    ? value
+    : "unknown";
+}
+
+function xrSessionVisibility(value: unknown): XRSessionVisibilityState {
+  return value === "visible" || value === "visible-blurred" || value === "hidden"
+    ? value
+    : "unknown";
+}
+
+function xrUserTrackingState(
+  headPoseState: XRInputTrackingState,
+  inputStates: readonly XRInputTrackingState[],
+  visibility: XRSessionVisibilityState,
+): XRUserTrackingState {
+  if (visibility === "hidden" || headPoseState === "unavailable") return "lost";
+  if (visibility === "visible-blurred"
+    || headPoseState === "emulated"
+    || inputStates.some((state) => state !== "tracked")) return "limited";
+  if (headPoseState === "tracked" && visibility === "visible") return "tracked";
+  if (headPoseState === "tracked") return "limited";
+  return "unknown";
+}
+
+function xrButtonPressed(gamepad: Gamepad, index: number): boolean {
+  return gamepad.buttons[index]?.pressed === true;
+}
+
+function xrAxis(gamepad: Gamepad, index: number): number {
+  const value = gamepad.axes[index];
+  return typeof value === "number" && Number.isFinite(value)
+    ? THREE.MathUtils.clamp(value, -1, 1)
+    : 0;
+}
+
+function xrActionActivityChanged(previous: XRInputActionState, next: XRInputActionState): boolean {
+  if (!next.available) return false;
+  return previous.selectPressed !== next.selectPressed
+    || previous.squeezePressed !== next.squeezePressed
+    || previous.primaryButtonPressed !== next.primaryButtonPressed
+    || previous.secondaryButtonPressed !== next.secondaryButtonPressed
+    || previous.thumbstickPressed !== next.thumbstickPressed
+    || Math.abs(previous.thumbstick.x - next.thumbstick.x) >= XR_ACTIVE_AXIS_DELTA
+    || Math.abs(previous.thumbstick.y - next.thumbstick.y) >= XR_ACTIVE_AXIS_DELTA;
+}
+
+function performanceNow(): number {
+  return typeof performance === "undefined" ? 0 : performance.now();
+}
+
+function worldNormalForIntersection(intersection: THREE.Intersection): THREE.Vector3 {
+  const normal = intersection.face?.normal.clone() ?? new THREE.Vector3(0, 1, 0);
+  return normal.transformDirection(intersection.object.matrixWorld).normalize();
+}
+
+async function requestXRTargetFrameRate(session: XRSession, requested: number | undefined): Promise<void> {
+  if (requested === undefined) return;
+  if (!Number.isFinite(requested) || requested < 60 || requested > 144) {
+    throw new RangeError("XR target frame rate must be between 60 and 144 Hz");
+  }
+  const adjustable = session as XRSession & Readonly<{
+    supportedFrameRates?: Float32Array | readonly number[];
+    updateTargetFrameRate?(rate: number): Promise<void>;
+  }>;
+  if (!adjustable.updateTargetFrameRate || !adjustable.supportedFrameRates) return;
+  const supported = Array.from(adjustable.supportedFrameRates)
+    .filter((rate) => Number.isFinite(rate) && rate >= 60 && rate <= requested)
+    .sort((left, right) => right - left);
+  const selected = supported[0];
+  if (selected !== undefined) await adjustable.updateTargetFrameRate(selected);
+}
+
 function vectorDistance(left: Vec3, right: Vec3): number {
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
 }
@@ -2059,6 +3454,21 @@ function animationGeneration(entity: EntityState | undefined): number | undefine
 
 function relativeDifference(left: number, right: number): number {
   return Math.abs(left - right) / Math.max(1e-12, Math.abs(left), Math.abs(right));
+}
+
+function optionsProxyBudget(value: number | undefined): number {
+  if (value === undefined) return 128;
+  return Number.isFinite(value) ? Math.max(1, Math.min(512, Math.trunc(value))) : 128;
+}
+
+export function sceneDeltaHasSemanticChange(delta: SceneDelta): boolean {
+  return delta.fromRevision !== delta.toRevision
+    || delta.added.length > 0
+    || delta.updated.length > 0
+    || delta.removed.length > 0
+    || delta.environmentChanged
+    || delta.lightingChanged
+    || delta.cameraChanged;
 }
 
 function entityTweenKey(entityId: EntityId, lane: "transform" | "effects"): string {
