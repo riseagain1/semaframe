@@ -1230,7 +1230,8 @@ internal static partial class Program
         for (int index = 0; index < current.Order.Count; index++)
         {
             string key = current.Order[index];
-            if (!current.Messages.TryGetValue(key, out ResponseMessage message)) return new ResponseDelta(true, "");
+            if (!current.Messages.TryGetValue(key, out ResponseMessage? message) || message is null)
+                return new ResponseDelta(true, "");
             baseline.Messages.TryGetValue(key, out ResponseMessage? prior);
             if (prior is not null && prior.Kind != message.Kind) return new ResponseDelta(true, "");
             if (prior?.Text == message.Text) continue;
