@@ -11,6 +11,7 @@ import {
   type XrHttpAdapterOptions,
   type XrHttpHandler,
   type XrRelayConnection,
+  type XrRelayOptions,
 } from "../../../server/xr";
 import {
   XR_PROTOCOL_LIMITS,
@@ -83,8 +84,9 @@ function rig(
     localRequest.headers.get("x-local-authority") === "trusted"
   ),
   options: Omit<XrHttpAdapterOptions, "trustedLocalAuthority" | "rendererOrigins"> = {},
+  relayOptions: XrRelayOptions = {},
 ): { relay: XrRelay; handle: XrHttpHandler } {
-  const relay = new XrRelay();
+  const relay = new XrRelay(relayOptions);
   return {
     relay,
     handle: createXrHttpHandler(relay, {
@@ -520,7 +522,10 @@ describe("XR Fetch HTTP adapter", () => {
   });
 
   it("pages a maximum poll queue by encoded response bytes without dropping unacknowledged deliveries", async () => {
-    const { relay, handle } = rig();
+    // Queue construction deliberately serializes enough data to exercise the
+    // response byte ceiling. Keep lease time deterministic so a contended CI
+    // runner cannot turn this pagination test into an idle-timeout test.
+    const { relay, handle } = rig(undefined, {}, { now: () => 10_000 });
     const authority = await connectAuthority(handle);
     const authorityCredential = {
       sessionId: authority.sessionId,
