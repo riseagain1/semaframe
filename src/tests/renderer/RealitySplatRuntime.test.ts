@@ -173,6 +173,28 @@ describe("RealitySplatRuntime", () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
+  it("routes a live Apple Gaussian PLY instance through Spark's PLY loader", async () => {
+    FakeSparkRenderer.instances = [];
+    FakeSplatMesh.instances = [];
+    const { value } = runtime();
+    const source = instance("apple-ply");
+
+    const handle = await value.load({
+      instance: {
+        ...source,
+        asset: { ...source.asset, format: "ply" },
+      },
+      bytes: new Uint8Array(4),
+    });
+
+    expect(handle.root.userData.realityAssetId).toBe("asset_apple-ply");
+    expect(FakeSplatMesh.instances).toHaveLength(1);
+    expect(FakeSplatMesh.instances[0]?.options).toMatchObject({
+      fileType: fakeModule.SplatFileType.PLY,
+      fileName: "asset_apple-ply.ply",
+    });
+  });
+
   it("updates transforms and rendering controls without replacing asset identity", async () => {
     const { value } = runtime();
     const original = instance("update");

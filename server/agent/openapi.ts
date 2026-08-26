@@ -5,6 +5,7 @@ import {
 } from "../../src/reconstruction/contracts";
 import {
   WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+  WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT,
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
@@ -910,7 +911,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
               client_name: { type: "string", minLength: 1, maxLength: 160 },
               requested_scopes: {
                 type: "array",
-                maxItems: 20,
+                maxItems: WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT,
                 uniqueItems: true,
                 items: { enum: WORKSPACE_PERMISSION_SCOPES },
               },

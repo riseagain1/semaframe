@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { Mic2 } from "lucide-react";
 import {
   AgentGatewayClient,
   AgentGatewayCommandError,
@@ -8,7 +9,28 @@ import {
   type AgentGatewayStatus,
   type PhotoReconstructionCapability,
 } from "../agent/AgentGatewayClient";
+import {
+  AgentHostControlCoordinator,
+  AgentHostControlError,
+} from "../agent/AgentHostControlCoordinator";
+import { HostActionLedger, HostActionLedgerError } from "../agent/HostActionLedger";
+import type { RequiredUserAction, XrHostPhase } from "../agent/hostControlContracts";
+import {
+  VoiceRelayHttpClient,
+  VOICE_RELAY_HOST_ACTION_HEADER,
+  VOICE_RELAY_HTTP_PATHS,
+  type VoiceRelayStatus,
+  type VoiceRelayDiagnosticReport,
+  type VoiceRelaySetupPreparation,
+  type VoiceRelayTargetCandidate,
+} from "../voice-relay";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import {
+  HostActionPrompt,
+  type HostActionPromptRequest,
+} from "./components/HostActionPrompt";
+import { isRemoteXrContextFresh, remoteXrContextKnownAgeMs } from "./xrContextFreshness";
+import { VoiceRelaySettingsDialog } from "./components/VoiceRelaySettingsDialog";
 import {
   AgentConnectionPage,
   type AgentConnectionClient,
@@ -17,6 +39,16 @@ import {
 } from "./components/AgentConnectionPage";
 import { statusLabel } from "./components/StatusPill";
 import type { HybridWorkspaceCanvasHandle } from "./components/workspace/HybridWorkspaceCanvas";
+import {
+  XRWorkspaceButton,
+  type XRWorkspaceButtonHandle,
+  type XRWorkspaceButtonPhase,
+} from "./components/XRWorkspaceButton";
+import {
+  XRHeadsetSessionButton,
+  type XRHeadsetSessionButtonHandle,
+  type XRHeadsetSessionPhase,
+} from "./components/XRHeadsetSessionButton";
 import type {
   WorkspaceComponentResizeRequest,
   WorkspaceComponentHierarchyRequest,
@@ -25,6 +57,7 @@ import type {
   WorkspaceComponentVisualEffectsRequest,
 } from "./components/workspace/WorkspaceInspector";
 import type { ComponentCreationOptions } from "./components/workspace/WorkspaceComponentLibrary";
+import type { WorkspacePanel } from "./components/workspace/WorkspaceChrome";
 import { buildWorkspaceComponentCatalog } from "./components/workspace/modelingCatalog";
 import type {
   WorkspaceModelExportAction,
@@ -55,6 +88,9 @@ import {
   type ComponentPlacement,
   type JSONObject,
 } from "../workspace/components";
+import { createXRContextEnvelope, type XRContextEnvelope } from "../xr/client";
+import { toXrWorkspaceProjection } from "../xr/authority";
+import { deriveXrViewerPanelModels, presentXrWorldPanels } from "../xr/app/panels";
 import { resizeCommitOperations } from "../workspace/interaction";
 import {
   WORKSPACE_PROTOCOL_VERSION,
@@ -158,6 +194,7 @@ import {
   type PhotoReconstructionProfile,
 } from "../reconstruction/contracts";
 import type { RealityMeasurementEvent } from "../renderer/reality";
+import type { ThreeRendererXRPanelAction } from "../renderer/xr";
 
 const RECOVERY_KEY = "semaframe-workspace-recovery-v2";
 const AGENT_CONTROL_ENDPOINT = import.meta.env.VITE_AGENT_CONTROL_ENDPOINT?.trim() || "/api/agent";
@@ -208,6 +245,58 @@ const AgentHistoryDrawer = lazy(() => import("./components/AgentWorkspaceControl
 
 function uid(prefix: string): string {
   return `${prefix}_${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
+}
+
+function publicVoiceRelayStatus(status: VoiceRelayStatus): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    enabled: status.enabled,
+    armed: status.armed,
+    phase: status.phase,
+    ...(status.target ? {
+      target: Object.freeze({
+        label: status.target.label,
+        capabilities: Object.freeze({ ...status.target.capabilities }),
+      }),
+    } : {}),
+    ...(status.error ? { error: Object.freeze({ ...status.error }) } : {}),
+  });
+}
+
+function recommendedVoiceRelayCandidate(
+  candidates: readonly VoiceRelayTargetCandidate[],
+  hints: readonly (string | undefined)[],
+): VoiceRelayTargetCandidate | undefined {
+  const compatible = candidates.filter((candidate) => candidate.compatible);
+  const normalizedHints = hints.flatMap((hint) => hint?.trim().toLocaleLowerCase() || []);
+  for (const hint of normalizedHints) {
+    const matches = compatible.filter((candidate) =>
+      candidate.label.toLocaleLowerCase().includes(hint)
+      || candidate.applicationLabel.toLocaleLowerCase().includes(hint));
+    if (matches.length === 1) return matches[0];
+  }
+  return compatible.length === 1 ? compatible[0] : undefined;
+}
+
+function xrHostPhase(
+  sameDevice: XRWorkspaceButtonPhase,
+  headset: XRHeadsetSessionPhase,
+): XrHostPhase {
+  if (sameDevice === "active") return "active";
+  if (headset === "active") return "active";
+  if (sameDevice === "requesting") return "entering";
+  if (sameDevice === "ending") return "exiting";
+  if (headset === "replica_ready") return "replica_ready";
+  if (headset === "immersive_entering") return "immersive_entering";
+  if (headset === "exiting") return "exiting";
+  if (headset === "ended") return "ended";
+  if (headset === "disconnected") return "disconnected";
+  if (headset === "expired") return "expired";
+  if (headset === "starting") return "preparing";
+  if (headset === "pairing") return "pairing";
+  if (sameDevice === "ready") return "ready";
+  if (sameDevice === "error" || headset === "error") return "error";
+  if (sameDevice === "unsupported" && headset === "idle") return "unavailable";
+  return "idle";
 }
 
 function hostFeedAutomationDescriptor(
@@ -417,6 +506,20 @@ function defaultWorkspacePlacement(manifest: ComponentManifest, ordinal: number)
   };
 }
 
+function agentConfigTrustIdentity(config: AgentGatewayConfig): string {
+  return JSON.stringify({
+    gatewayInstanceId: config.gatewayInstanceId,
+    configRevision: config.configRevision,
+    instructionVersion: config.instructionVersion,
+    csrfToken: config.csrfToken,
+    enabled: config.enabled,
+    clientName: config.clientName ?? null,
+    clientScopes: [...(config.clientScopes ?? [])].sort(),
+    offerStatus: config.offerStatus ?? null,
+    approvalFingerprint: config.pendingApproval?.fingerprint ?? null,
+  });
+}
+
 export default function App() {
   const workspaceStoreRef = useRef<WorkspaceStore | null>(null);
   if (!workspaceStoreRef.current) {
@@ -427,6 +530,40 @@ export default function App() {
   const realityAssetVaultRef = useRef<AppRealityAssetVault | null>(null);
   if (!realityAssetVaultRef.current) realityAssetVaultRef.current = createAppRealityAssetVault();
   const hybridCanvasRef = useRef<HybridWorkspaceCanvasHandle>(null);
+  const sameDeviceXrControlRef = useRef<XRWorkspaceButtonHandle>(null);
+  const headsetXrControlRef = useRef<XRHeadsetSessionButtonHandle>(null);
+  const sameDeviceXrStateRef = useRef<Readonly<{ phase: XRWorkspaceButtonPhase; message: string }>>({
+    phase: "probing",
+    message: "Checking this browser for WebXR…",
+  });
+  const headsetXrStateRef = useRef<Readonly<{ phase: XRHeadsetSessionPhase; message: string }>>({
+    phase: "idle",
+    message: "Headset projection is idle.",
+  });
+  const remoteXrContextRef = useRef<Readonly<{
+    context: XRContextEnvelope;
+    receivedAtMs: number;
+    relayServerReceivedAtMs: number;
+    relayQueueAgeMs: number;
+  }> | undefined>(undefined);
+  const preparedXrModeRef = useRef<"same_device" | "remote_headset" | undefined>(undefined);
+  const xrAgentLifecycleCursorRef = useRef(0);
+  const agentConnectionWasLiveRef = useRef(false);
+  const agentTrustIdentityRef = useRef<string | undefined>(undefined);
+  const hostActionLedgerRef = useRef(new HostActionLedger());
+  const hostActionTrustEpochRef = useRef(0);
+  const hostActionExpiryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const confirmedHostActionOperationRef = useRef<Readonly<{
+    trustEpoch: number;
+    abort: AbortController;
+    completion: Promise<unknown>;
+  }> | undefined>(undefined);
+  const voiceRelayTrustBarrierRef = useRef<Promise<void>>(Promise.resolve());
+  const hostActionExecutionRef = useRef<Readonly<{
+    actionId: string;
+    trustEpoch: number;
+    confirm(): void | Promise<void>;
+  }> | undefined>(undefined);
   const workspaceAgentControllerRef = useRef<WorkspaceAgentController | null>(null);
   const workspaceAgentRouterRef = useRef<WorkspaceAgentCommandRouter | null>(null);
   const completeRealityAssetImportRef = useRef<((candidateHandle: string) => Promise<JSONObject>) | null>(null);
@@ -434,6 +571,22 @@ export default function App() {
     new RealityAssetCompletionLedger<AppRealityAssetCompletion>(),
   );
   const agentGatewayRef = useRef<AgentGatewayClient | null>(null);
+  const voiceRelayHostActionTokenRef = useRef<string | undefined>(undefined);
+  const voiceRelayDisarmRef = useRef<Promise<void> | undefined>(undefined);
+  const voiceRelayClientRef = useRef<VoiceRelayHttpClient | null>(null);
+  if (!voiceRelayClientRef.current) {
+    voiceRelayClientRef.current = new VoiceRelayHttpClient({
+      baseUrl: VOICE_RELAY_HTTP_PATHS.desktopBase,
+      requestHeaders: () => {
+        const csrf = agentGatewayRef.current?.config?.csrfToken;
+        const headers: Record<string, string> = {};
+        if (csrf) headers["x-semaframe-agent-csrf"] = csrf;
+        const hostActionToken = voiceRelayHostActionTokenRef.current;
+        if (hostActionToken) headers[VOICE_RELAY_HOST_ACTION_HEADER] = hostActionToken;
+        return headers;
+      },
+    });
+  }
   const recoverySnapshotRef = useRef<() => void>(() => undefined);
   const allowAgentDestructiveRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -455,6 +608,8 @@ export default function App() {
   const agentBrowserInstanceIdRef = useRef(stableAgentBrowserInstanceId());
   const [workspace, setWorkspace] = useState<Readonly<WorkspaceState>>(workspaceStoreRef.current.getState());
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+  const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>(null);
+  const [workspaceConfigureRequestId, setWorkspaceConfigureRequestId] = useState<string>();
   const [entries, setEntriesState] = useState<WorkspaceHistoryEntry[]>([]);
   const entriesRef = useRef(entries);
   // Keep the visible activity list synchronous with Agent callbacks so
@@ -487,6 +642,12 @@ export default function App() {
   const [agentError, setAgentError] = useState<string>();
   const [agentBrowserOccupied, setAgentBrowserOccupied] = useState(false);
   const [allowAgentDestructive, setAllowAgentDestructive] = useState(false);
+  const [hostActionPrompt, setHostActionPrompt] = useState<HostActionPromptRequest>();
+  const [voiceRelaySettingsOpen, setVoiceRelaySettingsOpen] = useState(false);
+  const [voiceRelayStatus, setVoiceRelayStatus] = useState<VoiceRelayStatus>();
+  const [voiceRelayPreparation, setVoiceRelayPreparation] = useState<VoiceRelaySetupPreparation>();
+  const [voiceRelayDiagnostics, setVoiceRelayDiagnostics] = useState<VoiceRelayDiagnosticReport>();
+  const [voiceRelaySettingsError, setVoiceRelaySettingsError] = useState<string>();
   const [realityAssetAvailability, setRealityAssetAvailability] = useState<Record<string, RealityAssetAvailability>>({});
   const [realityImportStatus, setRealityImportStatus] = useState<string>();
   const [realityImportBusy, setRealityImportBusy] = useState(false);
@@ -515,6 +676,26 @@ export default function App() {
   const [realityRenderGeneration, setRealityRenderGeneration] = useState(0);
   const busy = busyCount > 0;
 
+  const invalidatePendingHostAction = useCallback((updateUi = true) => {
+    hostActionTrustEpochRef.current += 1;
+    if (hostActionExpiryTimerRef.current !== undefined) {
+      clearTimeout(hostActionExpiryTimerRef.current);
+      hostActionExpiryTimerRef.current = undefined;
+    }
+    voiceRelayHostActionTokenRef.current = undefined;
+    const activeOperation = confirmedHostActionOperationRef.current;
+    activeOperation?.abort.abort("host_action_trust_revoked");
+    const priorBarrier = voiceRelayTrustBarrierRef.current.catch(() => undefined);
+    const operationSettled = activeOperation?.completion.catch(() => undefined) ?? Promise.resolve();
+    const revocationBarrier = Promise.all([priorBarrier, operationSettled]).then(async () => {
+      await voiceRelayClientRef.current?.disarm();
+    }).catch(() => undefined);
+    voiceRelayTrustBarrierRef.current = revocationBarrier;
+    hostActionLedgerRef.current.clear();
+    hostActionExecutionRef.current = undefined;
+    if (updateUi && appMountedRef.current) setHostActionPrompt(undefined);
+  }, []);
+
   const confirmTrackedPhotoReconstructionCancellation = useCallback(async (
     active: TrackedPhotoReconstruction,
     updateUi = true,
@@ -539,6 +720,10 @@ export default function App() {
   }, []);
 
   const advanceWorkspaceGeneration = useCallback(() => {
+    invalidatePendingHostAction();
+    remoteXrContextRef.current = undefined;
+    preparedXrModeRef.current = undefined;
+    void voiceRelayClientRef.current?.disarm().catch(() => undefined);
     hybridCanvasRef.current?.cancelRealityMeasurement();
     setRealityMeasurement(undefined);
     for (const controller of hostFeedRefreshControllersRef.current.values()) controller.abort();
@@ -574,13 +759,16 @@ export default function App() {
     setHostFeedAutomationRevision((current) => current + 1);
     workspaceGenerationRef.current += 1;
     setWorkspaceRenderGeneration(workspaceGenerationRef.current);
-  }, [confirmTrackedPhotoReconstructionCancellation]);
+    setWorkspacePanel(null);
+    setWorkspaceConfigureRequestId(undefined);
+  }, [confirmTrackedPhotoReconstructionCancellation, invalidatePendingHostAction]);
 
   useEffect(() => {
     appMountedRef.current = true;
     const lifecycle = ++realityVaultLifecycleRef.current;
     return () => {
       appMountedRef.current = false;
+      invalidatePendingHostAction(false);
       realityImportAbortRef.current?.abort();
       photoReconstructionAbortRef.current?.abort();
       photoReconstructionAbortRef.current = null;
@@ -591,6 +779,8 @@ export default function App() {
       // while a real unmount still closes its database and Worker resources.
       queueMicrotask(() => {
         if (realityVaultLifecycleRef.current === lifecycle) {
+          preparedXrModeRef.current = undefined;
+          void voiceRelayClientRef.current?.disarm().catch(() => undefined);
           if (activeReconstruction && cancellationClient) {
             void confirmTrackedPhotoReconstructionCancellation(
               activeReconstruction,
@@ -602,7 +792,7 @@ export default function App() {
         }
       });
     };
-  }, [confirmTrackedPhotoReconstructionCancellation]);
+  }, [confirmTrackedPhotoReconstructionCancellation, invalidatePendingHostAction]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -619,6 +809,257 @@ export default function App() {
     setNotices((current) => [...current, item].slice(-3));
     window.setTimeout(() => setNotices((current) => current.filter((entry) => entry.id !== item.id)), 4_500);
   }, []);
+
+  const runConfirmedVoiceRelayHostAction = useCallback(async <T,>(
+    action: "voice_relay_accessibility" | "voice_relay_configure_target" | "voice_relay_draft_round_trip" | "voice_relay_arm",
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const gateway = agentGatewayRef.current;
+    if (!gateway) throw new Error("The local Agent gateway is unavailable.");
+    if (confirmedHostActionOperationRef.current) {
+      throw new Error("Another confirmed Voice Relay host action is still finishing.");
+    }
+    const trustEpoch = hostActionTrustEpochRef.current;
+    const trustIdentity = agentTrustIdentityRef.current;
+    const abort = new AbortController();
+    const assertTrust = () => {
+      if (abort.signal.aborted
+        || trustEpoch !== hostActionTrustEpochRef.current
+        || gateway !== agentGatewayRef.current
+        || trustIdentity !== agentTrustIdentityRef.current) {
+        throw new Error("The Agent trust context changed. Confirm the Voice Relay action again.");
+      }
+    };
+    let grantToken: string | undefined;
+    const completion = (async (): Promise<T> => {
+      await voiceRelayTrustBarrierRef.current;
+      assertTrust();
+      const grant = await gateway.mintVoiceRelayHostAction(action);
+      assertTrust();
+      grantToken = grant.token;
+      voiceRelayHostActionTokenRef.current = grant.token;
+      assertTrust();
+      const result = await operation();
+      assertTrust();
+      return result;
+    })();
+    confirmedHostActionOperationRef.current = Object.freeze({ trustEpoch, abort, completion });
+    try {
+      return await completion;
+    } finally {
+      if (grantToken && voiceRelayHostActionTokenRef.current === grantToken) {
+        voiceRelayHostActionTokenRef.current = undefined;
+      }
+      if (confirmedHostActionOperationRef.current?.completion === completion) {
+        confirmedHostActionOperationRef.current = undefined;
+      }
+    }
+  }, []);
+
+  const inspectVoiceRelaySettings = useCallback(async () => {
+    setVoiceRelaySettingsError(undefined);
+    try {
+      setVoiceRelayStatus(await voiceRelayClientRef.current!.inspect());
+    } catch (cause) {
+      const message = friendlyError(cause);
+      setVoiceRelaySettingsError(message);
+      throw cause;
+    }
+  }, []);
+
+  const prepareVoiceRelaySettings = useCallback(async () => {
+    setVoiceRelaySettingsError(undefined);
+    try {
+      const preparation = await runConfirmedVoiceRelayHostAction(
+        "voice_relay_accessibility",
+        () => voiceRelayClientRef.current!.requestAccessibility(),
+      );
+      setVoiceRelayPreparation(preparation);
+      setVoiceRelayStatus(await voiceRelayClientRef.current!.inspect());
+      setVoiceRelayDiagnostics(undefined);
+    } catch (cause) {
+      setVoiceRelaySettingsError(friendlyError(cause));
+      throw cause;
+    }
+  }, [runConfirmedVoiceRelayHostAction]);
+
+  const configureVoiceRelayTarget = useCallback(async (candidateId: string) => {
+    setVoiceRelaySettingsError(undefined);
+    try {
+      await runConfirmedVoiceRelayHostAction(
+        "voice_relay_configure_target",
+        () => voiceRelayClientRef.current!.configureTarget({ candidateId }),
+      );
+      setVoiceRelayStatus(await voiceRelayClientRef.current!.inspect());
+      const preparation = await voiceRelayClientRef.current!.prepareSetup();
+      setVoiceRelayPreparation(preparation);
+      setVoiceRelayDiagnostics(undefined);
+    } catch (cause) {
+      setVoiceRelaySettingsError(friendlyError(cause));
+      throw cause;
+    }
+  }, [runConfirmedVoiceRelayHostAction]);
+
+  const diagnoseVoiceRelaySettings = useCallback(async () => {
+    setVoiceRelaySettingsError(undefined);
+    try {
+      const report = await runConfirmedVoiceRelayHostAction(
+        "voice_relay_draft_round_trip",
+        () => voiceRelayClientRef.current!.runDiagnostics({ performDraftRoundTrip: true }),
+      );
+      setVoiceRelayDiagnostics(report);
+      setVoiceRelayStatus(await voiceRelayClientRef.current!.inspect());
+    } catch (cause) {
+      setVoiceRelaySettingsError(friendlyError(cause));
+      throw cause;
+    }
+  }, [runConfirmedVoiceRelayHostAction]);
+
+  const armVoiceRelaySettings = useCallback(async (targetId?: string) => {
+    setVoiceRelaySettingsError(undefined);
+    try {
+      const result = await runConfirmedVoiceRelayHostAction(
+        "voice_relay_arm",
+        () => voiceRelayClientRef.current!.requestArm(targetId),
+      );
+      setVoiceRelayStatus(result.status);
+    } catch (cause) {
+      setVoiceRelaySettingsError(friendlyError(cause));
+      throw cause;
+    }
+  }, [runConfirmedVoiceRelayHostAction]);
+
+  const disarmVoiceRelaySettings = useCallback(async () => {
+    setVoiceRelaySettingsError(undefined);
+    try {
+      const result = await voiceRelayClientRef.current!.disarm();
+      setVoiceRelayStatus(result.status);
+    } catch (cause) {
+      setVoiceRelaySettingsError(friendlyError(cause));
+      throw cause;
+    }
+  }, []);
+
+  const bestEffortDisarmVoiceRelay = useCallback((): Promise<void> => {
+    voiceRelayHostActionTokenRef.current = undefined;
+    const existing = voiceRelayDisarmRef.current;
+    if (existing) return existing;
+    const client = voiceRelayClientRef.current;
+    if (!client) return Promise.resolve();
+    const pending = client.disarm().then((result) => {
+      if (appMountedRef.current) setVoiceRelayStatus(result.status);
+    }).catch(() => undefined).finally(() => {
+      if (voiceRelayDisarmRef.current === pending) voiceRelayDisarmRef.current = undefined;
+    });
+    voiceRelayDisarmRef.current = pending;
+    return pending;
+  }, []);
+
+  const presentHostAction = useCallback((input: Readonly<{
+    kind: Parameters<HostActionLedger["request"]>[0]["kind"];
+    label: string;
+    dedupeKey: string;
+    title: string;
+    message: string;
+    targetLabel?: string;
+    confirmLabel: string;
+    confirm(): void | Promise<void>;
+  }>): RequiredUserAction => {
+    const action = hostActionLedgerRef.current.request({
+      kind: input.kind,
+      label: input.label,
+      dedupeKey: input.dedupeKey,
+      trustEpoch: hostActionTrustEpochRef.current,
+    });
+    if (hostActionExecutionRef.current?.actionId !== action.action_id) {
+      const trustEpoch = hostActionTrustEpochRef.current;
+      hostActionExecutionRef.current = Object.freeze({
+        actionId: action.action_id,
+        trustEpoch,
+        confirm: input.confirm,
+      });
+      if (hostActionExpiryTimerRef.current !== undefined) {
+        clearTimeout(hostActionExpiryTimerRef.current);
+      }
+      const expiryDelayMs = Math.max(
+        0,
+        (action.expires_at ? new Date(action.expires_at).getTime() : Date.now() + 60_000) - Date.now(),
+      );
+      hostActionExpiryTimerRef.current = setTimeout(() => {
+        const execution = hostActionExecutionRef.current;
+        if (execution?.actionId !== action.action_id || execution.trustEpoch !== trustEpoch) return;
+        hostActionLedgerRef.current.clear();
+        hostActionExecutionRef.current = undefined;
+        hostActionExpiryTimerRef.current = undefined;
+        if (appMountedRef.current) setHostActionPrompt(undefined);
+      }, expiryDelayMs);
+      setHostActionPrompt({
+        id: action.action_id,
+        kind: action.kind,
+        title: input.title,
+        message: input.message,
+        ...(input.targetLabel ? { targetLabel: input.targetLabel } : {}),
+        confirmLabel: input.confirmLabel,
+      });
+    }
+    return action;
+  }, []);
+
+  const confirmHostAction = useCallback(() => {
+    const execution = hostActionExecutionRef.current;
+    if (!execution) return;
+    if (execution.trustEpoch !== hostActionTrustEpochRef.current) {
+      invalidatePendingHostAction();
+      notice("This Agent request belongs to an expired trust context. Ask the Agent to request it again.", "warning");
+      return;
+    }
+    // Invoke synchronously inside the trusted click. WebXR's transient user
+    // activation would be lost if this were deferred behind an await/timer.
+    let outcome: void | Promise<void>;
+    try {
+      hostActionLedgerRef.current.decide(execution.actionId, "confirmed", execution.trustEpoch);
+      if (hostActionExpiryTimerRef.current !== undefined) {
+        clearTimeout(hostActionExpiryTimerRef.current);
+        hostActionExpiryTimerRef.current = undefined;
+      }
+      outcome = execution.confirm();
+      setHostActionPrompt((current) => current?.id === execution.actionId
+        ? { ...current, busy: true }
+        : current);
+    } catch (cause) {
+      hostActionExecutionRef.current = undefined;
+      setHostActionPrompt(undefined);
+      notice(cause instanceof Error ? cause.message : "The requested host action could not start.", "warning");
+      return;
+    }
+    void Promise.resolve(outcome).then(() => {
+      notice("The requested host action completed.", "success");
+    }).catch((cause) => {
+      notice(cause instanceof Error ? cause.message : "The requested host action failed.", "warning");
+    }).finally(() => {
+      if (hostActionExecutionRef.current?.actionId === execution.actionId) {
+        hostActionExecutionRef.current = undefined;
+        setHostActionPrompt(undefined);
+      }
+    });
+  }, [invalidatePendingHostAction, notice]);
+
+  const cancelHostAction = useCallback(() => {
+    const execution = hostActionExecutionRef.current;
+    if (!execution) return;
+    try {
+      hostActionLedgerRef.current.decide(execution.actionId, "declined", execution.trustEpoch);
+    } catch (cause) {
+      if (!(cause instanceof HostActionLedgerError) || cause.code !== "host_action_not_found") throw cause;
+    }
+    if (hostActionExpiryTimerRef.current !== undefined) {
+      clearTimeout(hostActionExpiryTimerRef.current);
+      hostActionExpiryTimerRef.current = undefined;
+    }
+    hostActionExecutionRef.current = undefined;
+    setHostActionPrompt(undefined);
+    notice("The Agent-requested host action was declined.", "neutral");
+  }, [notice]);
 
   const handleRealityMeasurement = useCallback((event: RealityMeasurementEvent) => {
     setRealityMeasurement((current) => {
@@ -771,10 +1212,15 @@ export default function App() {
   }, []);
 
   const revokeAgentContexts = useCallback((_reason: string) => {
+    invalidatePendingHostAction();
     workspaceAgentControllerRef.current?.revokeAll();
-  }, []);
+  }, [invalidatePendingHostAction]);
 
   const stopAgentForProjectChange = useCallback(async (reason: string) => {
+    voiceRelayHostActionTokenRef.current = undefined;
+    remoteXrContextRef.current = undefined;
+    preparedXrModeRef.current = undefined;
+    await bestEffortDisarmVoiceRelay();
     revokeAgentContexts(reason);
     const client = agentGatewayRef.current;
     if (!agentBrowserOccupied) {
@@ -794,7 +1240,7 @@ export default function App() {
     setAgentHistoryOpen(false);
     setAgentManageOpen(false);
     setAgentBrowserOccupied(false);
-  }, [agentBrowserOccupied, revokeAgentContexts]);
+  }, [agentBrowserOccupied, bestEffortDisarmVoiceRelay, revokeAgentContexts]);
 
   useEffect(() => {
     installWorkspaceAgentController(workspaceStoreRef.current!);
@@ -1087,8 +1533,10 @@ export default function App() {
         placement,
       }], `Added ${options?.label ?? manifest.displayName}`);
       setSelectedComponentId(id);
+      return id;
     } catch (error) {
       notice(friendlyError(error), "error");
+      return undefined;
     }
   }, [applyWorkspaceOperations, notice]);
 
@@ -2947,8 +3395,522 @@ export default function App() {
     }
   }, [applyWorkspaceOperations, notice]);
 
+  const agentHostControl = useMemo(() => new AgentHostControlCoordinator({
+    workspaceId: () => workspaceStoreRef.current?.getState().workspaceId ?? "",
+    inspectVoiceRelay: async () => {
+      const status = await voiceRelayClientRef.current!.inspect();
+      return {
+        command: "inspect_voice_relay",
+        phase: status.phase,
+        message: status.armed
+          ? `Voice Relay is armed for ${status.target?.label ?? "the configured Agent"}.`
+          : status.target
+            ? `Voice Relay is configured for ${status.target.label} and awaits user arm.`
+            : "Voice Relay is off or needs configuration.",
+        status: publicVoiceRelayStatus(status),
+      };
+    },
+    prepareVoiceRelaySetup: async (input) => {
+      const client = voiceRelayClientRef.current!;
+      const setup = await client.prepareSetup();
+      setVoiceRelayPreparation(setup);
+      setVoiceRelayStatus(await client.inspect());
+      if (setup.accessibility !== "authorized") {
+        const action = presentHostAction({
+          kind: "grant_accessibility",
+          label: "Grant Accessibility permission for Voice Relay",
+          dedupeKey: "voice-relay:accessibility",
+          title: "Allow Voice Relay accessibility",
+          message: "The local helper needs operating-system Accessibility permission to write only to the Agent window you confirm. SemaFrame cannot grant this permission for you.",
+          confirmLabel: "Open permission flow",
+          confirm: async () => {
+            const next = await runConfirmedVoiceRelayHostAction(
+              "voice_relay_accessibility",
+              () => client.requestAccessibility(),
+            );
+            setVoiceRelayPreparation(next);
+            setVoiceRelayStatus(await client.inspect());
+          },
+        });
+        return {
+          command: "prepare_voice_relay_setup",
+          phase: "awaiting_user_confirmation",
+          message: "Accessibility permission is required before SemaFrame can detect a compatible Agent composer.",
+          required_user_action: action,
+        };
+      }
+      if (setup.configuredTarget) {
+        return {
+          command: "prepare_voice_relay_setup",
+          phase: "ready",
+          message: `Voice Relay target ${setup.configuredTarget.label} is configured and awaits user arm.`,
+          target: {
+            label: setup.configuredTarget.label,
+            capabilities: setup.configuredTarget.capabilities,
+          },
+        };
+      }
+      const candidate = recommendedVoiceRelayCandidate(setup.candidates, [
+        typeof input.target_hint === "string" ? input.target_hint : undefined,
+        agentGatewayRef.current?.config?.clientName,
+      ]);
+      if (!candidate) {
+        setVoiceRelaySettingsOpen(true);
+        return {
+          command: "prepare_voice_relay_setup",
+          phase: "needs_configuration",
+          message: setup.candidates.some((entry) => entry.compatible)
+            ? "More than one compatible Agent window is available. The user must choose the exact target in SemaFrame."
+            : "No compatible accessible Agent window was found.",
+          capabilities: {
+            compatible_target_count: setup.candidates.filter((entry) => entry.compatible).length,
+          },
+        };
+      }
+      const action = presentHostAction({
+        kind: "confirm_target",
+        label: `Use ${candidate.label} as the Voice Relay target`,
+        dedupeKey: `voice-relay:target:${candidate.candidateId}`,
+        title: "Confirm the Voice Relay target",
+        message: "SemaFrame will bind only the displayed Agent window and its verified input, Send, and reply controls. The Agent cannot change this target.",
+        targetLabel: `${candidate.applicationLabel} · ${candidate.label}`,
+        confirmLabel: "Use this Agent window",
+        confirm: async () => {
+          await runConfirmedVoiceRelayHostAction(
+            "voice_relay_configure_target",
+            () => client.configureTarget({ candidateId: candidate.candidateId }),
+          );
+          setVoiceRelayPreparation(await client.prepareSetup());
+          setVoiceRelayStatus(await client.inspect());
+          setVoiceRelayDiagnostics(await client.runDiagnostics());
+        },
+      });
+      return {
+        command: "prepare_voice_relay_setup",
+        phase: "awaiting_user_confirmation",
+        message: `A compatible target was found: ${candidate.label}.`,
+        recommended_target: `${candidate.applicationLabel} · ${candidate.label}`,
+        required_user_action: action,
+      };
+    },
+    runVoiceRelayDiagnostics: async (input) => {
+      const client = voiceRelayClientRef.current!;
+      if (input.include_safe_input_test === true) {
+        const current = await client.inspect();
+        const targetLabel = current.target?.label;
+        if (!targetLabel) throw new AgentHostControlError("target_unconfigured", "Configure a Voice Relay target first.");
+        const action = presentHostAction({
+          kind: "confirm_safe_test",
+          label: `Run a non-sending test in ${targetLabel}`,
+          dedupeKey: `voice-relay:diagnostics:${targetLabel}`,
+          title: "Test the configured Agent composer",
+          message: "SemaFrame will require an empty composer, insert a random nonce, read it back exactly, and remove it. It will not press Send.",
+          targetLabel,
+          confirmLabel: "Run safe test",
+          confirm: async () => {
+            await runConfirmedVoiceRelayHostAction(
+              "voice_relay_draft_round_trip",
+              () => client.runDiagnostics({ performDraftRoundTrip: true }),
+            );
+          },
+        });
+        return {
+          command: "run_voice_relay_diagnostics",
+          phase: "awaiting_user_confirmation",
+          message: "The no-send composer test awaits user confirmation.",
+          required_user_action: action,
+        };
+      }
+      const report = await client.runDiagnostics();
+      setVoiceRelayDiagnostics(report);
+      return {
+        command: "run_voice_relay_diagnostics",
+        phase: report.ready ? "ready" : "needs_configuration",
+        message: report.ready ? "Voice Relay diagnostics passed." : "Voice Relay needs attention.",
+        report,
+      };
+    },
+    requestVoiceRelayArm: async () => {
+      const client = voiceRelayClientRef.current!;
+      const current = await client.inspect();
+      if (!current.target) throw new AgentHostControlError("target_unconfigured", "Configure a Voice Relay target first.");
+      if (current.armed) {
+        return {
+          command: "request_voice_relay_arm",
+          phase: "armed",
+          message: `Voice Relay is already armed for ${current.target.label}.`,
+        };
+      }
+      const action = presentHostAction({
+        kind: "arm_voice_relay",
+        label: `Arm Voice Relay for ${current.target.label}`,
+        dedupeKey: `voice-relay:arm:${current.target.targetId}`,
+        title: "Arm Voice Relay for this session",
+        message: "While armed, VR speech can be staged into this exact Agent composer. Every message still requires a separate confirmation inside VR.",
+        targetLabel: current.target.label,
+        confirmLabel: "Arm Voice Relay",
+        confirm: async () => {
+          await runConfirmedVoiceRelayHostAction(
+            "voice_relay_arm",
+            async () => {
+              const result = await client.requestArm(current.target!.targetId);
+              setVoiceRelayStatus(result.status);
+              return result;
+            },
+          );
+        },
+      });
+      return {
+        command: "request_voice_relay_arm",
+        phase: "awaiting_user_confirmation",
+        message: `Voice Relay arm was requested for ${current.target.label}.`,
+        required_user_action: action,
+      };
+    },
+    inspectXrReadiness: async () => {
+      const same = sameDeviceXrStateRef.current;
+      const headset = headsetXrStateRef.current;
+      const remote = headsetXrControlRef.current?.inspect();
+      return {
+        command: "inspect_xr_readiness",
+        phase: xrHostPhase(same.phase, headset.phase),
+        message: same.phase === "ready" || same.phase === "active"
+          ? same.message
+          : headset.message,
+        capabilities: {
+          same_device_webxr: same.phase !== "unsupported" && same.phase !== "error",
+          same_device_phase: same.phase,
+          remote_headset_phase: headset.phase,
+          remote_lifecycle_sequence: remote?.lifecycleSequence ?? 0,
+          remote_last_lifecycle_phase: remote?.lastLifecyclePhase ?? null,
+          render_profile: sameDeviceXrControlRef.current?.inspect().renderProfile ?? "balanced",
+        },
+      };
+    },
+    prepareXrSession: async (input) => {
+      const relayRequested = input.voice_relay === "if_configured";
+      const relayStatus = relayRequested
+        ? await voiceRelayClientRef.current!.inspect().catch(() => undefined)
+        : undefined;
+      const relayPairingAllowed = Boolean(relayStatus?.enabled && relayStatus.target);
+      const requestedMode = input.mode === "remote_headset" ? "remote_headset"
+        : input.mode === "same_device" ? "same_device"
+          : relayPairingAllowed
+            ? "remote_headset"
+          : sameDeviceXrStateRef.current.phase === "ready" || sameDeviceXrStateRef.current.phase === "active"
+            ? "same_device"
+            : "remote_headset";
+      if (requestedMode === "same_device") {
+        preparedXrModeRef.current = "same_device";
+        await headsetXrControlRef.current?.setVoiceRelayEnabled(false);
+        const same = sameDeviceXrControlRef.current?.inspect();
+        if (!same || same.phase === "unsupported") {
+          throw new AgentHostControlError("xr_unavailable", "Immersive WebXR is unavailable in this browser.");
+        }
+        if (input.render_profile === "validated_ultra" && same.renderProfile !== "ultra") {
+          throw new AgentHostControlError(
+            "ultra_not_validated",
+            "Windows Ultra can be selected only after the local physical benchmark passes.",
+          );
+        }
+        if (same.phase === "active") {
+          return {
+            command: "prepare_xr_session",
+            phase: "active",
+            message: "Immersive XR is already active.",
+            capabilities: {
+              mode: "same_device",
+              voice_relay_in_immersive: false,
+              voice_input: relayRequested
+                ? "Use the paired headset viewer for optional Voice Relay, or use a voice-capable Agent on the computer microphone."
+                : "Voice Relay is off; a voice-capable Agent may use the computer microphone directly.",
+            },
+          };
+        }
+        const action = presentHostAction({
+          kind: "enter_immersive_xr",
+          label: "Enter immersive XR",
+          dedupeKey: "xr:enter:same-device",
+          title: "Everything is ready for VR",
+          message: "The Agent prepared the current Workspace. Your click is required by WebXR before the headset display and sensors can start.",
+          confirmLabel: "Enter XR",
+          confirm: () => sameDeviceXrControlRef.current?.enterFromUserGesture(),
+        });
+        return {
+          command: "prepare_xr_session",
+          phase: "awaiting_user_gesture",
+          message: relayRequested
+            ? "The Workspace is ready. Same-device XR keeps Voice Relay off; use remote_headset for in-headset push-to-talk, or let a voice-capable Agent use the computer microphone."
+            : "The Workspace is ready; one trusted user gesture is required to enter immersive XR.",
+          required_user_action: action,
+          capabilities: {
+            mode: "same_device",
+            render_profile: same.renderProfile,
+            voice_relay_in_immersive: false,
+            microphone_permission: "not_requested_by_semaframe",
+          },
+        };
+      }
+      preparedXrModeRef.current = "remote_headset";
+      await headsetXrControlRef.current?.setVoiceRelayEnabled(relayPairingAllowed);
+      const prepared = await headsetXrControlRef.current?.prepare();
+      if (!prepared?.pairingReady) {
+        throw new AgentHostControlError("headset_projection_failed", prepared?.message ?? "The headset projection is unavailable.");
+      }
+      xrAgentLifecycleCursorRef.current = prepared.lifecycleSequence;
+      const action = presentHostAction({
+        kind: "open_headset_link",
+        label: "Open the one-time viewer in the headset",
+        dedupeKey: "xr:open:remote-headset",
+        title: "Open SemaFrame in your headset",
+        message: "The authoritative projection and assets are ready. Open the displayed one-time link in the headset, then press Enter XR there.",
+        confirmLabel: "Show pairing link",
+        confirm: () => headsetXrControlRef.current?.showPairing(),
+      });
+      return {
+        command: "prepare_xr_session",
+        phase: "pairing",
+        message: relayPairingAllowed
+          ? "The remote headset projection is prepared with optional Voice Relay. The headset browser requests microphone permission only after the user's first push-to-talk gesture."
+          : relayRequested
+            ? "The remote headset projection is prepared, but Voice Relay was not configured and remains unavailable for this pairing."
+            : "The remote headset projection is prepared with Voice Relay disabled and without exposing its one-time pairing secret to the Agent.",
+        required_user_action: action,
+        capabilities: {
+          mode: "remote_headset",
+          voice_relay_pairing_enabled: relayPairingAllowed,
+          voice_relay_armed: relayStatus?.armed === true,
+          microphone_permission: relayPairingAllowed ? "requested_on_first_user_ptt" : "not_requested",
+          requested_render_profile: input.render_profile === "validated_ultra" ? "validated_ultra" : "balanced",
+          render_profile_status: input.render_profile === "validated_ultra"
+            ? "requires_headset_user_benchmark"
+            : "balanced",
+          lifecycle_sequence: prepared.lifecycleSequence,
+        },
+      };
+    },
+    requestEnterXr: async () => {
+      if (preparedXrModeRef.current === "remote_headset") {
+        const remote = headsetXrStateRef.current;
+        const lifecycleSequence = headsetXrControlRef.current?.inspect().lifecycleSequence ?? 0;
+        xrAgentLifecycleCursorRef.current = lifecycleSequence;
+        if (remote.phase === "active") {
+          return {
+            command: "request_enter_xr",
+            phase: "active",
+            message: "The paired headset is already in immersive XR.",
+            capabilities: { lifecycle_sequence: lifecycleSequence },
+          };
+        }
+        headsetXrControlRef.current?.showPairing();
+        return {
+          command: "request_enter_xr",
+          phase: "awaiting_user_gesture",
+          message: "Open the prepared one-time viewer and press Enter XR in the headset. SemaFrame cannot synthesize that trusted WebXR gesture.",
+          capabilities: { lifecycle_sequence: lifecycleSequence },
+        };
+      }
+      const same = sameDeviceXrControlRef.current?.inspect();
+      if (same?.phase === "active") {
+        return { command: "request_enter_xr", phase: "active", message: "Immersive XR is already active." };
+      }
+      if (same?.phase === "ready") {
+        const action = presentHostAction({
+          kind: "enter_immersive_xr",
+          label: "Enter immersive XR",
+          dedupeKey: "xr:enter:same-device",
+          title: "Enter VR",
+          message: "The Agent completed preparation. WebXR requires your click to begin the immersive session.",
+          confirmLabel: "Enter XR",
+          confirm: () => sameDeviceXrControlRef.current?.enterFromUserGesture(),
+        });
+        return {
+          command: "request_enter_xr",
+          phase: "awaiting_user_gesture",
+          message: "Press Enter XR to continue.",
+          required_user_action: action,
+        };
+      }
+      headsetXrControlRef.current?.showPairing();
+      return {
+        command: "request_enter_xr",
+        phase: "awaiting_user_gesture",
+        message: "Press Enter XR in the paired headset browser.",
+      };
+    },
+    waitForXrSessionState: async (input, context) => {
+      const waitMs = typeof input.wait_ms === "number" && Number.isSafeInteger(input.wait_ms)
+        ? Math.max(0, Math.min(25_000, input.wait_ms))
+        : 20_000;
+      if (preparedXrModeRef.current === "remote_headset") {
+        const explicitCursor = typeof input.after_sequence === "number"
+          && Number.isSafeInteger(input.after_sequence)
+          && input.after_sequence >= 0
+          ? input.after_sequence
+          : undefined;
+        const cursor = explicitCursor ?? xrAgentLifecycleCursorRef.current;
+        const deadline = Date.now() + waitMs;
+        do {
+          const transition = headsetXrControlRef.current?.readLifecycleTransition(cursor);
+          if (transition) {
+            xrAgentLifecycleCursorRef.current = transition.sequence;
+            return {
+              command: "wait_for_xr_session_state",
+              phase: transition.phase,
+              message: "The paired headset reported the next authenticated XR lifecycle transition.",
+              capabilities: {
+                lifecycle_sequence: transition.sequence,
+                server_received_at_ms: transition.serverReceivedAtMs,
+              },
+            };
+          }
+          if (Date.now() >= deadline) break;
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+        } while (!context.signal.aborted);
+        if (context.signal.aborted) throw context.signal.reason ?? new DOMException("Cancelled", "AbortError");
+        const inspected = headsetXrControlRef.current?.inspect();
+        return {
+          command: "wait_for_xr_session_state",
+          phase: headsetXrStateRef.current.phase,
+          message: "No paired-headset lifecycle transition occurred after the requested sequence before the wait expired.",
+          capabilities: { lifecycle_sequence: inspected?.lifecycleSequence ?? cursor },
+        };
+      }
+      const initial = xrHostPhase(sameDeviceXrStateRef.current.phase, headsetXrStateRef.current.phase);
+      const deadline = Date.now() + waitMs;
+      while (!context.signal.aborted && Date.now() < deadline) {
+        const next = xrHostPhase(sameDeviceXrStateRef.current.phase, headsetXrStateRef.current.phase);
+        if (next !== initial || next === "active" || next === "error") {
+          return { command: "wait_for_xr_session_state", phase: next, message: "XR lifecycle changed." };
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      }
+      if (context.signal.aborted) throw context.signal.reason ?? new DOMException("Cancelled", "AbortError");
+      return { command: "wait_for_xr_session_state", phase: initial, message: "No XR lifecycle change occurred before the wait expired." };
+    },
+    requestExitXr: async () => {
+      if (preparedXrModeRef.current === "remote_headset"
+        || headsetXrStateRef.current.phase === "active") {
+        const lifecycleSequence = headsetXrControlRef.current?.inspect().lifecycleSequence ?? 0;
+        xrAgentLifecycleCursorRef.current = lifecycleSequence;
+        const requested = await headsetXrControlRef.current?.requestExit();
+        if (requested) {
+          return {
+            command: "request_exit_xr",
+            phase: "awaiting_user_gesture",
+            message: "A visible Exit XR request was sent to the paired headset. The user must activate it there; the Agent cannot silently end immersion.",
+            capabilities: { lifecycle_sequence: lifecycleSequence },
+          };
+        }
+        return {
+          command: "request_exit_xr",
+          phase: xrHostPhase(sameDeviceXrStateRef.current.phase, headsetXrStateRef.current.phase),
+          message: "No active paired-headset immersive session is reporting live context.",
+          capabilities: { lifecycle_sequence: lifecycleSequence },
+        };
+      }
+      const same = sameDeviceXrControlRef.current?.inspect();
+      if (same?.phase !== "active") {
+        return { command: "request_exit_xr", phase: xrHostPhase(sameDeviceXrStateRef.current.phase, headsetXrStateRef.current.phase), message: "No same-device immersive XR session is active." };
+      }
+      const action = presentHostAction({
+        kind: "exit_immersive_xr",
+        label: "Exit immersive XR",
+        dedupeKey: "xr:exit:same-device",
+        title: "Exit VR",
+        message: "The Agent requested that the current immersive session end. The Workspace will remain open and unchanged.",
+        confirmLabel: "Exit XR",
+        confirm: () => sameDeviceXrControlRef.current?.exitFromUserGesture(),
+      });
+      return {
+        command: "request_exit_xr",
+        phase: "awaiting_user_gesture",
+        message: "XR exit awaits user confirmation.",
+        required_user_action: action,
+      };
+    },
+    getLiveXrContext: async (input) => {
+      const spatial = hybridCanvasRef.current?.getRenderer()?.captureXRSpatialContext();
+      const state = workspaceStoreRef.current?.getState();
+      const maximumAgeMs = typeof input.maximum_age_ms === "number" ? input.maximum_age_ms : 1_000;
+      if (!state) throw new AgentHostControlError("xr_context_unavailable", "The Workspace is unavailable.");
+      const now = Date.now();
+      let context: XRContextEnvelope | undefined;
+      let source: "same_device" | "remote_headset" | undefined;
+      let ageMs = 0;
+      if (spatial && hybridCanvasRef.current?.isXRPresenting()) {
+        const sameDeviceContext = createXRContextEnvelope({
+          source: "immersive-xr",
+          workspaceId: state.workspaceId,
+          workspaceRevision: state.revision,
+          capturedAtMs: now,
+          ...spatial,
+          ...(selectedComponentId ? { selectedComponentId } : {}),
+        });
+        if ((sameDeviceContext.tracking.state === "tracked" || sameDeviceContext.tracking.state === "limited")
+          && sameDeviceContext.tracking.sourceAgeMs <= maximumAgeMs) {
+          context = sameDeviceContext;
+          source = "same_device";
+          ageMs = sameDeviceContext.tracking.sourceAgeMs;
+        }
+      } else {
+        const remote = remoteXrContextRef.current;
+        if (remote && isRemoteXrContextFresh({
+          contextWorkspaceId: remote.context.workspaceId,
+          contextWorkspaceRevision: remote.context.workspaceRevision,
+          expectedWorkspaceId: state.workspaceId,
+          expectedWorkspaceRevision: state.revision,
+          receivedAtMs: remote.receivedAtMs,
+          nowMs: now,
+          relayQueueAgeMs: remote.relayQueueAgeMs,
+          sourceAgeMs: remote.context.tracking.sourceAgeMs,
+          trackingState: remote.context.tracking.state,
+          maximumAgeMs,
+        })) {
+          context = remote.context;
+          source = "remote_headset";
+          ageMs = remoteXrContextKnownAgeMs({
+            receivedAtMs: remote.receivedAtMs,
+            nowMs: now,
+            relayQueueAgeMs: remote.relayQueueAgeMs,
+            sourceAgeMs: remote.context.tracking.sourceAgeMs,
+          })!;
+        }
+      }
+      if (!context || !source) {
+        throw new AgentHostControlError(
+          "xr_context_unavailable",
+          "No fresh revision-bound immersive XR context is available from this browser or a paired headset.",
+        );
+      }
+      return {
+        command: "get_live_xr_context",
+        phase: "active",
+        message: `Fresh revision-bound XR context captured from ${source === "same_device" ? "this browser" : "the paired headset"}.`,
+        source,
+        maximum_age_ms: maximumAgeMs,
+        age_ms: ageMs,
+        context,
+      };
+    },
+  }), [presentHostAction, runConfirmedVoiceRelayHostAction, selectedComponentId]);
+
   const handleAgentCommand = useCallback<AgentGatewayCommandHandler>(async (name, input, context) => {
     if (context.signal.aborted) throw new DOMException("Agent command cancelled", "AbortError");
+    if (agentHostControl.handles(name)) {
+      try {
+        return await agentHostControl.handle(name, input, context);
+      } catch (cause) {
+        if (cause instanceof AgentHostControlError || cause instanceof HostActionLedgerError) {
+          throw new AgentGatewayCommandError(
+            cause.code,
+            cause.message,
+            cause instanceof AgentHostControlError ? cause.details : undefined,
+          );
+        }
+        throw cause;
+      }
+    }
     if (name === "complete_workspace_reconstruction_asset") {
       if (!input || typeof input !== "object" || Array.isArray(input)) {
         throw new AgentGatewayCommandError("invalid_request", "The reconstructed asset handoff is invalid.");
@@ -3018,7 +3980,13 @@ export default function App() {
       }
     }
     return result;
-  }, [completeRealityAssetImport, setEntries]);
+  }, [agentHostControl, completeRealityAssetImport, setEntries]);
+  const liveAgentCommandHandlerRef = useRef<AgentGatewayCommandHandler>(handleAgentCommand);
+  liveAgentCommandHandlerRef.current = handleAgentCommand;
+  const stableAgentCommandHandler = useCallback<AgentGatewayCommandHandler>(
+    (name, input, context) => liveAgentCommandHandlerRef.current(name, input, context),
+    [],
+  );
 
   const startAgentBridge = useCallback((client: AgentGatewayClient) => {
     void client.start().catch((error) => {
@@ -3064,17 +4032,33 @@ export default function App() {
     if (!AGENT_CONTROL_ENDPOINT) return;
     let cancelled = false;
     const client = new AgentGatewayClient({
-      handler: handleAgentCommand,
+      handler: stableAgentCommandHandler,
       clientInstanceId: agentBrowserInstanceIdRef.current,
       onStatus: (status) => {
-        if (!cancelled) setAgentStatus(status);
+        if (cancelled) return;
+        const live = status === "connected" || status === "applying";
+        if (live) agentConnectionWasLiveRef.current = true;
+        else if (agentConnectionWasLiveRef.current) {
+          agentConnectionWasLiveRef.current = false;
+          invalidatePendingHostAction();
+          void bestEffortDisarmVoiceRelay();
+        }
+        setAgentStatus(status);
       },
       onConfig: (config) => {
         if (cancelled) return;
+        const nextTrustIdentity = agentConfigTrustIdentity(config);
+        if (agentTrustIdentityRef.current !== undefined
+          && agentTrustIdentityRef.current !== nextTrustIdentity) {
+          invalidatePendingHostAction();
+        }
+        agentTrustIdentityRef.current = nextTrustIdentity;
         setAgentConfig(config);
         setAgentEnabled(config.enabled);
         if (config.offerStatus !== "approval_granted") setApprovedAgentClaim(undefined);
         if (!config.enabled) {
+          agentConnectionWasLiveRef.current = false;
+          void bestEffortDisarmVoiceRelay();
           allowAgentDestructiveRef.current = false;
           setAllowAgentDestructive(false);
           setAgentSessionReady(false);
@@ -3111,11 +4095,15 @@ export default function App() {
     });
     return () => {
       cancelled = true;
+      agentTrustIdentityRef.current = undefined;
+      invalidatePendingHostAction(false);
+      agentConnectionWasLiveRef.current = false;
+      void bestEffortDisarmVoiceRelay();
       workspaceAgentControllerRef.current?.revokeAll();
       client.stop("disconnected");
       if (agentGatewayRef.current === client) agentGatewayRef.current = null;
     };
-  }, [claimAndStartAgentBridge, handleAgentCommand]);
+  }, [bestEffortDisarmVoiceRelay, claimAndStartAgentBridge, invalidatePendingHostAction, stableAgentCommandHandler]);
 
   const enableAgentConnection = useCallback(async (allowDeleteAndClear: boolean) => {
     const client = agentGatewayRef.current;
@@ -3138,6 +4126,7 @@ export default function App() {
     const client = agentGatewayRef.current;
     if (busy) throw new Error("Wait for the current workspace change to finish.");
     revokeAgentContexts("control_disabled");
+    voiceRelayHostActionTokenRef.current = undefined;
     let revokeWarning = false;
     if (client) {
       try {
@@ -3157,12 +4146,14 @@ export default function App() {
     setAgentHistoryOpen(false);
     setAgentManageOpen(false);
     setAgentBrowserOccupied(false);
+    void voiceRelayClientRef.current?.disarm().catch(() => undefined);
     notice(revokeWarning
       ? "Agent control was disabled locally, but the gateway could not confirm remote revocation."
       : "Agent connection disabled. Reconnect to return to the preserved Workspace.", revokeWarning ? "warning" : "success");
   }, [busy, notice, revokeAgentContexts]);
 
   const leaveOccupiedAgentConnection = useCallback(() => {
+    revokeAgentContexts("occupied_connection_released");
     agentGatewayRef.current?.stop("disconnected");
     setAgentBrowserOccupied(false);
     setAgentError(undefined);
@@ -3170,7 +4161,7 @@ export default function App() {
     setAgentHistoryOpen(false);
     setAgentManageOpen(false);
     notice("This tab released the Agent connection. External control continues in the other tab.", "success");
-  }, [notice]);
+  }, [notice, revokeAgentContexts]);
 
   const revokeAgentPairing = useCallback(async () => {
     const client = agentGatewayRef.current;
@@ -3196,10 +4187,11 @@ export default function App() {
 
   const changeAgentPermission = useCallback((value: boolean) => {
     if (busy) throw new Error("Wait for the current workspace change to finish.");
+    if (allowAgentDestructiveRef.current === value) return;
     allowAgentDestructiveRef.current = value;
     setAllowAgentDestructive(value);
+    revokeAgentContexts("permission_policy_changed");
     if (agentSessionReady) {
-      revokeAgentContexts("permission_policy_changed");
       setAgentSessionReady(false);
       setAgentHistoryOpen(false);
       setAgentManageOpen(false);
@@ -3329,6 +4321,32 @@ export default function App() {
           ? "disconnected"
             : "waiting";
   const workspaceSnapshot = useMemo(() => toRenderSnapshot(workspace), [workspace]);
+  const xrWorldPanels = useMemo(() => {
+    const projection = toXrWorkspaceProjection(workspaceSnapshot);
+    return presentXrWorldPanels(projection, deriveXrViewerPanelModels(projection));
+  }, [workspaceSnapshot]);
+
+  useEffect(() => {
+    if (!externalControlActive) return;
+    hybridCanvasRef.current?.setXRWorldPanels?.(xrWorldPanels, workspaceSnapshot.revision);
+  }, [externalControlActive, workspaceRenderGeneration, workspaceSnapshot.revision, xrWorldPanels]);
+
+  const handleSameDeviceXrPanelAction = useCallback((event: ThreeRendererXRPanelAction) => {
+    if (event.workspaceRevision !== workspaceSnapshot.revision
+      || event.action.expectedWorkspaceRevision !== workspaceSnapshot.revision) {
+      notice("The XR panel action was rejected because its Workspace revision is stale.", "warning");
+      return;
+    }
+    if (event.action.confirmation === "required" && !globalThis.confirm(
+      `Allow the XR panel to invoke “${event.action.actionName}” on “${event.action.targetComponentId}”?`,
+    )) return;
+    invokeWorkspaceAction({
+      componentId: event.action.targetComponentId,
+      action: event.action.actionName,
+      input: event.action.input,
+    });
+  }, [invokeWorkspaceAction, notice, workspaceSnapshot.revision]);
+
   const workspaceRenderCommit = useMemo(() => {
     const command = workspaceStoreRef.current?.getCommandHistory()
       .filter((candidate) => candidate.resultingWorkspaceRevision === workspace.revision)
@@ -3667,6 +4685,61 @@ export default function App() {
         onResetView={() => hybridCanvasRef.current?.resetView()}
         onZoomIn={() => hybridCanvasRef.current?.zoomIn()}
         onZoomOut={() => hybridCanvasRef.current?.zoomOut()}
+        xrControl={<>
+          <button
+            type="button"
+            className={`viewport-xr-toggle${voiceRelayStatus?.armed ? " is-active" : ""}`}
+            disabled={agentManageOpen}
+            aria-label="Configure optional Voice Relay"
+            title="Configure optional voice for a text-only Agent"
+            aria-pressed={voiceRelayStatus?.armed ?? false}
+            onClick={() => {
+              setVoiceRelaySettingsOpen(true);
+              void inspectVoiceRelaySettings().catch(() => undefined);
+            }}
+          >
+            <Mic2 size={17} aria-hidden="true" />
+          </button>
+          <XRWorkspaceButton
+            ref={sameDeviceXrControlRef}
+            getCanvas={() => hybridCanvasRef.current}
+            disabled={agentManageOpen}
+            onPhaseChange={(phase, message) => {
+              sameDeviceXrStateRef.current = { phase, message };
+              if (phase === "active") notice("Immersive XR is active. The Workspace remains browser-authoritative.", "success");
+              if (phase === "error") notice(message, "warning");
+            }}
+          />
+          <XRHeadsetSessionButton
+            ref={headsetXrControlRef}
+            snapshot={workspaceSnapshot}
+            registryIdentity={DEFAULT_COMPONENT_REGISTRY.digest}
+            voiceRelayEnabled={Boolean(voiceRelayStatus?.enabled && voiceRelayStatus.target)}
+            disabled={agentManageOpen}
+            openRealityAsset={openRealityAsset}
+            onSelect={setSelectedComponentId}
+            onActivate={(componentId) => activateWorkspaceComponent({ componentId })}
+            onPanelAction={(action) => invokeWorkspaceAction({
+              componentId: action.targetComponentId,
+              action: action.actionName,
+              input: action.input,
+            })}
+            onSpatialContext={(context, source) => {
+              remoteXrContextRef.current = Object.freeze({
+                context,
+                receivedAtMs: Date.now(),
+                relayServerReceivedAtMs: source.serverReceivedAtMs,
+                relayQueueAgeMs: source.serverQueueAgeMs,
+              });
+            }}
+            onPhaseChange={(phase, message) => {
+              headsetXrStateRef.current = { phase, message };
+              if (phase !== "active") remoteXrContextRef.current = undefined;
+              if (phase === "active") notice("The paired headset is reporting live immersive context.", "success");
+              if (phase === "error") notice(message, "warning");
+            }}
+          />
+        </>}
       >
         <HybridWorkspaceCanvas
           key={`workspace-canvas-${workspaceRenderGeneration}-${realityRenderGeneration}`}
@@ -3679,6 +4752,8 @@ export default function App() {
           onActivate={activateWorkspaceComponent}
           onRealityMeasurement={handleRealityMeasurement}
           onAnimationComplete={completeWorkspaceAnimation}
+          onXRPanelAction={handleSameDeviceXrPanelAction}
+          onXRPanelWarning={(warning) => notice(warning.message, "warning")}
           onAction={invokeWorkspaceAction}
           onCommitPlacement={commitWorkspacePlacement}
           getResizePolicy={workspaceResizePolicy}
@@ -3690,6 +4765,7 @@ export default function App() {
           onRendererReady={() => {
             const container = hybridCanvasRef.current?.getContainer();
             if (container) container.dataset.sceneEngineReady = "true";
+            hybridCanvasRef.current?.setXRWorldPanels?.(xrWorldPanels, workspaceSnapshot.revision);
           }}
         />
         <WorkspaceChrome
@@ -3701,6 +4777,10 @@ export default function App() {
           bindingTargets={workspaceBindingTargets}
           bindingDiagnostics={bindingDiagnostics}
           disabled={busy}
+          panelState={workspacePanel}
+          onPanelStateChange={setWorkspacePanel}
+          configureRequestId={workspaceConfigureRequestId}
+          onConfigureRequestChange={setWorkspaceConfigureRequestId}
           onCreate={createWorkspaceComponent}
           onUpdate={updateWorkspaceComponent}
           onAction={invokeWorkspaceAction}
@@ -3775,6 +4855,20 @@ export default function App() {
     <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />
     <ConfirmDialog open={confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
     <ConfirmDialog open={confirm === "open"} title="Open another project?" detail="Your current project has unsaved changes. Opening another file will replace it in this window." confirmLabel="Open project" tone="danger" onCancel={() => { setConfirm(null); setPendingFile(null); }} onConfirm={() => { const file = pendingFile; setConfirm(null); setPendingFile(null); if (file) void loadProject(file); }} />
+    <VoiceRelaySettingsDialog
+      open={voiceRelaySettingsOpen}
+      status={voiceRelayStatus}
+      preparation={voiceRelayPreparation}
+      diagnostics={voiceRelayDiagnostics}
+      error={voiceRelaySettingsError}
+      onClose={() => setVoiceRelaySettingsOpen(false)}
+      onPrepare={prepareVoiceRelaySettings}
+      onConfigureTarget={configureVoiceRelayTarget}
+      onRunDiagnostics={diagnoseVoiceRelaySettings}
+      onArm={armVoiceRelaySettings}
+      onDisarm={disarmVoiceRelaySettings}
+    />
+    <HostActionPrompt request={hostActionPrompt} onConfirm={confirmHostAction} onCancel={cancelHostAction} />
     <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>
     <div className="sr-status" role={status === "failed" ? "alert" : "status"} aria-live={status === "failed" ? "assertive" : "polite"} aria-atomic="true">{statusLabel(status)}</div>
   </div>

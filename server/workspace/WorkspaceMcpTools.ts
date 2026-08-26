@@ -8,6 +8,7 @@ import * as z from "zod/v4";
 import {
   WORKSPACE_AGENT_GUIDE,
   WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+  WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT,
   WORKSPACE_PERMISSION_SCOPES,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
@@ -464,7 +465,9 @@ export function registerWorkspaceTools(
       inputSchema: z.strictObject({
         client_id: z.string().min(1).max(128).optional(),
         client_name: z.string().min(1).max(160).optional(),
-        requested_scopes: z.array(z.enum(WORKSPACE_PERMISSION_SCOPES)).max(20).optional(),
+        requested_scopes: z.array(z.enum(WORKSPACE_PERMISSION_SCOPES))
+          .max(WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT)
+          .optional(),
         // Transport-only claim proof for the public connection offer. The
         // gateway consumes it before dispatch and never forwards it to the
         // browser controller or canonical instruction DTO.

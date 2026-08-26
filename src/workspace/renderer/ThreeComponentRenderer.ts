@@ -28,7 +28,25 @@ import {
   parseCadPartDefinition,
 } from "../modeling/cad";
 import type { ParametricRenderMaterial } from "../../renderer/sceneRenderTypes";
-import { ThreeRenderer } from "../../renderer/ThreeRenderer";
+import {
+  ThreeRenderer,
+  type ThreeRendererXRConfig,
+  type ThreeRendererXRSpatialPinEvent,
+  type ThreeRendererOptions,
+} from "../../renderer/ThreeRenderer";
+import type {
+  ThreeRendererXRPanelAction,
+  ThreeRendererXRPanelWarning,
+  ThreeRendererXRPushToTalkEvent,
+  ThreeRendererXRVoiceFeedback,
+  ThreeRendererXRVoiceHapticCue,
+  ThreeRendererXRWorldPanel,
+} from "../../renderer/xr";
+import type { XRSpatialContextSnapshot } from "../../xr/client";
+import type {
+  MaterializationMode,
+  RenderPresentationContext,
+} from "../../renderer/materialization";
 import type { RealityMeasurementEvent } from "../../renderer/reality";
 import {
   computeSceneDelta,
@@ -36,10 +54,14 @@ import {
   createInitialScene,
 } from "../../renderer/sceneRenderState";
 import { isSpatialRenderTypeId } from "../spatial/spatialComponentKinds";
+import { parseSpatialCollisionConfig } from "../spatial/spatialIndex";
+import {
+  DEFAULT_SPATIAL_COLLISION,
+  type SpatialCollisionConfig,
+} from "../spatial/spatialTypes";
 import type { RealityAssetDescriptor } from "../assets";
 import {
   type AnimationCompletionRequest,
-  isRecord,
   type CameraProjectionState,
   type WorkspacePlacement,
   type WorkspaceRenderComponent,
@@ -55,6 +77,7 @@ export interface ThreeRendererPort {
     delta: SceneDelta,
     state?: Readonly<SceneState>,
     operations?: readonly SceneOperation[],
+    presentation?: RenderPresentationContext,
   ): Promise<void>;
   resize(): void;
   dispose(): void;
@@ -66,6 +89,16 @@ export interface ThreeRendererPort {
   frameAll?(): void;
   resetView?(): void;
   zoomBy?(magnification: number): void;
+  enterXR?(session: XRSession, config?: ThreeRendererXRConfig): Promise<void>;
+  exitXR?(): Promise<void>;
+  isXRPresenting?(): boolean;
+  captureXRSpatialContext?(): XRSpatialContextSnapshot | undefined;
+  setXRWorldPanels?(panels: readonly ThreeRendererXRWorldPanel[], workspaceRevision?: number): void;
+  setXRPanelActionHandler?(handler: ThreeComponentRendererOptions["onXRPanelAction"]): void;
+  setXRPanelWarningHandler?(handler: ThreeComponentRendererOptions["onXRPanelWarning"]): void;
+  setXRVoiceFeedback?(feedback: ThreeRendererXRVoiceFeedback): void;
+  setMaterializationMode?(mode: MaterializationMode): void;
+  pulseXRVoiceHaptics?(cue: ThreeRendererXRVoiceHapticCue): void;
 }
 
 export type ThreeComponentRendererOptions = Readonly<{
@@ -74,13 +107,23 @@ export type ThreeComponentRendererOptions = Readonly<{
   onActivate?: (componentId: string) => void;
   onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (request: AnimationCompletionRequest) => void;
+  onXRPanelAction?: (event: ThreeRendererXRPanelAction) => void;
+  onXRPanelWarning?: (warning: ThreeRendererXRPanelWarning) => void;
+  onXRPushToTalk?: (event: ThreeRendererXRPushToTalkEvent) => void;
+  onXRSpatialPinChange?: (event: ThreeRendererXRSpatialPinEvent) => void;
   reducedMotion?: boolean;
+  materializationMode?: MaterializationMode;
+  materializationMaxProxyInstances?: number;
+  pixelRatioCap?: number;
+  shadows?: boolean;
+  expensiveLighting?: boolean;
   /** Reads immutable RealityAsset bytes from the host AssetVault. */
   openRealityAsset?: (
     assetId: string,
     digest: string,
     signal?: AbortSignal,
   ) => Promise<Blob | Uint8Array | ArrayBuffer | undefined>;
+  onStatus?: ThreeRendererOptions["onStatus"];
 }>;
 
 /** Adapts Workspace spatial components to the existing deterministic ThreeRenderer. */
@@ -105,7 +148,17 @@ export class ThreeComponentRenderer {
         clip: completion.clip,
         generation: completion.generation,
       }),
+      onXRPanelAction: options.onXRPanelAction,
+      onXRPanelWarning: options.onXRPanelWarning,
+      onXRPushToTalk: options.onXRPushToTalk,
+      onXRSpatialPinChange: options.onXRSpatialPinChange,
+      onStatus: options.onStatus,
       reducedMotion: options.reducedMotion,
+      materializationMode: options.materializationMode,
+      materializationMaxProxyInstances: options.materializationMaxProxyInstances,
+      pixelRatioCap: options.pixelRatioCap,
+      shadows: options.shadows,
+      expensiveLighting: options.expensiveLighting,
       openRealityAsset: options.openRealityAsset,
     });
   }
@@ -133,6 +186,7 @@ export class ThreeComponentRenderer {
   async render(
     snapshot: WorkspaceRenderSnapshot,
     operations: readonly WorkspaceOperation[] = [],
+    presentation?: RenderPresentationContext,
   ): Promise<void> {
     if (!this.initialized) throw new Error("ThreeComponentRenderer must be initialized before render().");
     const scene = workspaceToSceneState(snapshot);
@@ -146,6 +200,7 @@ export class ThreeComponentRenderer {
           computeSceneDelta(previous, scene),
           scene,
           workspaceOperationsToSceneOperations(operations, snapshot),
+          presentation,
         );
       }
       if (this.initialized && lifecycleToken === this.lifecycleToken) this.currentScene = scene;
@@ -219,6 +274,52 @@ export class ThreeComponentRenderer {
     this.renderer.zoomBy?.(magnification);
   }
 
+  async enterXR(session: XRSession, config?: ThreeRendererXRConfig): Promise<void> {
+    if (!this.initialized || !this.renderer.enterXR) {
+      throw new Error("The active spatial renderer does not support WebXR");
+    }
+    await this.renderer.enterXR(session, config);
+  }
+
+  async exitXR(): Promise<void> {
+    await this.renderer.exitXR?.();
+  }
+
+  isXRPresenting(): boolean {
+    return this.renderer.isXRPresenting?.() ?? false;
+  }
+
+  captureXRSpatialContext(): XRSpatialContextSnapshot | undefined {
+    return this.renderer.captureXRSpatialContext?.();
+  }
+
+  setXRWorldPanels(
+    panels: readonly ThreeRendererXRWorldPanel[],
+    workspaceRevision?: number,
+  ): void {
+    this.renderer.setXRWorldPanels?.(panels, workspaceRevision);
+  }
+
+  setXRPanelActionHandler(handler: ThreeComponentRendererOptions["onXRPanelAction"]): void {
+    this.renderer.setXRPanelActionHandler?.(handler);
+  }
+
+  setXRPanelWarningHandler(handler: ThreeComponentRendererOptions["onXRPanelWarning"]): void {
+    this.renderer.setXRPanelWarningHandler?.(handler);
+  }
+
+  setXRVoiceFeedback(feedback: ThreeRendererXRVoiceFeedback): void {
+    this.renderer.setXRVoiceFeedback?.(feedback);
+  }
+
+  setMaterializationMode(mode: MaterializationMode): void {
+    this.renderer.setMaterializationMode?.(mode);
+  }
+
+  pulseXRVoiceHaptics(cue: ThreeRendererXRVoiceHapticCue): void {
+    this.renderer.pulseXRVoiceHaptics?.(cue);
+  }
+
   dispose(): void {
     this.lifecycleToken += 1;
     this.initialized = false;
@@ -226,6 +327,10 @@ export class ThreeComponentRenderer {
     this.renderer.dispose();
     this.currentScene = null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
@@ -346,6 +451,7 @@ function toEntity(
   realityAssets: ReadonlyMap<string, RealityAssetDescriptor>,
 ): EntityState {
   const visualEffects = component.visualEffects ?? DEFAULT_COMPONENT_VISUAL_EFFECTS;
+  const collision = renderCollision(component.props);
   const placement = component.placement;
   if (placement.space !== "world3d") throw new Error("Spatial entities require world3d placement.");
   if (component.type.typeId === "model-assembly") {
@@ -368,7 +474,13 @@ function toEntity(
         glowSpread: visualEffects.glow.spread,
       },
       state: { type: "generic", properties: {} },
-      renderGeometry: { kind: "assembly" },
+      renderGeometry: {
+        kind: "assembly",
+        collisionPolicy: component.props.collisionPolicy === "all" || component.props.collisionPolicy === "none"
+          ? component.props.collisionPolicy
+          : "external_only",
+      },
+      ...(collision ? { collision } : {}),
       ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
       tags: [...component.tags],
       locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
@@ -405,6 +517,7 @@ function toEntity(
         castShadow: component.props.castShadow !== false,
         receiveShadow: component.props.receiveShadow !== false,
       },
+      ...(collision ? { collision } : {}),
       ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
       tags: [...component.tags],
       locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
@@ -448,6 +561,7 @@ function toEntity(
         castShadow: component.props.castShadow !== false,
         receiveShadow: component.props.receiveShadow !== false,
       },
+      ...(collision ? { collision } : {}),
       ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
       tags: [...component.tags],
       locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
@@ -504,6 +618,7 @@ function toEntity(
         quality: realityQuality(component.props.quality),
         engineeringAuthority: "visual_only",
       },
+      ...(collision ? { collision } : {}),
       ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
       tags: [...component.tags],
       locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
@@ -537,11 +652,20 @@ function toEntity(
       component.durableState.playback,
       supportsDurablePlayback(component.type.version),
     ),
+    ...(collision ? { collision } : {}),
     ...(component.parentId && spatialIds.has(component.parentId) ? { parentId: component.parentId } : {}),
     ...(typeof component.props.parentSocket === "string" ? { parentSocket: component.props.parentSocket } : {}),
     tags: [...component.tags],
     locked: Boolean(component.locks.placement || component.locks.props || component.locks.deletion),
   };
+}
+
+function renderCollision(props: Readonly<Record<string, unknown>>): SpatialCollisionConfig | undefined {
+  if (props.collision === undefined) return undefined;
+  // The Store rejects malformed collision state. A renderer may still receive
+  // an injected/legacy projection, so a declared but malformed collider is
+  // conservatively treated as a solid asset envelope instead of disappearing.
+  return parseSpatialCollisionConfig(props.collision) ?? DEFAULT_SPATIAL_COLLISION;
 }
 
 function realityAssetReference(value: unknown): { assetId: string; digest: string } | undefined {

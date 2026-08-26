@@ -22,7 +22,9 @@ const expectedTools = [
   "cancel_workspace_photo_reconstruction",
   "complete_workspace_asset_import",
   "finalize_workspace_photo_reconstruction",
+  "get_live_xr_context",
   "get_workspace_instructions",
+  "inspect_voice_relay",
   "inspect_workspace",
   "inspect_workspace_asset",
   "inspect_workspace_component",
@@ -30,15 +32,23 @@ const expectedTools = [
   "inspect_workspace_photo_reconstruction",
   "inspect_workspace_physics",
   "inspect_workspace_space",
+  "inspect_xr_readiness",
+  "prepare_voice_relay_setup",
+  "prepare_xr_session",
   "query_spatial_placement",
   "query_stable_placement",
   "read_workspace_events",
   "read_workspace_resource_snapshot",
   "redo_workspace_batch",
+  "request_enter_xr",
+  "request_exit_xr",
+  "request_voice_relay_arm",
+  "run_voice_relay_diagnostics",
   "simulate_workspace_physics",
   "start_workspace_photo_reconstruction",
   "submit_workspace_batch",
   "undo_workspace_batch",
+  "wait_for_xr_session_state",
 ];
 
 const gateways: AgentGateway[] = [];
@@ -160,10 +170,43 @@ describe("Agent MCP connection offers", () => {
       name: "semaframe-workspace-engine",
       version: "1.9.0",
     });
-    expect(expectedTools).toHaveLength(24);
+    expect(expectedTools).toHaveLength(34);
     expect(tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     expect(tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
     expect(tools.every((tool) => Boolean(tool.outputSchema))).toBe(true);
+
+    const liveXrTool = tools.find((tool) => tool.name === "get_live_xr_context");
+    expect(liveXrTool?.title).toBe("Read live XR user state");
+    expect(liveXrTool?.description).toContain("every tracked input");
+    expect(liveXrTool?.description).toContain("conservative end-to-end age");
+    const liveXrOutput = JSON.stringify(liveXrTool?.outputSchema);
+    for (const discoverableField of [
+      "sampleSequence",
+      "tracking",
+      "headPose",
+      "playerCapsule",
+      "trackedInputs",
+      "primaryInputSourceId",
+      "activeInputSourceId",
+      "gripPose",
+      "rayHit",
+      "actions",
+      "selectedComponentId",
+      "spatialPin",
+      "sourceAgeMs",
+      "sourceTimestampBasis",
+      "age_ms",
+    ]) {
+      expect(liveXrOutput).toContain(`\"${discoverableField}\"`);
+    }
+    expect(liveXrOutput).toContain("additionalProperties");
+    expect(liveXrOutput).toContain("already includes renderer sourceAgeMs");
+
+    const ordinaryHostOutput = JSON.stringify(
+      tools.find((tool) => tool.name === "inspect_xr_readiness")?.outputSchema,
+    );
+    expect(ordinaryHostOutput).not.toContain("sampleSequence");
+    expect(ordinaryHostOutput).not.toContain("trackedInputs");
   });
 
   it("publishes a secret-free document and requires explicit approval before releasing instructions", async () => {

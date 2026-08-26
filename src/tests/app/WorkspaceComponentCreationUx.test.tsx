@@ -2,7 +2,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkspaceChrome, WorkspaceInspector, type WorkspaceComponentUpdateRequest } from "../../app/components/workspace";
+import {
+  WorkspaceChrome,
+  WorkspaceInspector,
+  type WorkspaceComponentUpdateRequest,
+  type WorkspacePanel,
+} from "../../app/components/workspace";
 import type { WorkspaceRenderComponent } from "../../workspace/renderer";
 
 afterEach(cleanup);
@@ -37,7 +42,11 @@ describe("human component creation", () => {
       const [selected, setSelected] = useState<WorkspaceRenderComponent>();
       const create = (typeId: string) => {
         onCreate(typeId);
-        if (typeId === "video-player") setSelected(videoComponent());
+        if (typeId === "video-player") {
+          setSelected(videoComponent());
+          return "CMP_VIDEO";
+        }
+        return undefined;
       };
       const update = (request: WorkspaceComponentUpdateRequest) => {
         onUpdate(request);
@@ -172,6 +181,204 @@ describe("human component creation", () => {
     />);
     expect(screen.getByRole("button", { name: "Upgrade component interactions" })).toBeDisabled();
     expect(screen.getByText(/Unlock properties and actions/i)).toBeVisible();
+  });
+
+  it("opens configure-on-create only after an asynchronous parent selection arrives", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [selected, setSelected] = useState<WorkspaceRenderComponent>();
+      return <WorkspaceChrome
+        catalog={[{
+          typeId: "video-player",
+          displayName: "Video Player",
+          description: "Play approved video",
+          placements: ["viewport"],
+          trustTier: "builtin",
+          configureOnCreate: true,
+        }]}
+        selected={selected}
+        sources={[]}
+        onCreate={() => {
+          window.setTimeout(() => setSelected(videoComponent()), 20);
+          return "CMP_VIDEO";
+        }}
+        onUpdate={vi.fn()}
+        onAction={vi.fn()}
+        onCreateShowcase={vi.fn()}
+      />;
+    }
+
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Components" }));
+    await user.click(screen.getByRole("button", { name: /Video Player.*Play approved video/i }));
+
+    expect(await screen.findByRole("heading", { name: "Player setup" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "inspector panel" })).toBeVisible();
+  });
+
+  it("restores configure-on-create after a transient busy pulse but honors an explicit close", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [selected, setSelected] = useState<WorkspaceRenderComponent>();
+      const [disabled, setDisabled] = useState(false);
+      return <>
+        <button type="button" onClick={() => setDisabled((current) => !current)}>Toggle busy</button>
+        <WorkspaceChrome
+          catalog={[{
+            typeId: "video-player",
+            displayName: "Video Player",
+            description: "Play approved video",
+            placements: ["viewport"],
+            trustTier: "builtin",
+            configureOnCreate: true,
+          }]}
+          selected={selected}
+          sources={[]}
+          disabled={disabled}
+          onCreate={() => {
+            setSelected(videoComponent());
+            return "CMP_VIDEO";
+          }}
+          onUpdate={vi.fn()}
+          onAction={vi.fn()}
+          onCreateShowcase={vi.fn()}
+        />
+      </>;
+    }
+
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Components" }));
+    await user.click(screen.getByRole("button", { name: /Video Player.*Play approved video/i }));
+    expect(await screen.findByRole("region", { name: "inspector panel" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Toggle busy" }));
+    expect(screen.getByRole("region", { name: "inspector panel", hidden: true })).toHaveAttribute("aria-disabled", "true");
+    await user.click(screen.getByRole("button", { name: "Toggle busy" }));
+    expect(await screen.findByRole("region", { name: "inspector panel" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Close inspector panel" }));
+    await user.click(screen.getByRole("button", { name: "Toggle busy" }));
+    await user.click(screen.getByRole("button", { name: "Toggle busy" }));
+    expect(screen.queryByRole("region", { name: "inspector panel" })).not.toBeInTheDocument();
+  });
+
+  it("waits for the exact new component across busy instead of binding an existing component of the same type", async () => {
+    const user = userEvent.setup();
+    const oldVideo = { ...videoComponent(), id: "CMP_OLD", label: "Old video" };
+    function Harness() {
+      const [selected, setSelected] = useState<WorkspaceRenderComponent>(oldVideo);
+      const [disabled, setDisabled] = useState(false);
+      return <>
+        <button type="button" onClick={() => setSelected(videoComponent())}>Select created component</button>
+        <button type="button" onClick={() => setDisabled(false)}>Finish busy work</button>
+        <WorkspaceChrome
+          catalog={[{
+            typeId: "video-player",
+            displayName: "Video Player",
+            description: "Play approved video",
+            placements: ["viewport"],
+            trustTier: "builtin",
+            configureOnCreate: true,
+          }]}
+          selected={selected}
+          sources={[]}
+          disabled={disabled}
+          onCreate={() => {
+            setDisabled(true);
+            return "CMP_VIDEO";
+          }}
+          onUpdate={vi.fn()}
+          onAction={vi.fn()}
+          onCreateShowcase={vi.fn()}
+        />
+      </>;
+    }
+
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Components" }));
+    await user.click(screen.getByRole("button", { name: /Video Player.*Play approved video/i }));
+    expect(screen.queryByRole("region", { name: "inspector panel", hidden: true })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Select created component" }));
+    expect(await screen.findByRole("region", { name: "inspector panel", hidden: true })).toHaveAttribute("aria-disabled", "true");
+    await user.click(screen.getByRole("button", { name: "Finish busy work" }));
+    expect(await screen.findByRole("complementary", { name: "Inspector for Video Player" })).toBeVisible();
+  });
+
+  it("does not leave a configure intent when creation fails", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [selected, setSelected] = useState<WorkspaceRenderComponent>();
+      return <>
+        <button type="button" onClick={() => setSelected(videoComponent())}>Select unrelated video</button>
+        <WorkspaceChrome
+          catalog={[{
+            typeId: "video-player",
+            displayName: "Video Player",
+            description: "Play approved video",
+            placements: ["viewport"],
+            trustTier: "builtin",
+            configureOnCreate: true,
+          }]}
+          selected={selected}
+          sources={[]}
+          onCreate={() => undefined}
+          onUpdate={vi.fn()}
+          onAction={vi.fn()}
+          onCreateShowcase={vi.fn()}
+        />
+      </>;
+    }
+
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Components" }));
+    await user.click(screen.getByRole("button", { name: /Video Player.*Play approved video/i }));
+    await user.click(screen.getByRole("button", { name: "Select unrelated video" }));
+    expect(screen.queryByRole("region", { name: "inspector panel" })).not.toBeInTheDocument();
+  });
+
+  it("preserves the configure intent and desired Inspector across a connection-gate unmount", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [connected, setConnected] = useState(true);
+      const [selected, setSelected] = useState<WorkspaceRenderComponent>();
+      const [panel, setPanel] = useState<WorkspacePanel>(null);
+      const [configureRequestId, setConfigureRequestId] = useState<string>();
+      if (!connected) return <p role="status">Agent reconnecting</p>;
+      return <WorkspaceChrome
+        catalog={[{
+          typeId: "video-player",
+          displayName: "Video Player",
+          description: "Play approved video",
+          placements: ["viewport"],
+          trustTier: "builtin",
+          configureOnCreate: true,
+        }]}
+        selected={selected}
+        sources={[]}
+        panelState={panel}
+        onPanelStateChange={setPanel}
+        configureRequestId={configureRequestId}
+        onConfigureRequestChange={setConfigureRequestId}
+        onCreate={() => {
+          setConnected(false);
+          window.setTimeout(() => {
+            setSelected(videoComponent());
+            setConnected(true);
+          }, 20);
+          return "CMP_VIDEO";
+        }}
+        onUpdate={vi.fn()}
+        onAction={vi.fn()}
+        onCreateShowcase={vi.fn()}
+      />;
+    }
+
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Components" }));
+    await user.click(screen.getByRole("button", { name: /Video Player.*Play approved video/i }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Agent reconnecting");
+    expect(await screen.findByRole("complementary", { name: "Inspector for Video Player" })).toBeVisible();
   });
 });
 

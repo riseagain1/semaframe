@@ -27,6 +27,12 @@ import {
 } from "../../../workspace/renderer/contracts";
 import "./workspace.css";
 import type { RealityMeasurementEvent } from "../../../renderer/reality";
+import type { ThreeRendererXRConfig } from "../../../renderer/ThreeRenderer";
+import type {
+  ThreeRendererXRPanelAction,
+  ThreeRendererXRPanelWarning,
+  ThreeRendererXRWorldPanel,
+} from "../../../renderer/xr";
 
 export type HybridWorkspaceCanvasHandle = Readonly<{
   getContainer: () => HTMLDivElement | null;
@@ -38,6 +44,10 @@ export type HybridWorkspaceCanvasHandle = Readonly<{
   zoomOut: () => void;
   startRealityMeasurement: (componentId: string) => boolean;
   cancelRealityMeasurement: () => void;
+  enterXR: (session: XRSession, config?: ThreeRendererXRConfig) => Promise<void>;
+  exitXR: () => Promise<void>;
+  isXRPresenting: () => boolean;
+  setXRWorldPanels?: (panels: readonly ThreeRendererXRWorldPanel[], workspaceRevision?: number) => void;
 }>;
 
 export type HybridWorkspaceCanvasProps = Readonly<{
@@ -48,13 +58,15 @@ export type HybridWorkspaceCanvasProps = Readonly<{
   ariaLabel?: string;
   rendererOptions?: Omit<
     HybridCanvasRendererOptions,
-    "onSelect" | "onActivate" | "onRealityMeasurement" | "onAnimationComplete" | "onAction" | "onPreviewPlacement" | "onCancelPreview" | "onCommitPlacement"
+    "onSelect" | "onActivate" | "onRealityMeasurement" | "onAnimationComplete" | "onXRPanelAction" | "onXRPanelWarning" | "onAction" | "onPreviewPlacement" | "onCancelPreview" | "onCommitPlacement"
       | "getResizePolicy" | "onPreviewResize" | "onCancelResize" | "onCommitResize" | "onStatus"
   >;
   onSelect?: (componentId: string | null) => void;
   onActivate?: (request: ComponentActivationRequest) => void | Promise<void>;
   onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (request: AnimationCompletionRequest) => void | Promise<void>;
+  onXRPanelAction?: (event: ThreeRendererXRPanelAction) => void | Promise<void>;
+  onXRPanelWarning?: (warning: ThreeRendererXRPanelWarning) => void;
   onAction?: (request: ComponentActionRequest) => void | Promise<void>;
   onPreviewPlacement?: (preview: PlacementPreview) => void;
   onCancelPreview?: (preview: PlacementPreview) => void;
@@ -83,6 +95,8 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
     onActivate,
     onRealityMeasurement,
     onAnimationComplete,
+    onXRPanelAction,
+    onXRPanelWarning,
     onAction,
     onPreviewPlacement,
     onCancelPreview,
@@ -102,6 +116,8 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
       onActivate,
       onRealityMeasurement,
       onAnimationComplete,
+      onXRPanelAction,
+      onXRPanelWarning,
       onAction,
       onPreviewPlacement,
       onCancelPreview,
@@ -118,6 +134,8 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
       onActivate,
       onRealityMeasurement,
       onAnimationComplete,
+      onXRPanelAction,
+      onXRPanelWarning,
       onAction,
       onPreviewPlacement,
       onCancelPreview,
@@ -143,6 +161,16 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
       zoomOut: () => rendererRef.current?.zoomBy(1 / 1.2),
       startRealityMeasurement: (componentId) => rendererRef.current?.startRealityMeasurement(componentId) ?? false,
       cancelRealityMeasurement: () => rendererRef.current?.cancelRealityMeasurement(),
+      enterXR: async (session, config) => {
+        const renderer = rendererRef.current;
+        if (!renderer) throw new Error("Workspace renderer is not ready");
+        await renderer.enterXR(session, config);
+      },
+      exitXR: async () => { await rendererRef.current?.exitXR(); },
+      isXRPresenting: () => rendererRef.current?.isXRPresenting() ?? false,
+      setXRWorldPanels: (panels, workspaceRevision) => {
+        rendererRef.current?.setXRWorldPanels(panels, workspaceRevision);
+      },
     }), []);
 
     useLayoutEffect(() => {
@@ -155,6 +183,8 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
         onActivate: (request) => callbacks.current.onActivate?.(request),
         onRealityMeasurement: (event) => callbacks.current.onRealityMeasurement?.(event),
         onAnimationComplete: (request) => callbacks.current.onAnimationComplete?.(request),
+        onXRPanelAction: (event) => callbacks.current.onXRPanelAction?.(event),
+        onXRPanelWarning: (warning) => callbacks.current.onXRPanelWarning?.(warning),
         onAction: (request) => callbacks.current.onAction?.(request),
         onPreviewPlacement: (preview) => callbacks.current.onPreviewPlacement?.(preview),
         onCancelPreview: (preview) => callbacks.current.onCancelPreview?.(preview),

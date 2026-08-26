@@ -24,6 +24,20 @@ import { Overlay2DRenderer } from "./Overlay2DRenderer";
 import { ProjectionBridge } from "./ProjectionBridge";
 import { ThreeComponentRenderer, type ThreeComponentRendererOptions } from "./ThreeComponentRenderer";
 import type { RealityMeasurementEvent } from "../../renderer/reality";
+import type { ThreeRendererXRConfig } from "../../renderer/ThreeRenderer";
+import type {
+  MaterializationMode,
+  RenderPresentationContext,
+} from "../../renderer/materialization";
+import type { XRSpatialContextSnapshot } from "../../xr/client";
+import type {
+  ThreeRendererXRPanelAction,
+  ThreeRendererXRPanelWarning,
+  ThreeRendererXRPushToTalkEvent,
+  ThreeRendererXRVoiceFeedback,
+  ThreeRendererXRVoiceHapticCue,
+  ThreeRendererXRWorldPanel,
+} from "../../renderer/xr";
 
 export type HybridCanvasRendererOptions = Readonly<{
   three?: ThreeComponentRenderer;
@@ -35,8 +49,13 @@ export type HybridCanvasRendererOptions = Readonly<{
   onActivate?: (request: ComponentActivationRequest) => void | Promise<void>;
   onRealityMeasurement?: (event: RealityMeasurementEvent) => void;
   onAnimationComplete?: (request: AnimationCompletionRequest) => void | Promise<void>;
+  onXRPanelAction?: (event: ThreeRendererXRPanelAction) => void | Promise<void>;
+  onXRPanelWarning?: (warning: ThreeRendererXRPanelWarning) => void;
+  onXRPushToTalk?: (event: ThreeRendererXRPushToTalkEvent) => void | Promise<void>;
   onAction?: (request: ComponentActionRequest) => void | Promise<void>;
   reducedMotion?: boolean;
+  materializationMode?: MaterializationMode;
+  materializationMaxProxyInstances?: number;
   onPreviewPlacement?: (preview: PlacementPreview) => void;
   onCancelPreview?: (preview: PlacementPreview) => void;
   onCommitPlacement?: (request: PlacementCommitRequest) => void | Promise<void>;
@@ -137,6 +156,12 @@ export class HybridCanvasRenderer {
     this.three = options.three ?? new ThreeComponentRenderer({
       ...options.threeOptions,
       ...(options.reducedMotion !== undefined ? { reducedMotion: options.reducedMotion } : {}),
+      ...(options.materializationMode !== undefined
+        ? { materializationMode: options.materializationMode }
+        : {}),
+      ...(options.materializationMaxProxyInstances !== undefined
+        ? { materializationMaxProxyInstances: options.materializationMaxProxyInstances }
+        : {}),
       onSelect: (id) => this.selection.select(id, "three"),
       onActivate: (id) => {
         Promise.resolve(options.onActivate?.({ componentId: id })).catch((error) => options.onStatus?.({
@@ -151,6 +176,26 @@ export class HybridCanvasRenderer {
           message: error instanceof Error ? error.message : "Animation completion failed.",
         }));
       },
+      onXRPushToTalk: (event) => {
+        Promise.resolve((options.onXRPushToTalk ?? options.threeOptions?.onXRPushToTalk)?.(event)).catch((error) => options.onStatus?.({
+          kind: "three-error",
+          message: error instanceof Error ? error.message : "XR push-to-talk input failed.",
+        }));
+      },
+    });
+    this.three.setXRPanelActionHandler((event) => {
+      Promise.resolve((options.onXRPanelAction ?? options.threeOptions?.onXRPanelAction)?.(event)).catch((error) => options.onStatus?.({
+        kind: "three-error",
+        message: error instanceof Error ? error.message : "XR panel action failed.",
+      }));
+    });
+    this.three.setXRPanelWarningHandler((warning) => {
+      (options.onXRPanelWarning ?? options.threeOptions?.onXRPanelWarning)?.(warning);
+      options.onStatus?.({
+        kind: "projection-warning",
+        componentId: warning.componentId ?? "xr-world-panels",
+        message: warning.message,
+      });
     });
     if (options.onAnimationComplete) {
       this.three.setAnimationCompletionHandler((request) => {
@@ -252,6 +297,18 @@ export class HybridCanvasRenderer {
     });
   }
 
+  setXRVoiceFeedback(feedback: ThreeRendererXRVoiceFeedback): void {
+    this.three.setXRVoiceFeedback(feedback);
+  }
+
+  setMaterializationMode(mode: MaterializationMode): void {
+    this.three.setMaterializationMode(mode);
+  }
+
+  pulseXRVoiceHaptics(cue: ThreeRendererXRVoiceHapticCue): void {
+    this.three.pulseXRVoiceHaptics(cue);
+  }
+
   async initialize(container: HTMLElement): Promise<void> {
     if (this.initialized) return;
     const lifecycleToken = ++this.lifecycleToken;
@@ -325,6 +382,7 @@ export class HybridCanvasRenderer {
     if (!this.initialized || lifecycleToken !== this.lifecycleToken) return;
     const previous = this.committed;
     const operations = renderOperationsForCommit(previous, snapshot, commit);
+    const presentation = renderPresentationForCommit(previous, snapshot, commit);
     const snapshotChanged = !previous
       || previous.workspaceId !== snapshot.workspaceId
       || previous.revision !== snapshot.revision;
@@ -344,7 +402,7 @@ export class HybridCanvasRenderer {
     this.renderOverlay(transitions);
     if (this.threeReady) {
       try {
-        await this.three.render(snapshot, operations);
+        await this.three.render(snapshot, operations, presentation);
       } catch (error) {
         this.options.onStatus?.({
           kind: "three-error",
@@ -421,9 +479,35 @@ export class HybridCanvasRenderer {
     this.zoomCanvasAt(this.viewportCenter(), magnification);
   }
 
+  async enterXR(session: XRSession, config?: ThreeRendererXRConfig): Promise<void> {
+    if (!this.threeReady) throw new Error("The spatial renderer is not ready");
+    await this.three.enterXR(session, config);
+  }
+
+  async exitXR(): Promise<void> {
+    await this.three.exitXR();
+  }
+
+  isXRPresenting(): boolean {
+    return this.three.isXRPresenting();
+  }
+
+  captureXRSpatialContext(): XRSpatialContextSnapshot | undefined {
+    return this.three.captureXRSpatialContext();
+  }
+
+  setXRWorldPanels(
+    panels: readonly ThreeRendererXRWorldPanel[],
+    workspaceRevision?: number,
+  ): void {
+    this.three.setXRWorldPanels(panels, workspaceRevision);
+  }
+
   dispose(): void {
     if (!this.initialized) {
       this.three.setRealityMeasurementHandler(undefined);
+      this.three.setXRPanelActionHandler(undefined);
+      this.three.setXRPanelWarningHandler(undefined);
       return;
     }
     this.lifecycleToken += 1;
@@ -444,6 +528,8 @@ export class HybridCanvasRenderer {
     this.container?.removeEventListener("pointercancel", this.handleTouchPointerEnd, true);
     this.overlay.dispose();
     this.three.setRealityMeasurementHandler(undefined);
+    this.three.setXRPanelActionHandler(undefined);
+    this.three.setXRPanelWarningHandler(undefined);
     this.three.dispose();
     this.threeReady = false;
     this.threeHost?.remove();
@@ -545,6 +631,27 @@ export class HybridCanvasRenderer {
       center: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
     };
   }
+}
+
+export function renderPresentationForCommit(
+  previous: WorkspaceRenderSnapshot | null,
+  next: WorkspaceRenderSnapshot,
+  commit: WorkspaceRenderCommit | undefined,
+): RenderPresentationContext {
+  if (!previous || previous.workspaceId !== next.workspaceId) {
+    return Object.freeze({ delivery: "initial" });
+  }
+  if (commit
+    && previous.revision === commit.baseRevision
+    && next.revision === commit.resultingRevision
+    && commit.baseRevision !== commit.resultingRevision) {
+    return Object.freeze({
+      delivery: "live_commit",
+      batchKey: `${next.workspaceId}:${commit.baseRevision}->${commit.resultingRevision}`,
+    });
+  }
+  if (previous.revision !== next.revision) return Object.freeze({ delivery: "reconnect" });
+  return Object.freeze({ delivery: "context_restore" });
 }
 
 function renderOperationsForCommit(

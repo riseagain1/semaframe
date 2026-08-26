@@ -1,5 +1,9 @@
 node_modules/
 dist/
+dist-xr/
+native/voice-relay/*/build/
+native/voice-relay/windows/bin/
+native/voice-relay/windows/obj/
 
 # Rendered videos are distributed as GitHub Release assets, not Git blobs.
 # Keep reproducible Remotion source, captions, contracts, and verification code tracked.

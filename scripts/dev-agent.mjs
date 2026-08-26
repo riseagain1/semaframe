@@ -1,9 +1,21 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { resolveNpmLaunch } from "./lib/npm-launcher.mjs";
+import { loadRootEnvironment } from "./lib/root-env.mjs";
+import { buildVoiceRelayNativeHelper } from "./build-voice-relay.mjs";
+
+loadRootEnvironment();
+if (process.env.SEMAFRAME_VOICE_RELAY_SKIP_BUILD !== "1") {
+  buildVoiceRelayNativeHelper({ optional: true });
+}
 
 const vitePort = process.env.SEMAFRAME_AGENT_VITE_PORT?.trim() || "4173";
 const viteArguments = ["run", "dev:local", "--", "--port", vitePort];
+const startXrRenderer = process.argv.includes("--xr");
 const browserOrigins = `http://127.0.0.1:${vitePort},http://localhost:${vitePort}`;
+const xrVitePort = process.env.SEMAFRAME_XR_VITE_PORT?.trim() || "4174";
+const xrRendererOrigins = process.env.SEMAFRAME_XR_ALLOWED_ORIGINS
+  || `http://127.0.0.1:${xrVitePort},http://localhost:${xrVitePort}`;
 const gatewayPort = process.env.SEMAFRAME_AGENT_GATEWAY_PORT?.trim() || "8788";
 const gatewayHost = process.env.SEMAFRAME_AGENT_GATEWAY_HOST?.trim() || "127.0.0.1";
 const gatewayPublicHost = gatewayHost === "::1" ? "[::1]" : gatewayHost;
@@ -17,6 +29,9 @@ const gatewayEnvironment = {
   ...process.env,
   SEMAFRAME_AGENT_ALLOWED_ORIGINS: process.env.SEMAFRAME_AGENT_ALLOWED_ORIGINS || browserOrigins,
   SEMAFRAME_AGENT_BROWSER_TOKEN: browserBootstrapToken,
+  SEMAFRAME_XR_ALLOWED_ORIGINS: xrRendererOrigins,
+  SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER:
+    process.env.SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER || "1",
 };
 const viteEnvironment = {
   ...process.env,
@@ -27,12 +42,25 @@ const viteEnvironment = {
   SEMAFRAME_AGENT_BROWSER_TOKEN: browserBootstrapToken,
 };
 
+function spawnNpm(args, environment) {
+  const launch = resolveNpmLaunch(args);
+  return spawn(launch.command, launch.args, {
+    stdio: "inherit",
+    env: environment,
+    shell: false,
+    windowsHide: true,
+  });
+}
+
 const children = [
   // Keep the browser UI and gateway on the same source revision during local
   // development. The one-shot agent:gateway script remains available for
   // production-style and manual launches.
-  spawn("npm", ["run", "agent:gateway:watch"], { stdio: "inherit", env: gatewayEnvironment }),
-  spawn("npm", viteArguments, { stdio: "inherit", env: viteEnvironment }),
+  spawnNpm(["run", "agent:gateway:watch"], gatewayEnvironment),
+  spawnNpm(viteArguments, viteEnvironment),
+  ...(startXrRenderer
+    ? [spawnNpm(["run", "dev:xr:client"], viteEnvironment)]
+    : []),
 ];
 
 let exiting = false;

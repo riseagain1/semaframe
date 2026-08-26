@@ -25,7 +25,24 @@ import {
   PhotoReconstructionService,
   PhotoReconstructionServiceError,
 } from "../reconstruction/PhotoReconstructionService";
-import { ApplePhotoReconstructionBackend } from "../reconstruction/ApplePhotoReconstructionBackend";
+import { createReconstructionBackendFactory } from "../reconstruction/ReconstructionBackendFactory";
+import {
+  XR_HTTP_PATHS,
+  XrAssetRelayCache,
+  XrRelay,
+  createXrHttpHandler,
+  type WindowsUltraEvidenceProvider,
+} from "../xr";
+import { XR_PROTOCOL_LIMITS } from "../../src/xr/protocol";
+import {
+  VoiceRelayHostActionStore,
+  VoiceRelayService,
+  createVoiceRelayHttpHandler,
+  type VoiceRelayDesktopHostAction,
+} from "../voice-relay";
+import { VOICE_RELAY_HOST_ACTION_HEADER, VOICE_RELAY_HTTP_PATHS } from "../../src/voice-relay";
+import { WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT } from "../../src/workspace/agents/contracts";
+import { XR_HTTP_SESSION_HEADER } from "../xr/http/XrHttpAdapter";
 
 const DEFAULT_BODY_LIMIT_BYTES = 512 * 1024;
 const AGENT_PHOTO_RECONSTRUCTION_SCOPE = "asset:reconstruct" as const;
@@ -41,6 +58,18 @@ export type AgentGatewayHttpOptions = Readonly<{
   feedApprovalStore?: FeedFetchApprovalStore;
   assetIngress?: AgentAssetIngress;
   photoReconstruction?: PhotoReconstructionService;
+  /** Shared in-memory relay; injectable for tests and an embedding host. */
+  xrRelay?: XrRelay;
+  /** Shared bounded cache for immutable XR mesh/splat payloads. */
+  xrAssetCache?: XrAssetRelayCache;
+  /** Exact origins hosting the renderer-only XR client. */
+  xrRendererOrigins?: readonly string[];
+  /** Explicitly configured Windows-native Ultra telemetry provider. */
+  xrUltraEvidence?: WindowsUltraEvidenceProvider;
+  /** Optional native-backed Voice Relay. Omit for an authenticated disabled/off fallback. */
+  voiceRelayService?: VoiceRelayService;
+  /** Injectable volatile one-shot grant store. */
+  voiceRelayHostActions?: VoiceRelayHostActionStore;
 }>;
 
 export type NodeRequestLike = AsyncIterable<Uint8Array | string> & {
@@ -208,6 +237,25 @@ function safeInteger(value: unknown, name: string): number {
   return Number(value);
 }
 
+function voiceRelayDesktopHostAction(value: unknown): VoiceRelayDesktopHostAction {
+  if (value !== "voice_relay_accessibility"
+    && value !== "voice_relay_configure_target"
+    && value !== "voice_relay_arm"
+    && value !== "voice_relay_draft_round_trip") {
+    throw new InvalidRequestError(
+      "action must be voice_relay_accessibility, voice_relay_configure_target, voice_relay_arm, or voice_relay_draft_round_trip.",
+    );
+  }
+  return value;
+}
+
+function xrSessionCredential(request: Request): Readonly<{ sessionId: string; sessionBearer: string }> | undefined {
+  const sessionId = request.headers.get(XR_HTTP_SESSION_HEADER);
+  const authorization = request.headers.get("authorization");
+  const bearer = authorization ? /^Bearer ([A-Za-z0-9_-]{43})$/u.exec(authorization)?.[1] : undefined;
+  return sessionId && bearer ? Object.freeze({ sessionId, sessionBearer: bearer }) : undefined;
+}
+
 function parseAuthorization(request: Request): string | undefined {
   const value = request.headers.get("authorization");
   if (!value) return undefined;
@@ -225,6 +273,27 @@ function corsHeaders(origin: string, allowedOrigins: readonly string[]): Record<
     "access-control-max-age": "600",
     vary: "origin",
   };
+}
+
+function xrVoiceRelayCorsHeaders(origin: string, allowedOrigins: readonly string[]): Record<string, string> {
+  if (!allowedOrigins.includes(origin)) return {};
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": `authorization, content-type, ${XR_HTTP_SESSION_HEADER}`,
+    "access-control-max-age": "600",
+    vary: "origin",
+  };
+}
+
+function withResponseHeaders(response: Response, extraHeaders: HeadersInit): Response {
+  const headers = new Headers(response.headers);
+  new Headers(extraHeaders).forEach((value, key) => headers.set(key, value));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function contentLength(request: Request): number | undefined {
@@ -436,8 +505,12 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
   if (pathname === "/v1/workspace/instructions" && method === "POST") {
     const body = exactObject(value, ["client_id", "client_name", "requested_scopes"], []);
     const requestedScopes = body.requested_scopes;
-    if (requestedScopes !== undefined && (!Array.isArray(requestedScopes) || requestedScopes.length > 20 || requestedScopes.some((scope) => typeof scope !== "string"))) {
-      throw new InvalidRequestError("requested_scopes must be an array of at most 20 strings.");
+    if (requestedScopes !== undefined && (!Array.isArray(requestedScopes)
+      || requestedScopes.length > WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT
+      || requestedScopes.some((scope) => typeof scope !== "string"))) {
+      throw new InvalidRequestError(
+        `requested_scopes must be an array of at most ${WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT} strings.`,
+      );
     }
     return {
       name: "get_workspace_instructions",
@@ -690,18 +763,66 @@ export function createAgentGatewayHttpHandler(
   const photoReconstruction = options.photoReconstruction ?? new PhotoReconstructionService({
     publicBaseUrl: options.publicBaseUrl,
     assetIngress,
-    backend: new ApplePhotoReconstructionBackend(),
+    backend: createReconstructionBackendFactory().backend,
   });
   const mcp = createAgentMcpHttpHandler(gateway, {
     allowedOrigins,
     assetIngress,
     photoReconstruction,
   });
+  const xrRelay = options.xrRelay ?? new XrRelay();
+  const removeVoiceRelayOwner = options.voiceRelayService
+    ? xrRelay.onRendererSessionRemoved(async ({ session }) => {
+      await options.voiceRelayService!.cancelOwner(session.sessionId);
+    })
+    : () => undefined;
+  const xr = createXrHttpHandler(xrRelay, {
+    trustedLocalAuthority: (request) => browserBootstrapMatches(
+      request.headers.get(AGENT_BROWSER_BOOTSTRAP_HEADER),
+      browserBootstrapToken,
+    ),
+    rendererOrigins: options.xrRendererOrigins ?? allowedOrigins,
+    assetCache: options.xrAssetCache,
+    ultraEvidence: options.xrUltraEvidence,
+  });
+  const voiceRelayHostActions = options.voiceRelayHostActions ?? new VoiceRelayHostActionStore();
+  const xrRendererOrigins = options.xrRendererOrigins ?? allowedOrigins;
+  const voiceRelay = createVoiceRelayHttpHandler({
+    ...(options.voiceRelayService ? { service: options.voiceRelayService } : {}),
+    authorize: async (request, surface) => {
+      const origin = request.headers.get("origin") ?? "";
+      if (surface === "desktop") {
+        return browserBootstrapMatches(
+          request.headers.get(AGENT_BROWSER_BOOTSTRAP_HEADER),
+          browserBootstrapToken,
+        ) && allowedOrigins.includes(origin)
+          && request.headers.get("x-semaframe-agent-csrf") === gateway.csrfToken;
+      }
+      if (!xrRendererOrigins.includes(origin)) return false;
+      const credential = xrSessionCredential(request);
+      if (!credential) return false;
+      try {
+        const session = xrRelay.authorizeVoiceRelaySession(credential);
+        return Object.freeze({ ownerId: session.sessionId });
+      } catch {
+        // Authorization may be the operation that discovers an expired XR
+        // renderer. Its exact native draft cleanup must settle before this
+        // terminal request is rejected.
+        await xrRelay.drainRendererRemovals();
+        return false;
+      }
+    },
+    consumeDesktopHostAction: (request, action) => voiceRelayHostActions.consume(
+      request.headers.get(VOICE_RELAY_HOST_ACTION_HEADER),
+      action,
+    ),
+  });
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const isBrowserRoute = pathname.startsWith("/api/agent/");
+    const isXrRoute = pathname.startsWith("/api/xr/v1/");
     const origin = request.headers.get("origin") ?? "";
     const cors = isBrowserRoute ? corsHeaders(origin, allowedOrigins) : {};
 
@@ -711,6 +832,25 @@ export function createAgentGatewayHttpHandler(
     )) {
       await request.body?.cancel().catch(() => undefined);
       return errorResponse(403, "browser_bootstrap_invalid", "The trusted local browser proxy capability is required.");
+    }
+
+    if (isXrRoute) return xr(request);
+    if (voiceRelay.matches(pathname)) {
+      const xrSurface = pathname === VOICE_RELAY_HTTP_PATHS.xrBase
+        || pathname.startsWith(`${VOICE_RELAY_HTTP_PATHS.xrBase}/`);
+      const relayCors = xrSurface ? xrVoiceRelayCorsHeaders(origin, xrRendererOrigins) : {};
+      if (request.method === "OPTIONS") {
+        await request.body?.cancel().catch(() => undefined);
+        if (!xrSurface || !xrRendererOrigins.includes(origin)) {
+          return errorResponse(403, "voice_relay_unauthorized", "Voice Relay authorization failed.", undefined, relayCors);
+        }
+        if (request.headers.get("access-control-request-method") !== "POST") {
+          return errorResponse(405, "method_not_allowed", "Use POST.", undefined, relayCors);
+        }
+        return new Response(null, { status: 204, headers: relayCors });
+      }
+      const response = await voiceRelay.fetch(request);
+      return xrSurface ? withResponseHeaders(response, relayCors) : response;
     }
 
     if (pathname === "/health" || pathname === "/healthz") {
@@ -813,7 +953,10 @@ export function createAgentGatewayHttpHandler(
       try {
         const value = await readJson(request, bodyLimitBytes);
         let result: unknown;
-        if (pathname === "/api/agent/reconstructions/capability") {
+        if (pathname === "/api/agent/host-actions/voice-relay/mint") {
+          const body = exactObject(value, ["action"]);
+          result = voiceRelayHostActions.mint(voiceRelayDesktopHostAction(body.action));
+        } else if (pathname === "/api/agent/reconstructions/capability") {
           emptyInput(value);
           result = await photoReconstruction.capability();
         } else if (pathname === "/api/agent/browser/reveal") {
@@ -1195,6 +1338,7 @@ export function createAgentGatewayHttpHandler(
   return Object.assign(handle, {
     close: async () => {
       feedApprovals.clear();
+      voiceRelayHostActions.clear();
       const failures: unknown[] = [];
       // Reconstruction teardown may still need to revoke staged candidates,
       // so keep AssetIngress alive until it has settled. A cleanup failure must
@@ -1204,7 +1348,17 @@ export function createAgentGatewayHttpHandler(
       } catch (error) {
         failures.push(error);
       }
-      const trailing = await Promise.allSettled([mcp.close(), assetIngress.close()]);
+      try {
+        await xrRelay.drainRendererRemovals();
+      } catch (error) {
+        failures.push(error);
+      }
+      removeVoiceRelayOwner();
+      const trailing = await Promise.allSettled([
+        mcp.close(),
+        assetIngress.close(),
+        voiceRelay.close(),
+      ]);
       for (const result of trailing) {
         if (result.status === "rejected") failures.push(result.reason);
       }
@@ -1284,7 +1438,7 @@ export function createNodeAgentGatewayHttpHandler(
   const photoReconstruction = options.photoReconstruction ?? new PhotoReconstructionService({
     publicBaseUrl: options.publicBaseUrl,
     assetIngress,
-    backend: new ApplePhotoReconstructionBackend(),
+    backend: createReconstructionBackendFactory().backend,
   });
   const fetchHandler = createAgentGatewayHttpHandler(gateway, {
     ...options,
@@ -1308,6 +1462,7 @@ export function createNodeAgentGatewayHttpHandler(
         assetIngress.matchesUploadPath(target.pathname)
         || photoReconstruction.matchesUploadPath(target.pathname)
         || /^\/api\/agent\/reconstructions\/photo-uploads\/[0-9a-f-]{36}$/iu.test(target.pathname)
+        || target.pathname === "/api/xr/v1/assets"
       ) {
         const iterator = request[Symbol.asyncIterator]();
         const stream = new ReadableStream<Uint8Array>({
@@ -1342,10 +1497,13 @@ export function createNodeAgentGatewayHttpHandler(
       } else {
         const chunks: Uint8Array[] = [];
         let byteLength = 0;
+        const requestBodyLimitBytes = target.pathname === XR_HTTP_PATHS.sessionSend
+          ? XR_PROTOCOL_LIMITS.maximumSnapshotBytes + XR_PROTOCOL_LIMITS.maximumControlBytes
+          : bodyLimitBytes;
         for await (const chunk of request) {
           const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
           byteLength += bytes.byteLength;
-          if (byteLength > bodyLimitBytes) {
+          if (byteLength > requestBodyLimitBytes) {
             response.statusCode = 413;
             response.setHeader("content-type", "application/json; charset=utf-8");
             response.setHeader("cache-control", "no-store");

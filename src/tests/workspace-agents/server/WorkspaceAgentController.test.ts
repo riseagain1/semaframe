@@ -406,7 +406,7 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("2.9");
+    expect(instructions.guide.guide_version).toBe("3.0");
     expect(instructions.guide.protocol_version).toBe("1.3");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),

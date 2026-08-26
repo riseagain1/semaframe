@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Box3, Group, LineSegments, Vector3 } from "three";
 import type { SceneDelta, SceneOperation, SceneState } from "../../renderer/sceneRenderTypes";
+import type { RenderPresentationContext } from "../../renderer/materialization";
 import {
   createEnvironment,
   MAX_STAGE_GRID_DIVISIONS,
@@ -54,6 +55,38 @@ describe("ThreeComponentRenderer", () => {
     expect(scene.environment.preset).toBe("simple_room");
   });
 
+  it("projects durable collision intent for XR locomotion without making legacy entities implicit blockers", () => {
+    const source = snapshot();
+    expect(workspaceToSceneState(source).entities.get("desk")?.collision).toBeUndefined();
+    const withTrigger = workspaceToSceneState({
+      ...source,
+      components: source.components.map((component) => component.id === "desk"
+        ? {
+            ...component,
+            props: {
+              ...component.props,
+              collision: {
+                enabled: true,
+                role: "trigger",
+                shape: "box",
+                margin: 0.04,
+                center: { x: 0, y: 0.5, z: 0 },
+                size: { x: 1, y: 1, z: 1 },
+              },
+            },
+          }
+        : component),
+    });
+    expect(withTrigger.entities.get("desk")?.collision).toEqual({
+      enabled: true,
+      role: "trigger",
+      shape: "box",
+      margin: 0.04,
+      center: { x: 0, y: 0.5, z: 0 },
+      size: { x: 1, y: 1, z: 1 },
+    });
+  });
+
   it("projects exact parametric primitives and transform-only model assemblies", () => {
     const source = snapshot();
     const scene = workspaceToSceneState({
@@ -90,7 +123,10 @@ describe("ThreeComponentRenderer", () => {
         },
       ],
     });
-    expect(scene.entities.get("assembly")?.renderGeometry).toEqual({ kind: "assembly" });
+    expect(scene.entities.get("assembly")?.renderGeometry).toEqual({
+      kind: "assembly",
+      collisionPolicy: "external_only",
+    });
     expect(scene.entities.get("primitive")).toMatchObject({
       parentId: "assembly",
       renderGeometry: {
@@ -513,6 +549,20 @@ describe("ThreeComponentRenderer", () => {
     expect(port.zoomBy).toHaveBeenCalledWith(1.2);
   });
 
+  it("forwards ephemeral delivery context without changing the semantic scene", async () => {
+    const port = new FakeThreePort();
+    const renderer = new ThreeComponentRenderer({ renderer: port });
+    await renderer.initialize(document.createElement("div"));
+    await renderer.render(snapshot(), [], { delivery: "initial" });
+    const context = Object.freeze({
+      delivery: "live_commit" as const,
+      batchKey: "workspace:1->2",
+    });
+    await renderer.render(movedSnapshot(2, 4), [], context);
+    expect(port.renderState).toHaveBeenCalledOnce();
+    expect(port.applyDelta.mock.calls[0]?.[3]).toEqual(context);
+  });
+
   it("passes Reality measurement lifecycle controls through to the Three renderer", () => {
     const port = new FakeThreePort();
     port.startRealityMeasurement.mockReturnValue(true);
@@ -607,7 +657,12 @@ describe("ThreeComponentRenderer", () => {
 class FakeThreePort implements ThreeRendererPort {
   initialize = vi.fn(async (_container: HTMLElement) => undefined);
   renderState = vi.fn(async (_state: Readonly<SceneState>) => undefined);
-  applyDelta = vi.fn(async (_delta: SceneDelta, _state?: Readonly<SceneState>, _operations?: readonly SceneOperation[]) => undefined);
+  applyDelta = vi.fn(async (
+    _delta: SceneDelta,
+    _state?: Readonly<SceneState>,
+    _operations?: readonly SceneOperation[],
+    _presentation?: RenderPresentationContext,
+  ) => undefined);
   resize = vi.fn();
   dispose = vi.fn();
   frameAll = vi.fn();

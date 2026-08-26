@@ -2,6 +2,7 @@ import {
   DEFAULT_WORKSPACE_AGENT_SCOPES,
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
   WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
+  WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT,
   WORKSPACE_PROTOCOL_VERSION,
   WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES,
   WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
@@ -374,7 +375,9 @@ function uniqueScopes(values: readonly WorkspacePermissionScope[]): WorkspacePer
 
 function requestedScopes(value: unknown): WorkspacePermissionScope[] {
   if (value === undefined) return [...DEFAULT_WORKSPACE_AGENT_SCOPES];
-  if (!Array.isArray(value) || value.length > 20 || value.some((scope) => !isWorkspacePermissionScope(scope))) {
+  if (!Array.isArray(value)
+    || value.length > WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT
+    || value.some((scope) => !isWorkspacePermissionScope(scope))) {
     throw new WorkspaceEngineError(
       "invalid_request",
       "requested_scopes contains an unsupported Workspace permission",

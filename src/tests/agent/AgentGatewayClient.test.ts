@@ -100,8 +100,8 @@ afterEach(() => {
 });
 
 describe("AgentGatewayClient", () => {
-  it("accepts all 24 public commands plus the reconstruction-only internal completion command", () => {
-    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(25);
+  it("accepts all 34 public commands plus the reconstruction-only internal completion command", () => {
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(35);
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("read_workspace_resource_snapshot");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("begin_workspace_photo_reconstruction");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("finalize_workspace_photo_reconstruction");
@@ -1044,5 +1044,31 @@ describe("AgentGatewayClient", () => {
       handler: vi.fn(),
     });
     await expect(client.fetchConfig()).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("mints the explicit Accessibility HostAction proof without broadening the action allowlist", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config()))
+      .mockResolvedValueOnce(jsonResponse({
+        token: "h".repeat(43),
+        expiresAtMs: Date.now() + 30_000,
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-accessibility-host-action",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.mintVoiceRelayHostAction("voice_relay_accessibility")).resolves.toMatchObject({
+      token: "h".repeat(43),
+    });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/host-actions/voice-relay/mint",
+    ]);
+    expect(requestBody(fetchMock, 1)).toEqual({ action: "voice_relay_accessibility" });
+    await expect(client.mintVoiceRelayHostAction("forged" as "voice_relay_arm"))
+      .rejects.toMatchObject({ code: "invalid_configuration" });
   });
 });

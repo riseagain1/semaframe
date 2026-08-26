@@ -6,6 +6,7 @@ import {
   type HybridWorkspaceCanvasHandle,
 } from "../../app/components/workspace/HybridWorkspaceCanvas";
 import type { SceneDelta, SceneOperation, SceneState } from "../../renderer/sceneRenderTypes";
+import type { RenderPresentationContext } from "../../renderer/materialization";
 import type { RealityMeasurementEvent } from "../../renderer/reality";
 import { ThreeComponentRenderer, type ThreeRendererPort } from "../../workspace/renderer/ThreeComponentRenderer";
 import type { WorkspaceRenderSnapshot } from "../../workspace/renderer/contracts";
@@ -16,6 +17,50 @@ afterEach(() => {
 });
 
 describe("HybridWorkspaceCanvas", () => {
+  it("bridges a user-activated XR session without creating another Workspace authority", async () => {
+    const port = new FakePort();
+    const ref = createRef<HybridWorkspaceCanvasHandle>();
+    const onXRPanelAction = vi.fn();
+    render(<HybridWorkspaceCanvas
+      ref={ref}
+      state={snapshot()}
+      rendererOptions={{ three: new ThreeComponentRenderer({ renderer: port }) }}
+      onXRPanelAction={onXRPanelAction}
+    />);
+    await waitFor(() => expect(port.renderState).toHaveBeenCalled());
+
+    const session = {} as XRSession;
+    await act(async () => {
+      await ref.current?.enterXR(session, { referenceSpaceType: "local-floor", foveation: 0.5 });
+    });
+    expect(port.enterXR).toHaveBeenCalledWith(session, {
+      referenceSpaceType: "local-floor",
+      foveation: 0.5,
+    });
+    expect(ref.current?.isXRPresenting()).toBe(true);
+
+    await act(async () => { await ref.current?.exitXR(); });
+    expect(port.exitXR).toHaveBeenCalledOnce();
+
+    ref.current?.setXRWorldPanels?.([], 7);
+    expect(port.setXRWorldPanels).toHaveBeenCalledWith([], 7);
+    const actionHandler = port.setXRPanelActionHandler.mock.calls[0]?.[0];
+    actionHandler?.({
+      panelId: "panel:run",
+      componentId: "run",
+      workspaceRevision: 7,
+      action: {
+        type: "invoke_component_action",
+        targetComponentId: "run",
+        actionName: "press",
+        input: {},
+        expectedWorkspaceRevision: 7,
+        confirmation: "none",
+      },
+    });
+    expect(onXRPanelAction).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel:run" }));
+  });
+
   it("bridges Reality measurement controls and events through the App canvas boundary", async () => {
     const port = new FakePort();
     port.startRealityMeasurement.mockReturnValue(true);
@@ -402,6 +447,10 @@ describe("HybridWorkspaceCanvas", () => {
       id: "actor",
       visualTiming: { startAfterMs: 0, durationMs: 500, easing: "linear" },
     })]);
+    expect(port.applyDelta.mock.calls[0]?.[3]).toEqual({
+      delivery: "live_commit",
+      batchKey: "spatial-hybrid-test:1->2",
+    });
 
     view.rerender(<HybridWorkspaceCanvas
       state={next}
@@ -410,6 +459,14 @@ describe("HybridWorkspaceCanvas", () => {
     />);
     await waitFor(() => expect(port.applyDelta).toHaveBeenCalledTimes(2));
     expect(port.applyDelta.mock.calls[1]?.[2]).toEqual([]);
+    expect(port.applyDelta.mock.calls[1]?.[3]).toEqual({ delivery: "context_restore" });
+
+    view.rerender(<HybridWorkspaceCanvas
+      state={spatialSnapshot(3, 6)}
+      rendererOptions={rendererOptions}
+    />);
+    await waitFor(() => expect(port.applyDelta).toHaveBeenCalledTimes(3));
+    expect(port.applyDelta.mock.calls[2]?.[3]).toEqual({ delivery: "reconnect" });
   });
 });
 
@@ -433,7 +490,12 @@ function touchPointer(
 class FakePort implements ThreeRendererPort {
   initialize = vi.fn(async (_container: HTMLElement) => undefined);
   renderState = vi.fn(async (_state: Readonly<SceneState>) => undefined);
-  applyDelta = vi.fn(async (_delta: SceneDelta, _state?: Readonly<SceneState>, _operations?: readonly SceneOperation[]) => undefined);
+  applyDelta = vi.fn(async (
+    _delta: SceneDelta,
+    _state?: Readonly<SceneState>,
+    _operations?: readonly SceneOperation[],
+    _presentation?: RenderPresentationContext,
+  ) => undefined);
   resize = vi.fn();
   dispose = vi.fn();
   frameAll = vi.fn();
@@ -442,6 +504,12 @@ class FakePort implements ThreeRendererPort {
   setSelectedEntity = vi.fn();
   startRealityMeasurement = vi.fn((_entityId: string) => false);
   cancelRealityMeasurement = vi.fn();
+  enterXR = vi.fn(async (_session: XRSession) => undefined);
+  exitXR = vi.fn(async () => undefined);
+  isXRPresenting = vi.fn(() => this.enterXR.mock.calls.length > this.exitXR.mock.calls.length);
+  setXRWorldPanels = vi.fn();
+  setXRPanelActionHandler = vi.fn();
+  setXRPanelWarningHandler = vi.fn();
 }
 
 class ControlledMotionQuery {

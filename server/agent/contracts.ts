@@ -3,6 +3,10 @@ import {
   WORKSPACE_AGENT_TOOL_NAMES,
   type WorkspaceAgentToolName,
 } from "../../src/workspace/agents/contracts";
+import {
+  AGENT_HOST_CONTROL_COMMAND_NAMES,
+  type AgentHostControlCommandName,
+} from "../../src/agent/hostControlContracts";
 
 export const AGENT_GATEWAY_VERSION = 1 as const;
 export const AGENT_INSTRUCTION_VERSION = WORKSPACE_AGENT_GUIDE_VERSION;
@@ -11,10 +15,11 @@ export const AGENT_INTERNAL_COMMAND_NAMES = [
 ] as const;
 export const AGENT_COMMAND_NAMES = [
   ...WORKSPACE_AGENT_TOOL_NAMES,
+  ...AGENT_HOST_CONTROL_COMMAND_NAMES,
   ...AGENT_INTERNAL_COMMAND_NAMES,
 ] as const;
 export type AgentInternalCommandName = typeof AGENT_INTERNAL_COMMAND_NAMES[number];
-export type AgentCommandName = WorkspaceAgentToolName | AgentInternalCommandName;
+export type AgentCommandName = WorkspaceAgentToolName | AgentHostControlCommandName | AgentInternalCommandName;
 
 export type BrowserAgentCommand = Readonly<{
   id: string;
