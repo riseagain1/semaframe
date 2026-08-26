@@ -170,6 +170,7 @@ describe("XR Fetch HTTP adapter", () => {
     const pairing = await success<{
       pairingId: string;
       pairingToken: string;
+      pairingCode: string;
       expiresAtMs: number;
     }>(await handle(request(
       XR_HTTP_PATHS.authorityPairings,
@@ -177,6 +178,7 @@ describe("XR Fetch HTTP adapter", () => {
       bearerHeaders(authority, false),
     )));
     expect(Buffer.from(pairing.pairingToken, "base64url")).toHaveLength(32);
+    expect(pairing.pairingCode).toMatch(/^[0-9]{6}$/u);
 
     const rendererResponse = await handle(request(
       XR_HTTP_PATHS.rendererConnect,
@@ -321,6 +323,85 @@ describe("XR Fetch HTTP adapter", () => {
         origin: RENDERER_ORIGIN,
       },
     )), 401, "unauthorized");
+  });
+
+  it("supports six-digit pairing codes with one-shot aliases and bounded brute-force protection", async () => {
+    const { handle } = rig();
+    const authority = await connectAuthority(handle);
+    const codePairing = await success<{
+      pairingToken: string;
+      pairingCode: string;
+    }>(await handle(request(
+      XR_HTTP_PATHS.authorityPairings,
+      {},
+      bearerHeaders(authority),
+    )));
+    expect(codePairing.pairingCode).toMatch(/^[0-9]{6}$/u);
+
+    await failure(await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      { pairingToken: codePairing.pairingCode },
+      { origin: RENDERER_ORIGIN },
+    )), 401, "unauthorized");
+    await failure(await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      { pairingCode: codePairing.pairingToken },
+      { origin: RENDERER_ORIGIN },
+    )), 401, "unauthorized");
+    expect((await success<XrRelayConnection>(await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      { pairingCode: codePairing.pairingCode },
+      { origin: RENDERER_ORIGIN },
+    )))).role).toBe("xr_renderer");
+    await failure(await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      { pairingToken: codePairing.pairingToken },
+      { origin: RENDERER_ORIGIN },
+    )), 401, "unauthorized");
+
+    const tokenPairing = await success<{
+      pairingToken: string;
+      pairingCode: string;
+    }>(await handle(request(
+      XR_HTTP_PATHS.authorityPairings,
+      {},
+      bearerHeaders(authority),
+    )));
+    await failure(await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      {},
+      { origin: RENDERER_ORIGIN },
+    )), 400, "invalid_request");
+    await failure(await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      { pairingToken: tokenPairing.pairingToken, pairingCode: tokenPairing.pairingCode },
+      { origin: RENDERER_ORIGIN },
+    )), 400, "invalid_request");
+
+    const invalidCodes = Array.from({ length: 6 }, (_, index) => String(800_000 + index).padStart(6, "0"))
+      .filter((code) => code !== tokenPairing.pairingCode)
+      .slice(0, 5);
+    expect(invalidCodes).toHaveLength(5);
+    for (const pairingCode of invalidCodes.slice(0, 4)) {
+      await failure(await handle(request(
+        XR_HTTP_PATHS.rendererConnect,
+        { pairingCode },
+        { origin: RENDERER_ORIGIN },
+      )), 401, "unauthorized");
+    }
+    const limited = await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      { pairingCode: invalidCodes[4] },
+      { origin: RENDERER_ORIGIN },
+    ));
+    const limitedBody = await failure(limited, 429, "pairing_rate_limited");
+    expect(JSON.stringify(limitedBody)).not.toContain(invalidCodes[4]);
+
+    expect((await success<XrRelayConnection>(await handle(request(
+      XR_HTTP_PATHS.rendererConnect,
+      { pairingToken: tokenPairing.pairingToken },
+      { origin: RENDERER_ORIGIN },
+    )))).role).toBe("xr_renderer");
   });
 
   it("exposes native Ultra evidence only to the paired renderer and fails closed when unavailable", async () => {

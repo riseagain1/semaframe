@@ -28,6 +28,7 @@ function setup(options: {
   now?: () => number;
 } = {}) {
   let tokenCursor = 0;
+  let codeCursor = 0;
   let pairingCursor = 0;
   let bearerCursor = 0;
   const idCursors = { session: 0, epoch: 0, request: 0 };
@@ -35,6 +36,7 @@ function setup(options: {
   const pairingStore = new XrPairingStore({
     now,
     tokenFactory: () => Buffer.alloc(32, ++tokenCursor).toString("base64url"),
+    pairingCodeFactory: () => String(++codeCursor).padStart(6, "0"),
     idFactory: () => `pairing-${String(++pairingCursor).padStart(4, "0")}`,
   });
   const relay = new XrRelay({
@@ -1078,6 +1080,59 @@ describe("XrRelay single-authority core", () => {
     expect(relay.revokePairing(credential(authority), { pairingId: pairing.pairingId })).toBe(true);
     expect(relay.getSession(renderer.sessionId)).toBeUndefined();
     expect(() => relay.drainMessages(credential(renderer))).toThrow(XrRelayControlError);
+  });
+
+  it("accepts exactly one pairing credential and makes code and token aliases single-use", () => {
+    const { relay, authority } = setup();
+    const pairing = relay.createPairing(credential(authority));
+    expect(pairing.pairingCode).toMatch(/^[0-9]{6}$/u);
+    expect(() => relay.connectRenderer({})).toThrowError(expect.objectContaining({
+      code: "invalid_control_request",
+    }));
+    expect(() => relay.connectRenderer({
+      pairingToken: pairing.pairingToken,
+      pairingCode: pairing.pairingCode,
+    })).toThrowError(expect.objectContaining({
+      code: "invalid_control_request",
+    }));
+    expect(() => relay.connectRenderer({ pairingToken: pairing.pairingCode })).toThrowError(expect.objectContaining({
+      code: "pairing_invalid",
+    }));
+    expect(() => relay.connectRenderer({ pairingCode: pairing.pairingToken })).toThrowError(expect.objectContaining({
+      code: "pairing_invalid",
+    }));
+    expect(relay.connectRenderer({ pairingCode: pairing.pairingCode })).toMatchObject({
+      role: "xr_renderer",
+      pairingId: pairing.pairingId,
+    });
+    expect(() => relay.connectRenderer({ pairingToken: pairing.pairingToken })).toThrowError(expect.objectContaining({
+      code: "pairing_invalid",
+    }));
+  });
+
+  it("rate limits failed six-digit attempts without changing long-token behavior", () => {
+    let now = 1_000;
+    const { relay, authority } = setup({ now: () => now });
+    const codePairing = relay.createPairing(credential(authority));
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect(() => relay.connectRenderer({
+        pairingCode: String(900_001 + attempt).padStart(6, "0"),
+      })).toThrowError(expect.objectContaining({ code: "pairing_invalid" }));
+    }
+    expect(() => relay.connectRenderer({ pairingCode: "900005" })).toThrowError(expect.objectContaining({
+      code: "pairing_rate_limited",
+    }));
+
+    const tokenPairing = relay.createPairing(credential(authority));
+    expect(relay.connectRenderer({ pairingToken: tokenPairing.pairingToken })).toMatchObject({
+      role: "xr_renderer",
+    });
+
+    now += 60_000;
+    expect(relay.connectRenderer({ pairingCode: codePairing.pairingCode })).toMatchObject({
+      role: "xr_renderer",
+      pairingId: codePairing.pairingId,
+    });
   });
 
   it("bounds renderer sessions without consuming a rejected pairing capability", () => {

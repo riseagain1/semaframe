@@ -120,6 +120,7 @@ export class InteractionRouter {
     if (!drag) return;
     this.activeDrag = null;
     this.removeDocumentDragListeners(drag.element.ownerDocument);
+    this.releasePointerCapture(drag.element, drag.pointerId);
     drag.element.removeAttribute("data-dragging");
     this.options.cancelPreview(drag.componentId, clonePlacement(drag.originalPlacement));
   }
@@ -129,6 +130,7 @@ export class InteractionRouter {
     if (!resize) return;
     this.activeResize = null;
     this.removeDocumentResizeListeners(resize.element.ownerDocument);
+    this.releasePointerCapture(resize.element, resize.pointerId);
     resize.element.removeAttribute("data-resizing");
     componentElementFromHandle(resize.element)?.removeAttribute("data-resizing");
     this.options.cancelResizePreview?.(
@@ -210,11 +212,7 @@ export class InteractionRouter {
     this.activeDrag = null;
     this.removeDocumentDragListeners(drag.element.ownerDocument);
     drag.element.removeAttribute("data-dragging");
-    try {
-      drag.element.releasePointerCapture?.(drag.pointerId);
-    } catch {
-      // Pointer capture may already have been released by the browser.
-    }
+    this.releasePointerCapture(drag.element, drag.pointerId);
     if (!drag.moved) return;
     const request: PlacementCommitRequest = {
       componentId: drag.componentId,
@@ -388,11 +386,7 @@ export class InteractionRouter {
     this.removeDocumentResizeListeners(resize.element.ownerDocument);
     resize.element.removeAttribute("data-resizing");
     componentElementFromHandle(resize.element)?.removeAttribute("data-resizing");
-    try {
-      resize.element.releasePointerCapture?.(resize.pointerId);
-    } catch {
-      // Pointer capture may already have been released by the browser.
-    }
+    this.releasePointerCapture(resize.element, resize.pointerId);
     if (!resize.moved) return;
     if (sameSize(resize.latestResize.size, resize.originalResize.size)) {
       this.options.cancelResizePreview?.(resize.componentId, structuredClone(resize.originalResize));
@@ -480,6 +474,16 @@ export class InteractionRouter {
     document.removeEventListener("pointerup", this.onResizePointerUp);
     document.removeEventListener("pointercancel", this.onResizePointerCancel);
     document.removeEventListener("keydown", this.onDocumentKeyDown, true);
+  }
+
+  private releasePointerCapture(element: HTMLElement, pointerId: number): void {
+    try {
+      if (element.hasPointerCapture?.(pointerId) !== false) {
+        element.releasePointerCapture?.(pointerId);
+      }
+    } catch {
+      // Synthetic events and browsers that already released capture are safe.
+    }
   }
 }
 

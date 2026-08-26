@@ -1,10 +1,19 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomInt,
+  randomUUID,
+} from "node:crypto";
 import {
   parseXrOpaqueId,
   parseXrWorkspaceId,
 } from "../../src/xr/protocol";
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const CODE_PATTERN = /^[0-9]{6}$/u;
+const PAIRING_CODE_SPACE = 1_000_000;
+const MAXIMUM_CODE_GENERATION_ATTEMPTS = 64;
 const DEFAULT_PAIRING_TTL_MS = 2 * 60_000;
 const MAXIMUM_PAIRING_TTL_MS = 10 * 60_000;
 const DEFAULT_MAXIMUM_PAIRINGS = 128;
@@ -12,6 +21,7 @@ const DEFAULT_MAXIMUM_PAIRINGS = 128;
 export type XrPairingGrant = Readonly<{
   pairingId: string;
   pairingToken: string;
+  pairingCode: string;
   workspaceId: string;
   authorityEpoch: string;
   expiresAtMs: number;
@@ -27,6 +37,7 @@ export type XrConsumedPairing = Readonly<{
 type PairingRecord = {
   pairingId: string;
   tokenDigest: string;
+  codeDigest: string;
   workspaceId: string;
   authorityEpoch: string;
   createdAtMs: number;
@@ -37,6 +48,7 @@ type PairingRecord = {
 export type XrPairingStoreOptions = Readonly<{
   now?: () => number;
   tokenFactory?: () => string;
+  pairingCodeFactory?: () => string;
   idFactory?: () => string;
   defaultTtlMs?: number;
   maximumPairings?: number;
@@ -101,6 +113,10 @@ function tokenDigest(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
+function codeDigest(code: string, secret: Buffer): string {
+  return createHmac("sha256", secret).update(code, "utf8").digest("hex");
+}
+
 function checkedToken(value: unknown): string {
   if (typeof value !== "string" || !TOKEN_PATTERN.test(value)) {
     throw new XrPairingError("pairing_invalid", "XR pairing capability is invalid.");
@@ -112,18 +128,30 @@ function checkedToken(value: unknown): string {
   return value;
 }
 
+function checkedCode(value: unknown): string {
+  if (typeof value !== "string" || !CODE_PATTERN.test(value)) {
+    throw new XrPairingError("pairing_invalid", "XR pairing code is invalid.");
+  }
+  return value;
+}
+
 export class XrPairingStore {
   readonly #now: () => number;
   readonly #tokenFactory: () => string;
+  readonly #pairingCodeFactory: () => string;
   readonly #idFactory: () => string;
   readonly #defaultTtlMs: number;
   readonly #maximumPairings: number;
   readonly #recordsById = new Map<string, PairingRecord>();
   readonly #pairingIdByTokenDigest = new Map<string, string>();
+  readonly #pairingIdByCodeDigest = new Map<string, string>();
+  readonly #codeDigestSecret = randomBytes(32);
 
   constructor(options: XrPairingStoreOptions = {}) {
     this.#now = options.now ?? Date.now;
     this.#tokenFactory = options.tokenFactory ?? (() => randomBytes(32).toString("base64url"));
+    this.#pairingCodeFactory = options.pairingCodeFactory
+      ?? (() => randomInt(PAIRING_CODE_SPACE).toString().padStart(6, "0"));
     this.#idFactory = options.idFactory ?? randomUUID;
     this.#defaultTtlMs = checkedTtl(options.defaultTtlMs, DEFAULT_PAIRING_TTL_MS);
     this.#maximumPairings = options.maximumPairings ?? DEFAULT_MAXIMUM_PAIRINGS;
@@ -147,21 +175,35 @@ export class XrPairingStore {
     }
     const ttlMs = checkedTtl(body.ttlMs, this.#defaultTtlMs);
     const now = checkedNow(this.#now);
-    this.#pruneTerminal(now);
+    this.#pruneExpired(now);
     if (this.#recordsById.size >= this.#maximumPairings) {
       throw new XrPairingError("pairing_capacity", "XR pairing capacity is exhausted.");
     }
     const pairingId = parseXrOpaqueId(this.#idFactory(), "$.pairingId");
     const pairingToken = checkedToken(this.#tokenFactory());
-    const digest = tokenDigest(pairingToken);
-    if (this.#recordsById.has(pairingId) || this.#pairingIdByTokenDigest.has(digest)) {
+    const tokenHash = tokenDigest(pairingToken);
+    if (this.#recordsById.has(pairingId) || this.#pairingIdByTokenDigest.has(tokenHash)) {
       throw new Error("XR pairing identity factory returned a duplicate value.");
+    }
+    let pairingCode: string | undefined;
+    let codeHash: string | undefined;
+    for (let attempt = 0; attempt < MAXIMUM_CODE_GENERATION_ATTEMPTS; attempt += 1) {
+      const candidate = checkedCode(this.#pairingCodeFactory());
+      const candidateHash = codeDigest(candidate, this.#codeDigestSecret);
+      if (this.#pairingIdByCodeDigest.has(candidateHash)) continue;
+      pairingCode = candidate;
+      codeHash = candidateHash;
+      break;
+    }
+    if (pairingCode === undefined || codeHash === undefined) {
+      throw new Error("XR pairing code factory could not produce a unique value.");
     }
     const expiresAtMs = now + ttlMs;
     if (!Number.isSafeInteger(expiresAtMs)) throw new Error("XR pairing expiry exceeded the safe integer range.");
     const record: PairingRecord = {
       pairingId,
-      tokenDigest: digest,
+      tokenDigest: tokenHash,
+      codeDigest: codeHash,
       workspaceId,
       authorityEpoch,
       createdAtMs: now,
@@ -169,13 +211,22 @@ export class XrPairingStore {
       state: "active",
     };
     this.#recordsById.set(pairingId, record);
-    this.#pairingIdByTokenDigest.set(digest, pairingId);
-    return Object.freeze({ pairingId, pairingToken, workspaceId, authorityEpoch, expiresAtMs });
+    this.#pairingIdByTokenDigest.set(tokenHash, pairingId);
+    this.#pairingIdByCodeDigest.set(codeHash, pairingId);
+    return Object.freeze({ pairingId, pairingToken, pairingCode, workspaceId, authorityEpoch, expiresAtMs });
   }
 
-  consume(value: unknown): XrConsumedPairing {
+  consumeToken(value: unknown): XrConsumedPairing {
     const token = checkedToken(value);
-    const id = this.#pairingIdByTokenDigest.get(tokenDigest(token));
+    return this.#consume(this.#pairingIdByTokenDigest.get(tokenDigest(token)));
+  }
+
+  consumeCode(value: unknown): XrConsumedPairing {
+    const code = checkedCode(value);
+    return this.#consume(this.#pairingIdByCodeDigest.get(codeDigest(code, this.#codeDigestSecret)));
+  }
+
+  #consume(id: string | undefined): XrConsumedPairing {
     const record = id ? this.#recordsById.get(id) : undefined;
     if (!record) throw new XrPairingError("pairing_invalid", "XR pairing capability is invalid.");
     const now = checkedNow(this.#now);
@@ -256,12 +307,12 @@ export class XrPairingStore {
     });
   }
 
-  #pruneTerminal(now: number): void {
+  #pruneExpired(now: number): void {
     for (const [pairingId, record] of this.#recordsById) {
-      const expired = now >= record.expiresAtMs;
-      if (!expired && record.state === "active") continue;
+      if (now < record.expiresAtMs) continue;
       this.#recordsById.delete(pairingId);
       this.#pairingIdByTokenDigest.delete(record.tokenDigest);
+      this.#pairingIdByCodeDigest.delete(record.codeDigest);
     }
   }
 }

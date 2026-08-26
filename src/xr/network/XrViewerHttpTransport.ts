@@ -66,6 +66,7 @@ import {
 } from "./ultraEvidence";
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const PAIRING_CODE_PATTERN = /^[0-9]{6}$/u;
 const EMPTY_DIGEST = `sha256:${"0".repeat(64)}` as const;
 // A viewer input is idempotent by its exact request envelope at the relay.
 // One bounded replay closes the common "committed request, lost HTTP ACK"
@@ -671,9 +672,22 @@ export class XrViewerHttpTransport implements XrViewerTransportPort {
         false,
       ));
     }
+    const hasPairingToken = Object.prototype.hasOwnProperty.call(request, "pairingToken");
+    const hasPairingCode = Object.prototype.hasOwnProperty.call(request, "pairingCode");
+    const credential = hasPairingToken === hasPairingCode
+      ? undefined
+      : hasPairingToken && typeof request.pairingToken === "string"
+        ? Object.freeze({ key: "pairingToken" as const, value: request.pairingToken })
+        : hasPairingCode && typeof request.pairingCode === "string"
+          ? Object.freeze({ key: "pairingCode" as const, value: request.pairingCode })
+          : undefined;
+    const credentialIsValid = credential !== undefined && (credential.key === "pairingToken"
+      ? CAPABILITY_PATTERN.test(credential.value)
+      : PAIRING_CODE_PATTERN.test(credential.value));
     if (typeof request.onMessage !== "function"
       || typeof request.onDisconnected !== "function"
-      || !CAPABILITY_PATTERN.test(request.pairingToken)) {
+      || !credential
+      || !credentialIsValid) {
       return Promise.reject(new XrNetworkError(
         "pairing_invalid",
         "XR pairing failed.",
@@ -682,7 +696,7 @@ export class XrViewerHttpTransport implements XrViewerTransportPort {
     }
     this.#pairing = true;
     return this.#pairOnce(
-      request.pairingToken,
+      credential,
       request.signal,
       request.onMessage,
       request.onReconnectDelivery,
@@ -693,25 +707,28 @@ export class XrViewerHttpTransport implements XrViewerTransportPort {
   }
 
   async #pairOnce(
-    pairingTokenValue: string,
+    credentialValue: Readonly<{
+      key: "pairingToken" | "pairingCode";
+      value: string;
+    }>,
     signal: AbortSignal,
     onMessage: (message: XrViewerIncomingMessage) => unknown | Promise<unknown>,
     onReconnectDelivery: ((delivery: XrViewerReconnectDelivery) => unknown | Promise<unknown>) | undefined,
     onDisconnected: (event: XrViewerDisconnect) => void,
   ): Promise<XrViewerHttpTransportSession> {
-    let pairingToken = pairingTokenValue;
+    let credential = credentialValue.value;
     let connection: XrParsedConnection;
     try {
       const value = await this.#client.post(
         XR_HTTP_PATHS.rendererConnect,
-        { pairingToken },
+        { [credentialValue.key]: credential },
         undefined,
         signal,
       );
       connection = strictResponse(() => parseViewerConnection(value));
     } finally {
-      pairingToken = "";
-      pairingTokenValue = "";
+      credential = "";
+      credentialValue = { key: credentialValue.key, value: "" };
     }
     const session = new HttpViewerSession({
       client: this.#client,

@@ -85,6 +85,7 @@ export interface ThreeRendererPort {
   setSelectedEntity?(entityId: string | null, notify?: boolean): void;
   startRealityMeasurement?(entityId: string): boolean;
   cancelRealityMeasurement?(): void;
+  cancelDesktopInteractions?(): void;
   getProjectionCameraState?(): CameraProjectionState | null;
   frameAll?(): void;
   resetView?(): void;
@@ -244,6 +245,10 @@ export class ThreeComponentRenderer {
 
   cancelRealityMeasurement(): void {
     this.renderer.cancelRealityMeasurement?.();
+  }
+
+  cancelDesktopInteractions(): void {
+    this.renderer.cancelDesktopInteractions?.();
   }
 
   getProjectionCameraState(): CameraProjectionState | null {

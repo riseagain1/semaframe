@@ -6,6 +6,7 @@ import {
   __xrHeadsetSessionTest,
   type XRHeadsetSessionButtonHandle,
 } from "../../app/components/XRHeadsetSessionButton";
+import { AgentWorkspaceGate } from "../../app/components/AgentWorkspaceGate";
 import type { XrAuthorityPollDelivery, XrAuthorityTransport } from "../../xr/authority";
 import type { XrRoutableMessage } from "../../xr/protocol";
 import { createXRContextEnvelope } from "../../xr/client";
@@ -87,6 +88,7 @@ function transport() {
     createPairing: vi.fn(async () => ({
       pairingId: "pairing-headset-test",
       pairingToken: "A".repeat(43),
+      pairingCode: "012345",
       ...identity,
       expiresAtMs: Date.now() + 300_000,
     })),
@@ -116,6 +118,9 @@ describe("XRHeadsetSessionButton", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
     const link = await screen.findByRole("textbox", { name: "XR one-time pairing link" });
     expect(link).toHaveValue(`https://viewer.semaframe.test/xr.html#pair=${"A".repeat(43)}`);
+    expect(screen.getByRole("textbox", { name: "XR six-digit pairing code" })).toHaveValue("012345");
+    expect(screen.getByText("6-digit pairing code")).toBeVisible();
+    expect(screen.getByText("Secure one-time link")).toBeVisible();
     expect(fake.connect).toHaveBeenCalledWith(snapshot.workspaceId);
     expect(fake.send).toHaveBeenCalledTimes(1);
     expect(fake.createPairing).toHaveBeenCalledWith(300_000, { voiceRelay: false });
@@ -127,6 +132,90 @@ describe("XRHeadsetSessionButton", () => {
     expect(onPhaseChange).toHaveBeenCalledWith("idle", "Headset session stopped.");
   });
 
+  it("returns a locally released but unconfirmed outcome when relay disconnect fails", async () => {
+    const fake = transport();
+    fake.disconnect.mockRejectedValueOnce(new Error("relay disconnect failed"));
+    const control = createRef<XRHeadsetSessionButtonHandle>();
+    render(<XRHeadsetSessionButton
+      ref={control}
+      snapshot={snapshot}
+      registryIdentity="registry:test"
+      viewerUrl="https://viewer.semaframe.test/xr.html"
+      transportFactory={() => fake}
+      pollIntervalMs={1_000}
+      onSelect={vi.fn()}
+      onActivate={vi.fn()}
+      onPanelAction={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
+    await screen.findByRole("textbox", { name: "XR six-digit pairing code" });
+
+    const outcome = await control.current!.stop();
+
+    expect(outcome).toEqual({ locallyReleased: true, teardownConfirmed: false });
+    expect(fake.disconnect).toHaveBeenCalledOnce();
+    await waitFor(() => expect(control.current?.inspect().phase).toBe("error"));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Headset projection was released locally, but relay teardown could not be confirmed.",
+    );
+  });
+
+  it("keeps the XR authority and projection alive while the Agent connection gate covers the desktop", async () => {
+    const fake = transport();
+    const control = createRef<XRHeadsetSessionButtonHandle>();
+    const revisionOne = Object.freeze({ ...snapshot, revision: 1 });
+    const harness = (active: boolean, currentSnapshot: WorkspaceRenderSnapshot) => <AgentWorkspaceGate
+      active={active}
+      connection={<p>Authorize an Agent to continue.</p>}
+    >
+      <XRHeadsetSessionButton
+        ref={control}
+        snapshot={currentSnapshot}
+        registryIdentity="registry:test"
+        viewerUrl="https://viewer.semaframe.test/xr.html"
+        transportFactory={() => fake}
+        pollIntervalMs={1_000}
+        desktopControlsVisible={active}
+        onSelect={vi.fn()}
+        onActivate={vi.fn()}
+        onPanelAction={vi.fn()}
+      />
+    </AgentWorkspaceGate>;
+    const view = render(harness(true, snapshot));
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
+    await screen.findByRole("textbox", { name: "XR six-digit pairing code" });
+    expect(fake.connect).toHaveBeenCalledOnce();
+    expect(fake.createPairing).toHaveBeenCalledOnce();
+    expect(fake.send).toHaveBeenCalledTimes(1);
+
+    view.rerender(harness(false, revisionOne));
+
+    expect(screen.getByRole("main", { name: "Agent connection" })).toBeVisible();
+    expect(screen.queryByRole("main", { name: "Workspace" })).not.toBeInTheDocument();
+    const gatedWorkspace = document.getElementById("workspace-panel");
+    expect(gatedWorkspace).not.toBeNull();
+    expect(gatedWorkspace).toHaveAttribute("aria-hidden", "true");
+    expect(gatedWorkspace).toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: "Manage XR headset session" })).not.toBeInTheDocument();
+    expect(fake.disconnect).not.toHaveBeenCalled();
+    expect(fake.revokePairing).not.toHaveBeenCalled();
+    await waitFor(() => expect(fake.send).toHaveBeenCalledTimes(2));
+
+    view.rerender(harness(true, revisionOne));
+    expect(screen.queryByRole("main", { name: "Agent connection" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manage XR headset session" })).toHaveAttribute("aria-pressed", "true");
+    expect(fake.connect).toHaveBeenCalledOnce();
+    expect(fake.createPairing).toHaveBeenCalledOnce();
+    expect(fake.disconnect).not.toHaveBeenCalled();
+
+    view.unmount();
+    await waitFor(() => expect(fake.disconnect).toHaveBeenCalledOnce());
+  });
+
   it("revokes the old one-time pairing before changing its Voice Relay policy", async () => {
     const fake = transport();
     let pairingSequence = 0;
@@ -135,6 +224,7 @@ describe("XRHeadsetSessionButton", () => {
       return {
         pairingId: `pairing-headset-test-${pairingSequence}`,
         pairingToken: (pairingSequence === 1 ? "A" : "B").repeat(43),
+        pairingCode: pairingSequence === 1 ? "012345" : "678901",
         sessionId: "session-authority-test",
         authorityEpoch: "epoch-authority-test",
         workspaceId: snapshot.workspaceId,
@@ -254,7 +344,6 @@ describe("XRHeadsetSessionButton", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
-    await screen.findByRole("textbox", { name: "XR one-time pairing link" });
     await waitFor(() => expect(onPhaseChange).toHaveBeenCalledWith(
       "active",
       "Headset paired · immersive XR is active.",
@@ -313,7 +402,6 @@ describe("XRHeadsetSessionButton", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
-    await screen.findByRole("textbox", { name: "XR one-time pairing link" });
     await waitFor(() => expect(control.current?.inspect().lifecycleSequence).toBe(2));
 
     const first = control.current!.readLifecycleTransition(0);
@@ -323,6 +411,62 @@ describe("XRHeadsetSessionButton", () => {
       phase: "replica_ready",
       serverReceivedAtMs: serverReceivedAtMs + 1,
     });
+  });
+
+  it("removes the consumed code and link after replica readiness while retaining non-secret active-session identity", async () => {
+    const fake = transport();
+    const serverReceivedAtMs = Date.now();
+    let releasePresence = false;
+    const deliveries: readonly XrAuthorityPollDelivery[] = ["replica_ready", "active"].map((phase, index) => ({
+      deliveryId: `delivery-secret-clearing-${phase}`,
+      sourceSessionId: "session-renderer-test",
+      ...relayTiming,
+      message: {
+        protocolVersion: 1 as const,
+        messageType: "ephemeral" as const,
+        sessionId: "session-authority-test",
+        authorityEpoch: "epoch-authority-test",
+        workspaceId: snapshot.workspaceId,
+        revision: snapshot.revision,
+        requestId: `request-secret-clearing-${phase}`,
+        channel: "xr.session.presence",
+        sequence: index + 1,
+        payload: {
+          phase,
+          sourceSessionId: "session-renderer-test",
+          sourcePairingId: "pairing-headset-test",
+          serverReceivedAtMs: serverReceivedAtMs + index,
+        },
+      },
+    })) as readonly XrAuthorityPollDelivery[];
+    fake.poll.mockImplementation(async (acknowledged: readonly string[] = []) => (
+      releasePresence
+        ? deliveries.filter((delivery) => !acknowledged.includes(delivery.deliveryId))
+        : []
+    ));
+    const control = createRef<XRHeadsetSessionButtonHandle>();
+    render(<XRHeadsetSessionButton
+      ref={control}
+      snapshot={snapshot}
+      registryIdentity="registry:test"
+      viewerUrl="https://viewer.semaframe.test/xr.html"
+      transportFactory={() => fake}
+      pollIntervalMs={1}
+      onSelect={vi.fn()}
+      onActivate={vi.fn()}
+      onPanelAction={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
+    expect(await screen.findByRole("textbox", { name: "XR six-digit pairing code" })).toHaveValue("012345");
+    expect(screen.getByRole("textbox", { name: "XR one-time pairing link" })).toBeVisible();
+
+    releasePresence = true;
+    await waitFor(() => expect(control.current?.inspect().lastLifecyclePhase).toBe("active"));
+    expect(screen.queryByRole("textbox", { name: "XR six-digit pairing code" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "XR one-time pairing link" })).not.toBeInTheDocument();
+    expect(control.current?.inspect()).toMatchObject({ phase: "active", pairingReady: false });
   });
 
   it("rejects credential-bearing or query-bearing viewer configuration before retaining a grant", async () => {
@@ -567,7 +711,6 @@ describe("XRHeadsetSessionButton", () => {
     />);
     fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
-    await screen.findByRole("textbox", { name: "XR one-time pairing link" });
 
     await waitFor(() => expect(onPanelAction).toHaveBeenCalledOnce());
     expect(authorizePanelAction).toHaveBeenCalledOnce();
@@ -667,7 +810,6 @@ describe("XRHeadsetSessionButton", () => {
     />);
     fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
-    await screen.findByRole("textbox", { name: "XR one-time pairing link" });
 
     await waitFor(() => expect(onVoiceIntent).toHaveBeenCalledOnce());
     expect(onVoiceIntent).toHaveBeenCalledWith(expect.objectContaining({
@@ -822,7 +964,6 @@ describe("XRHeadsetSessionButton", () => {
     />);
     fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
-    await screen.findByRole("textbox", { name: "XR one-time pairing link" });
 
     await waitFor(() => expect(onSpatialContext).toHaveBeenCalledWith(context, {
       rendererSessionId: "session-renderer-test",

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { Mic2 } from "lucide-react";
 import {
   AgentGatewayClient,
@@ -37,6 +37,7 @@ import {
   type AgentConnectionPageProps,
   type AgentConnectionStatus,
 } from "./components/AgentConnectionPage";
+import { AgentWorkspaceGate } from "./components/AgentWorkspaceGate";
 import { statusLabel } from "./components/StatusPill";
 import type { HybridWorkspaceCanvasHandle } from "./components/workspace/HybridWorkspaceCanvas";
 import {
@@ -376,6 +377,55 @@ export function shouldClearRealityMeasurementForWorkspaceGate(
   return !workspaceActive && measurement !== undefined;
 }
 
+/** Project identity changes remain an explicit XR teardown boundary. */
+export async function stopXrSessionsForProjectReplacement(
+  sameDevice: Pick<XRWorkspaceButtonHandle, "exitFromUserGesture"> | null | undefined,
+  headset: Pick<XRHeadsetSessionButtonHandle, "stop"> | null | undefined,
+): Promise<readonly Readonly<{ target: "same_device" | "headset"; reason: unknown }>[]> {
+  type TeardownOutcome = Readonly<{
+    locallyReleased: boolean;
+    teardownConfirmed: boolean;
+    error?: string;
+  }>;
+  const pending: Readonly<{ target: "same_device" | "headset"; operation: Promise<TeardownOutcome> }>[] = [
+    ...(sameDevice ? [{ target: "same_device" as const, operation: sameDevice.exitFromUserGesture() }] : []),
+    ...(headset ? [{ target: "headset" as const, operation: headset.stop() }] : []),
+  ];
+  const settled = await Promise.allSettled(pending.map(({ operation }) => operation));
+  return Object.freeze(settled.flatMap((result, index) => {
+    if (result.status === "rejected") {
+      return [Object.freeze({ target: pending[index]!.target, reason: result.reason })];
+    }
+    if (result.value.locallyReleased && result.value.teardownConfirmed) return [];
+    return [Object.freeze({
+      target: pending[index]!.target,
+      reason: result.value.error ?? "XR teardown was not fully confirmed.",
+    })];
+  }));
+}
+
+type ProjectReplacementAgentBridge = Pick<AgentGatewayClient, "running" | "start" | "stop" | "disable">;
+
+/** Abort and drain the browser command loop before a project can replace its store. */
+export async function quiesceAgentBridgeForProjectReplacement(input: Readonly<{
+  client?: ProjectReplacementAgentBridge;
+  occupied: boolean;
+  revoke: () => void;
+  waitForTrustRevocation: () => Promise<unknown>;
+}>): Promise<void> {
+  const previousRun = input.client?.running ? input.client.start() : undefined;
+  input.revoke();
+  input.client?.stop(input.occupied ? "disconnected" : "disabled");
+  const disable = !input.occupied && input.client
+    ? input.client.disable().catch(() => input.client?.stop("disabled"))
+    : Promise.resolve();
+  await Promise.all([
+    previousRun?.catch(() => undefined),
+    input.waitForTrustRevocation().catch(() => undefined),
+    disable,
+  ]);
+}
+
 function initialProjectName(): string {
   const formatted = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date());
   return `Untitled world · ${formatted}`;
@@ -641,6 +691,9 @@ export default function App() {
   const [approvedAgentClaim, setApprovedAgentClaim] = useState<AgentConnectionClient>();
   const [agentError, setAgentError] = useState<string>();
   const [agentBrowserOccupied, setAgentBrowserOccupied] = useState(false);
+  const agentBrowserOccupiedRef = useRef(agentBrowserOccupied);
+  agentBrowserOccupiedRef.current = agentBrowserOccupied;
+  const agentCommandGenerationRef = useRef(0);
   const [allowAgentDestructive, setAllowAgentDestructive] = useState(false);
   const [hostActionPrompt, setHostActionPrompt] = useState<HostActionPromptRequest>();
   const [voiceRelaySettingsOpen, setVoiceRelaySettingsOpen] = useState(false);
@@ -1216,20 +1269,33 @@ export default function App() {
     workspaceAgentControllerRef.current?.revokeAll();
   }, [invalidatePendingHostAction]);
 
+  const stopXrForProjectReplacement = useCallback(async () => {
+    const failures = await stopXrSessionsForProjectReplacement(
+      sameDeviceXrControlRef.current,
+      headsetXrControlRef.current,
+    );
+    remoteXrContextRef.current = undefined;
+    preparedXrModeRef.current = undefined;
+    if (failures.length > 0) {
+      notice("XR teardown could not be fully confirmed; check the headset or browser session.", "warning");
+    }
+  }, [notice]);
+
   const stopAgentForProjectChange = useCallback(async (reason: string) => {
     voiceRelayHostActionTokenRef.current = undefined;
     remoteXrContextRef.current = undefined;
     preparedXrModeRef.current = undefined;
-    await bestEffortDisarmVoiceRelay();
-    revokeAgentContexts(reason);
     const client = agentGatewayRef.current;
-    if (!agentBrowserOccupied) {
-      try {
-        await client?.disable();
-      } catch {
-        client?.stop("disabled");
-      }
-    } else client?.stop("disconnected");
+    const occupied = agentBrowserOccupiedRef.current;
+    agentCommandGenerationRef.current += 1;
+    const quiescence = quiesceAgentBridgeForProjectReplacement({
+      client: client ?? undefined,
+      occupied,
+      revoke: () => revokeAgentContexts(reason),
+      waitForTrustRevocation: () => voiceRelayTrustBarrierRef.current,
+    });
+    // Close the trusted desktop surface in the same turn that aborts the old
+    // command loop. The store is replaced only after that loop has settled.
     allowAgentDestructiveRef.current = false;
     setAllowAgentDestructive(false);
     setAgentEnabled(false);
@@ -1240,7 +1306,19 @@ export default function App() {
     setAgentHistoryOpen(false);
     setAgentManageOpen(false);
     setAgentBrowserOccupied(false);
-  }, [agentBrowserOccupied, bestEffortDisarmVoiceRelay, revokeAgentContexts]);
+    await quiescence;
+    await Promise.all([
+      stopXrForProjectReplacement(),
+      bestEffortDisarmVoiceRelay(),
+    ]);
+    // A best-effort disable refresh may have published one final config while
+    // draining. Keep the replacement boundary visibly and logically closed.
+    setAgentEnabled(false);
+    setAgentStatus("disabled");
+    setAgentConfig(undefined);
+    setApprovedAgentClaim(undefined);
+    setAgentSessionReady(false);
+  }, [bestEffortDisarmVoiceRelay, revokeAgentContexts, stopXrForProjectReplacement]);
 
   useEffect(() => {
     installWorkspaceAgentController(workspaceStoreRef.current!);
@@ -3592,7 +3670,9 @@ export default function App() {
       const relayStatus = relayRequested
         ? await voiceRelayClientRef.current!.inspect().catch(() => undefined)
         : undefined;
-      const relayPairingAllowed = Boolean(relayStatus?.enabled && relayStatus.target);
+      const relayPairingAllowed = Boolean(
+        relayStatus?.enabled && relayStatus.armed && relayStatus.target,
+      );
       const requestedMode = input.mode === "remote_headset" ? "remote_headset"
         : input.mode === "same_device" ? "same_device"
           : relayPairingAllowed
@@ -3820,7 +3900,7 @@ export default function App() {
         title: "Exit VR",
         message: "The Agent requested that the current immersive session end. The Workspace will remain open and unchanged.",
         confirmLabel: "Exit XR",
-        confirm: () => sameDeviceXrControlRef.current?.exitFromUserGesture(),
+        confirm: async () => { await sameDeviceXrControlRef.current?.exitFromUserGesture(); },
       });
       return {
         command: "request_exit_xr",
@@ -3896,10 +3976,18 @@ export default function App() {
   }), [presentHostAction, runConfirmedVoiceRelayHostAction, selectedComponentId]);
 
   const handleAgentCommand = useCallback<AgentGatewayCommandHandler>(async (name, input, context) => {
-    if (context.signal.aborted) throw new DOMException("Agent command cancelled", "AbortError");
+    const commandGeneration = agentCommandGenerationRef.current;
+    const assertCurrentCommand = () => {
+      if (context.signal.aborted || commandGeneration !== agentCommandGenerationRef.current) {
+        throw new DOMException("Agent command cancelled", "AbortError");
+      }
+    };
+    assertCurrentCommand();
     if (agentHostControl.handles(name)) {
       try {
-        return await agentHostControl.handle(name, input, context);
+        const result = await agentHostControl.handle(name, input, context);
+        assertCurrentCommand();
+        return result;
       } catch (cause) {
         if (cause instanceof AgentHostControlError || cause instanceof HostActionLedgerError) {
           throw new AgentGatewayCommandError(
@@ -3922,6 +4010,7 @@ export default function App() {
         throw new AgentGatewayCommandError("invalid_request", "The reconstructed asset does not match the open Workspace.");
       }
       const result = await completeRealityAssetImport(body.candidate_handle, "photo-reconstruction");
+      assertCurrentCommand();
       return {
         ok: true,
         data: {
@@ -3935,6 +4024,7 @@ export default function App() {
       throw new AgentGatewayCommandError("unsupported_command", `Unsupported Workspace command ${name}.`);
     }
     const result = await workspaceRouter.handle({ id: uid("workspace_command"), name, input });
+    assertCurrentCommand();
     if (!result.ok) return result;
     if (name === "get_workspace_instructions") {
       setAgentSessionReady(true);
@@ -4302,6 +4392,21 @@ export default function App() {
     connected: agentIsConnected,
   } : null;
   const externalControlActive = isAgentWorkspaceUnlocked(agentSessionReady, agentStatus);
+  useLayoutEffect(() => {
+    if (!externalControlActive) hybridCanvasRef.current?.cancelActiveInteractions();
+  }, [externalControlActive]);
+  useEffect(() => {
+    if (externalControlActive) return;
+    invalidatePendingHostAction();
+    setAgentHistoryOpen(false);
+    setAgentManageOpen(false);
+    setVoiceRelaySettingsOpen(false);
+    setConfirm(null);
+    setPendingFile(null);
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+  }, [externalControlActive, invalidatePendingHostAction]);
   useEffect(() => {
     if (shouldClearRealityMeasurementForWorkspaceGate(externalControlActive, realityMeasurement)) {
       cancelRealityMeasurement();
@@ -4327,9 +4432,8 @@ export default function App() {
   }, [workspaceSnapshot]);
 
   useEffect(() => {
-    if (!externalControlActive) return;
     hybridCanvasRef.current?.setXRWorldPanels?.(xrWorldPanels, workspaceSnapshot.revision);
-  }, [externalControlActive, workspaceRenderGeneration, workspaceSnapshot.revision, xrWorldPanels]);
+  }, [workspaceRenderGeneration, workspaceSnapshot.revision, xrWorldPanels]);
 
   const handleSameDeviceXrPanelAction = useCallback((event: ThreeRendererXRPanelAction) => {
     if (event.workspaceRevision !== workspaceSnapshot.revision
@@ -4664,12 +4768,9 @@ export default function App() {
       onSave={save}
       onNew={() => setConfirm("new")}
     />}
-    {!externalControlActive ? <main className="agent-connection-gate" aria-label="Agent connection">
-      <AgentConnectionPage {...agentConnectionPageProps} />
-    </main> : <main
-      id="workspace-panel"
-      className={`app-workspace${externalControlActive ? " agent-control-active" : ""}`}
-      aria-label="Workspace"
+    <AgentWorkspaceGate
+      active={externalControlActive}
+      connection={<AgentConnectionPage {...agentConnectionPageProps} />}
     >
       <Viewport
         status={status}
@@ -4680,7 +4781,7 @@ export default function App() {
           : externalControlActive
             ? `${agentConfig?.clientName?.trim() || "Agent"} connected`
             : "Agent connection ready") : undefined}
-        interactionDisabled={agentManageOpen}
+        interactionDisabled={agentManageOpen || !externalControlActive}
         onFrameAll={() => hybridCanvasRef.current?.frameAll()}
         onResetView={() => hybridCanvasRef.current?.resetView()}
         onZoomIn={() => hybridCanvasRef.current?.zoomIn()}
@@ -4714,7 +4815,10 @@ export default function App() {
             ref={headsetXrControlRef}
             snapshot={workspaceSnapshot}
             registryIdentity={DEFAULT_COMPONENT_REGISTRY.digest}
-            voiceRelayEnabled={Boolean(voiceRelayStatus?.enabled && voiceRelayStatus.target)}
+            desktopControlsVisible={externalControlActive}
+            voiceRelayEnabled={Boolean(
+              voiceRelayStatus?.enabled && voiceRelayStatus.armed && voiceRelayStatus.target,
+            )}
             disabled={agentManageOpen}
             openRealityAsset={openRealityAsset}
             onSelect={setSelectedComponentId}
@@ -4776,7 +4880,7 @@ export default function App() {
           sources={workspaceSources}
           bindingTargets={workspaceBindingTargets}
           bindingDiagnostics={bindingDiagnostics}
-          disabled={busy}
+          disabled={busy || !externalControlActive}
           panelState={workspacePanel}
           onPanelStateChange={setWorkspacePanel}
           configureRequestId={workspaceConfigureRequestId}
@@ -4848,15 +4952,15 @@ export default function App() {
         onManage={() => { setAgentManageOpen((value) => !value); setAgentHistoryOpen(false); }}
       />
       <AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} />
-    </main>}
+    </AgentWorkspaceGate>
     {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => { safeStorageRemove(RECOVERY_KEY); setRecoveryAvailable(false); }}>Dismiss</button></div>}
     <input ref={fileRef} hidden type="file" accept=".json,.semaframe.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
     <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />
-    <ConfirmDialog open={confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
-    <ConfirmDialog open={confirm === "open"} title="Open another project?" detail="Your current project has unsaved changes. Opening another file will replace it in this window." confirmLabel="Open project" tone="danger" onCancel={() => { setConfirm(null); setPendingFile(null); }} onConfirm={() => { const file = pendingFile; setConfirm(null); setPendingFile(null); if (file) void loadProject(file); }} />
+    <ConfirmDialog open={externalControlActive && confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
+    <ConfirmDialog open={externalControlActive && confirm === "open"} title="Open another project?" detail="Your current project has unsaved changes. Opening another file will replace it in this window." confirmLabel="Open project" tone="danger" onCancel={() => { setConfirm(null); setPendingFile(null); }} onConfirm={() => { const file = pendingFile; setConfirm(null); setPendingFile(null); if (file) void loadProject(file); }} />
     <VoiceRelaySettingsDialog
-      open={voiceRelaySettingsOpen}
+      open={externalControlActive && voiceRelaySettingsOpen}
       status={voiceRelayStatus}
       preparation={voiceRelayPreparation}
       diagnostics={voiceRelayDiagnostics}
@@ -4868,7 +4972,7 @@ export default function App() {
       onArm={armVoiceRelaySettings}
       onDisarm={disarmVoiceRelaySettings}
     />
-    <HostActionPrompt request={hostActionPrompt} onConfirm={confirmHostAction} onCancel={cancelHostAction} />
+    <HostActionPrompt request={externalControlActive ? hostActionPrompt : undefined} onConfirm={confirmHostAction} onCancel={cancelHostAction} />
     <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>
     <div className="sr-status" role={status === "failed" ? "alert" : "status"} aria-live={status === "failed" ? "assertive" : "polite"} aria-atomic="true">{statusLabel(status)}</div>
   </div>

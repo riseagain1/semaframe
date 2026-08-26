@@ -164,6 +164,15 @@ describe("Agent Gateway XR boundary", () => {
     expect(rejected.status).toBe(401);
     expect(relay.authority).toBeUndefined();
 
+    const foreignOrigin = await handle(post(XR_HTTP_PATHS.authorityConnect, {
+      workspaceId: "workspace_gateway_xr",
+    }, {
+      "x-semaframe-browser-bootstrap": BOOTSTRAP,
+      origin: "https://untrusted.example",
+    }));
+    expect(foreignOrigin.status).toBe(401);
+    expect(relay.authority).toBeUndefined();
+
     const connected = await handle(post(XR_HTTP_PATHS.authorityConnect, {
       workspaceId: "workspace_gateway_xr",
     }, {
@@ -171,9 +180,129 @@ describe("Agent Gateway XR boundary", () => {
       origin: APP_ORIGIN,
     }));
     expect(connected.status).toBe(200);
-    const payload = await connected.json() as { data: { sessionBearer: string } };
+    const payload = await connected.json() as {
+      data: {
+        authorityEpoch: string;
+        sessionId: string;
+        sessionBearer: string;
+        workspaceId: string;
+      };
+    };
     expect(payload.data.sessionBearer).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(relay.authority).toMatchObject({ workspaceId: "workspace_gateway_xr" });
+
+    const authorityHeaders = {
+      "x-semaframe-browser-bootstrap": BOOTSTRAP,
+      origin: APP_ORIGIN,
+      authorization: `Bearer ${payload.data.sessionBearer}`,
+      [XR_HTTP_SESSION_HEADER]: payload.data.sessionId,
+    };
+    const authoritySend = await handle(post(XR_HTTP_PATHS.sessionSend, {
+      message: {
+        protocolVersion: 1,
+        messageType: "snapshot",
+        sessionId: payload.data.sessionId,
+        authorityEpoch: payload.data.authorityEpoch,
+        workspaceId: payload.data.workspaceId,
+        revision: 0,
+        requestId: "gateway-authority-snapshot",
+        registryDigest: `sha256:${"a".repeat(64)}`,
+        snapshotDigest: `sha256:${"b".repeat(64)}`,
+        snapshot: { revision: 0, components: [] },
+      },
+    }, authorityHeaders));
+    expect(authoritySend.status).toBe(200);
+    expect(authoritySend.headers.get("access-control-allow-origin")).toBeNull();
+
+    const authorityPoll = await handle(post(XR_HTTP_PATHS.sessionPoll, {}, authorityHeaders));
+    expect(authorityPoll.status).toBe(200);
+    expect(authorityPoll.headers.get("access-control-allow-origin")).toBeNull();
+
+    const authorityWithoutBootstrap = await handle(post(XR_HTTP_PATHS.sessionPoll, {}, {
+      origin: APP_ORIGIN,
+      authorization: `Bearer ${payload.data.sessionBearer}`,
+      [XR_HTTP_SESSION_HEADER]: payload.data.sessionId,
+    }));
+    expect(authorityWithoutBootstrap.status).toBe(403);
+
+    const untrustedOrigin = await handle(post(XR_HTTP_PATHS.sessionPoll, {}, {
+      "x-semaframe-browser-bootstrap": BOOTSTRAP,
+      origin: "https://untrusted.example",
+      authorization: `Bearer ${payload.data.sessionBearer}`,
+      [XR_HTTP_SESSION_HEADER]: payload.data.sessionId,
+    }));
+    expect(untrustedOrigin.status).toBe(403);
+
+    const pairing = relay.createPairing({
+      sessionId: payload.data.sessionId,
+      sessionBearer: payload.data.sessionBearer,
+    });
+    const rendererFromApp = await handle(post(XR_HTTP_PATHS.rendererConnect, {
+      pairingToken: pairing.pairingToken,
+    }, { origin: APP_ORIGIN }));
+    expect(rendererFromApp.status).toBe(403);
+
+    const rendererConnected = await handle(post(XR_HTTP_PATHS.rendererConnect, {
+      pairingToken: pairing.pairingToken,
+    }, { origin: XR_ORIGIN }));
+    expect(rendererConnected.status).toBe(200);
+    expect(rendererConnected.headers.get("access-control-allow-origin")).toBe(XR_ORIGIN);
+    const rendererPayload = await rendererConnected.json() as {
+      data: { sessionId: string; sessionBearer: string };
+    };
+    const rendererHeaders = {
+      origin: XR_ORIGIN,
+      authorization: `Bearer ${rendererPayload.data.sessionBearer}`,
+      [XR_HTTP_SESSION_HEADER]: rendererPayload.data.sessionId,
+    };
+
+    const rendererPoll = await handle(post(XR_HTTP_PATHS.sessionPoll, {}, rendererHeaders));
+    expect(rendererPoll.status).toBe(200);
+    expect(rendererPoll.headers.get("access-control-allow-origin")).toBe(XR_ORIGIN);
+
+    const rendererOnAuthoritySurface = await handle(post(XR_HTTP_PATHS.sessionPoll, {}, {
+      ...rendererHeaders,
+      "x-semaframe-browser-bootstrap": BOOTSTRAP,
+      origin: APP_ORIGIN,
+    }));
+    expect(rendererOnAuthoritySurface.status).toBe(403);
+
+    const authorityOnRendererSurface = await handle(post(XR_HTTP_PATHS.sessionPoll, {}, {
+      origin: XR_ORIGIN,
+      authorization: `Bearer ${payload.data.sessionBearer}`,
+      [XR_HTTP_SESSION_HEADER]: payload.data.sessionId,
+    }));
+    expect(authorityOnRendererSurface.status).toBe(403);
+    expect(authorityOnRendererSurface.headers.get("access-control-allow-origin")).toBe(XR_ORIGIN);
+
+    const rendererPreflight = await handle(new Request(`${PUBLIC_URL}${XR_HTTP_PATHS.sessionPoll}`, {
+      method: "OPTIONS",
+      headers: {
+        origin: XR_ORIGIN,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": `authorization, content-type, ${XR_HTTP_SESSION_HEADER}`,
+      },
+    }));
+    expect(rendererPreflight.status).toBe(204);
+    expect(rendererPreflight.headers.get("access-control-allow-origin")).toBe(XR_ORIGIN);
+
+    const appPreflight = await handle(new Request(`${PUBLIC_URL}${XR_HTTP_PATHS.sessionPoll}`, {
+      method: "OPTIONS",
+      headers: {
+        origin: APP_ORIGIN,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": `authorization, content-type, ${XR_HTTP_SESSION_HEADER}`,
+      },
+    }));
+    expect(appPreflight.status).toBe(403);
+
+    const rendererDisconnect = await handle(post(XR_HTTP_PATHS.sessionDisconnect, {}, rendererHeaders));
+    expect(rendererDisconnect.status).toBe(200);
+    expect(rendererDisconnect.headers.get("access-control-allow-origin")).toBe(XR_ORIGIN);
+
+    const authorityDisconnect = await handle(post(XR_HTTP_PATHS.sessionDisconnect, {}, authorityHeaders));
+    expect(authorityDisconnect.status).toBe(200);
+    expect(authorityDisconnect.headers.get("access-control-allow-origin")).toBeNull();
   });
 
   it("awaits exact Voice Relay owner cleanup before acknowledging renderer disconnect", async () => {

@@ -94,6 +94,74 @@ function rangedAssetResponse(
 }
 
 describe("XrViewerHttpTransport", () => {
+  it("posts a six-digit manual code without manufacturing or exposing a deep-link token", async () => {
+    const timers = new ManualTimers();
+    const requests: Request[] = [];
+    const fetch = routedFetch({
+      [XR_HTTP_PATHS.rendererConnect]: (_request, body) => {
+        expect(body).toEqual({ pairingCode: "012345" });
+        expect(body).not.toHaveProperty("pairingToken");
+        return jsonSuccess(viewerConnection());
+      },
+      [XR_HTTP_PATHS.rendererReconnect]: (_request, body) => (
+        jsonSuccess(fullSnapshotPlan(body!.cursor as XrReconnectCursor))
+      ),
+      [XR_HTTP_PATHS.sessionDisconnect]: () => jsonSuccess({ disconnected: true }),
+    }, requests);
+    const transport = new XrViewerHttpTransport({ baseUrl: TEST_ORIGIN, fetch, timers });
+    const session = await transport.pair({
+      pairingCode: "012345",
+      signal: new AbortController().signal,
+      onMessage: vi.fn(),
+      onDisconnected: vi.fn(),
+    });
+
+    const connectRequest = requests.find(
+      (request) => new URL(request.url).pathname === XR_HTTP_PATHS.rendererConnect,
+    )!;
+    expect(await connectRequest.json()).toEqual({ pairingCode: "012345" });
+    await session.close();
+
+    const rejectedFetch = vi.fn();
+    await expect(new XrViewerHttpTransport({
+      baseUrl: TEST_ORIGIN,
+      fetch: rejectedFetch,
+      timers,
+    }).pair({
+      pairingCode: "12345",
+      signal: new AbortController().signal,
+      onMessage: vi.fn(),
+      onDisconnected: vi.fn(),
+    })).rejects.toMatchObject({ code: "pairing_invalid", retryable: false });
+    expect(rejectedFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects runtime requests containing both or neither pairing credential", async () => {
+    const timers = new ManualTimers();
+    const fetch = vi.fn();
+    const invalidTransport = new XrViewerHttpTransport({ baseUrl: TEST_ORIGIN, fetch, timers });
+    const callbacks = {
+      signal: new AbortController().signal,
+      onMessage: vi.fn(),
+      onDisconnected: vi.fn(),
+    };
+    await expect(invalidTransport.pair({
+      ...callbacks,
+      pairingToken: PAIRING_TOKEN,
+      pairingCode: "012345",
+    } as unknown as Parameters<XrViewerHttpTransport["pair"]>[0])).rejects.toMatchObject({
+      code: "pairing_invalid",
+      retryable: false,
+    });
+    await expect(invalidTransport.pair({
+      ...callbacks,
+    } as unknown as Parameters<XrViewerHttpTransport["pair"]>[0])).rejects.toMatchObject({
+      code: "pairing_invalid",
+      retryable: false,
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("does not expose Voice Relay when the one-time pairing disabled it", async () => {
     const timers = new ManualTimers();
     const fetch = routedFetch({

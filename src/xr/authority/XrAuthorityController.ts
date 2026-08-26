@@ -25,6 +25,8 @@ export type XrAuthorityConnectionView = Readonly<{
 export type XrAuthorityPairingGrant = Readonly<{
   pairingId: string;
   pairingToken: string;
+  /** Human-enterable alias for the same single-use pairing grant. */
+  pairingCode: string;
   workspaceId: string;
   authorityEpoch: string;
   expiresAtMs: number;
@@ -366,13 +368,15 @@ export class XrAuthorityController {
     this.#pendingEphemerals.delete(pending.message.channel);
   }
 
-  async disconnect(): Promise<void> {
-    if (this.#state.phase === "idle") return;
+  async disconnect(): Promise<boolean> {
+    if (this.#state.phase === "idle") return true;
     this.#publish({ ...this.#state, phase: "disconnecting" });
     await this.#queue.catch(() => undefined);
-    await this.#transport.disconnect().catch(() => undefined);
+    let remotelyConfirmed = true;
+    await this.#transport.disconnect().catch(() => { remotelyConfirmed = false; });
     this.#clearConnection();
     this.#publish({ phase: "idle", rendererInputCount: 0 });
+    return remotelyConfirmed;
   }
 
   async #syncNow(snapshot: WorkspaceRenderSnapshot, registryIdentity: string): Promise<void> {

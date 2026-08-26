@@ -38,6 +38,7 @@ import { XR_HTTP_POLL_MODE } from "./paths";
 
 const ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const PAIRING_CODE_PATTERN = /^[0-9]{6}$/u;
 
 export type XrPrivateCredential = Readonly<{
   sessionId: string;
@@ -223,12 +224,16 @@ export function parsePairingGrant(
 ): XrAuthorityPairingGrant {
   const body = exact(
     value,
-    ["pairingId", "pairingToken", "workspaceId", "authorityEpoch", "expiresAtMs"],
-    ["pairingId", "pairingToken", "workspaceId", "authorityEpoch", "expiresAtMs"],
+    ["pairingId", "pairingToken", "pairingCode", "workspaceId", "authorityEpoch", "expiresAtMs"],
+    ["pairingId", "pairingToken", "pairingCode", "workspaceId", "authorityEpoch", "expiresAtMs"],
   );
+  if (typeof body.pairingCode !== "string" || !PAIRING_CODE_PATTERN.test(body.pairingCode)) {
+    throw invalidResponse();
+  }
   const grant = Object.freeze({
     pairingId: parseXrOpaqueId(body.pairingId, "$.pairingId"),
     pairingToken: capability(body.pairingToken),
+    pairingCode: body.pairingCode,
     workspaceId: parseXrWorkspaceId(body.workspaceId, "$.workspaceId"),
     authorityEpoch: parseXrOpaqueId(body.authorityEpoch, "$.authorityEpoch"),
     expiresAtMs: safeInteger(body.expiresAtMs),

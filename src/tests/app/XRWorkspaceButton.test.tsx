@@ -1,6 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { XRWorkspaceButton, type XRWorkspaceRuntime } from "../../app/components/XRWorkspaceButton";
+import {
+  XRWorkspaceButton,
+  type XRWorkspaceButtonHandle,
+  type XRWorkspaceRuntime,
+} from "../../app/components/XRWorkspaceButton";
 import type { HybridWorkspaceCanvasHandle } from "../../app/components/workspace/HybridWorkspaceCanvas";
 import { WebXRSessionAdapter } from "../../xr/webxr";
 import {
@@ -35,6 +40,7 @@ function canvas(overrides: Partial<HybridWorkspaceCanvasHandle> = {}): HybridWor
     zoomOut: vi.fn(),
     startRealityMeasurement: vi.fn(() => false),
     cancelRealityMeasurement: vi.fn(),
+    cancelActiveInteractions: vi.fn(),
     enterXR: vi.fn(async () => undefined),
     exitXR: vi.fn(async () => undefined),
     isXRPresenting: vi.fn(() => false),
@@ -106,6 +112,40 @@ describe("XRWorkspaceButton", () => {
     expect(phases).toContain("ending");
   });
 
+  it("returns an explicit unconfirmed outcome when the local renderer cannot exit XR", async () => {
+    const browserSession = rawSession();
+    const adapter = new WebXRSessionAdapter(browserSession, "immersive-vr", "local-floor");
+    const runtime: XRWorkspaceRuntime = {
+      probe: vi.fn(async () => ({
+        runtimeId: "test",
+        available: true,
+        sessionModes: ["immersive-vr"] as const,
+        referenceSpaces: ["local-floor"] as const,
+        features: ["local-floor"] as const,
+        inputCapabilities: ["controller"] as const,
+      })),
+      requestSession: vi.fn(async () => adapter),
+    };
+    const existingCanvas = canvas({
+      isXRPresenting: vi.fn(() => true),
+      exitXR: vi.fn(async () => { throw new Error("renderer teardown failed"); }),
+    });
+    const control = createRef<XRWorkspaceButtonHandle>();
+    const view = render(<XRWorkspaceButton ref={control} getCanvas={() => existingCanvas} runtime={runtime} />);
+    fireEvent.click(await within(view.container).findByRole("button", { name: "Enter immersive XR" }));
+    await within(view.container).findByRole("button", { name: "Exit immersive XR" });
+
+    const outcome = await control.current!.exitFromUserGesture();
+
+    expect(outcome).toEqual({
+      locallyReleased: false,
+      teardownConfirmed: false,
+      error: "renderer teardown failed",
+    });
+    expect(browserSession.end).toHaveBeenCalledOnce();
+    expect(await within(view.container).findByRole("button", { name: "renderer teardown failed" })).toBeEnabled();
+  });
+
   it("ends a granted session if renderer attachment fails", async () => {
     const browserSession = rawSession();
     const adapter = new WebXRSessionAdapter(browserSession, "immersive-vr", "local-floor");
@@ -153,6 +193,36 @@ describe("XRWorkspaceButton", () => {
 
     expect(existingCanvas.enterXR).not.toHaveBeenCalled();
     expect(existingCanvas.exitXR).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a pending permission result when project replacement explicitly exits XR", async () => {
+    const browserSession = rawSession();
+    const adapter = new WebXRSessionAdapter(browserSession, "immersive-vr", "local-floor");
+    const granted = deferred<WebXRSessionAdapter>();
+    const runtime: XRWorkspaceRuntime = {
+      probe: vi.fn(async () => ({
+        runtimeId: "test",
+        available: true,
+        sessionModes: ["immersive-vr"] as const,
+        referenceSpaces: ["local-floor"] as const,
+        features: ["local-floor"] as const,
+        inputCapabilities: ["controller"] as const,
+      })),
+      requestSession: vi.fn(() => granted.promise),
+    };
+    const existingCanvas = canvas();
+    const control = createRef<XRWorkspaceButtonHandle>();
+    const view = render(<XRWorkspaceButton ref={control} getCanvas={() => existingCanvas} runtime={runtime} />);
+    fireEvent.click(await within(view.container).findByRole("button", { name: "Enter immersive XR" }));
+    await waitFor(() => expect(runtime.requestSession).toHaveBeenCalledOnce());
+
+    await act(async () => { await control.current?.exitFromUserGesture(); });
+    granted.resolve(adapter);
+    await waitFor(() => expect(browserSession.end).toHaveBeenCalledOnce());
+
+    expect(existingCanvas.enterXR).not.toHaveBeenCalled();
+    expect(existingCanvas.exitXR).not.toHaveBeenCalled();
+    expect(await within(view.container).findByRole("button", { name: "Enter immersive XR" })).toBeEnabled();
   });
 
   it("offers verified Ultra only after a fresh local probe, confirmation, and benchmark", async () => {

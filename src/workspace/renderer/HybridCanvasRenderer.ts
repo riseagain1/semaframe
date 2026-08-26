@@ -503,6 +503,15 @@ export class HybridCanvasRenderer {
     this.three.setXRWorldPanels(panels, workspaceRevision);
   }
 
+  /** Cancel any pointer gesture before a trusted desktop gate takes focus. */
+  cancelActiveInteractions(): void {
+    this.interaction.cancelActiveDrag();
+    this.interaction.cancelActiveResize();
+    this.three.cancelDesktopInteractions();
+    this.touchPoints.clear();
+    this.lastPinchDistance = null;
+  }
+
   dispose(): void {
     if (!this.initialized) {
       this.three.setRealityMeasurementHandler(undefined);

@@ -771,22 +771,25 @@ export function createAgentGatewayHttpHandler(
     photoReconstruction,
   });
   const xrRelay = options.xrRelay ?? new XrRelay();
+  const xrRendererOrigins = options.xrRendererOrigins ?? allowedOrigins;
   const removeVoiceRelayOwner = options.voiceRelayService
     ? xrRelay.onRendererSessionRemoved(async ({ session }) => {
       await options.voiceRelayService!.cancelOwner(session.sessionId);
     })
     : () => undefined;
   const xr = createXrHttpHandler(xrRelay, {
-    trustedLocalAuthority: (request) => browserBootstrapMatches(
-      request.headers.get(AGENT_BROWSER_BOOTSTRAP_HEADER),
-      browserBootstrapToken,
-    ),
-    rendererOrigins: options.xrRendererOrigins ?? allowedOrigins,
+    trustedLocalAuthority: (request) => {
+      const origin = request.headers.get("origin");
+      return browserBootstrapMatches(
+        request.headers.get(AGENT_BROWSER_BOOTSTRAP_HEADER),
+        browserBootstrapToken,
+      ) && (origin === null || allowedOrigins.includes(origin));
+    },
+    rendererOrigins: xrRendererOrigins,
     assetCache: options.xrAssetCache,
     ultraEvidence: options.xrUltraEvidence,
   });
   const voiceRelayHostActions = options.voiceRelayHostActions ?? new VoiceRelayHostActionStore();
-  const xrRendererOrigins = options.xrRendererOrigins ?? allowedOrigins;
   const voiceRelay = createVoiceRelayHttpHandler({
     ...(options.voiceRelayService ? { service: options.voiceRelayService } : {}),
     authorize: async (request, surface) => {

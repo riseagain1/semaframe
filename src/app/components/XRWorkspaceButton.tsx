@@ -40,7 +40,13 @@ export type XRWorkspaceButtonHandle = Readonly<{
   }>;
   /** Must be called synchronously from the user's click/select handler. */
   enterFromUserGesture(): Promise<void>;
-  exitFromUserGesture(): Promise<void>;
+  exitFromUserGesture(): Promise<XRWorkspaceExitOutcome>;
+}>;
+
+export type XRWorkspaceExitOutcome = Readonly<{
+  locallyReleased: boolean;
+  teardownConfirmed: boolean;
+  error?: string;
 }>;
 
 const READY_MESSAGE = "Enter immersive XR";
@@ -204,16 +210,28 @@ export const XRWorkspaceButton = forwardRef<XRWorkspaceButtonHandle, XRWorkspace
     }
   };
 
-  const exit = async () => {
+  const exit = async (): Promise<XRWorkspaceExitOutcome> => {
+    // Invalidate an in-flight requestSession/profile resolution as well as an
+    // already attached session. A project replacement may call this while the
+    // browser permission prompt is still resolving.
+    lifecycleGenerationRef.current += 1;
+    ultraAbortRef.current?.abort("workspace_xr_exit");
     publish("ending", "Ending XR session…");
     const session = sessionRef.current;
     intentionalEndRef.current = session;
     try {
-      await getCanvas()?.exitXR();
+      const canvas = getCanvas();
+      if (session || canvas?.isXRPresenting()) await canvas?.exitXR();
       sessionRef.current = null;
       publish("ready", READY_MESSAGE);
+      return Object.freeze({ locallyReleased: true, teardownConfirmed: true });
     } catch (cause) {
-      publish("error", cause instanceof Error ? cause.message : "XR could not end cleanly");
+      const error = cause instanceof Error ? cause.message : "XR could not end cleanly";
+      await session?.end().catch(() => undefined);
+      sessionRef.current = null;
+      const locallyReleased = !(getCanvas()?.isXRPresenting() ?? false);
+      publish("error", error);
+      return Object.freeze({ locallyReleased, teardownConfirmed: false, error });
     } finally {
       if (intentionalEndRef.current === session) intentionalEndRef.current = null;
     }

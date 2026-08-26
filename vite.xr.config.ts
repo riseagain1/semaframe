@@ -24,6 +24,19 @@ function gatewayOrigin(value: string | undefined): string {
   return url.origin;
 }
 
+export function xrGatewayProxy(target: string): Readonly<{
+  target: string;
+  changeOrigin: true;
+}> {
+  return {
+    target,
+    // The gateway is deliberately loopback-only and rejects forwarded LAN
+    // Host headers. Quest reaches this Vite origin by LAN IP, so normalize the
+    // upstream Host header while preserving Origin for renderer CORS checks.
+    changeOrigin: true,
+  };
+}
+
 function httpsOptions(environment: Record<string, string>): ServerOptions["https"] {
   const certificatePath = environment.SEMAFRAME_XR_HTTPS_CERT?.trim();
   const keyPath = environment.SEMAFRAME_XR_HTTPS_KEY?.trim();
@@ -95,7 +108,7 @@ export default defineConfig(({ mode }) => {
         // The renderer origin receives only XR relay routes. In particular it
         // never receives the browser-authority bootstrap header used by the
         // main app's /api/agent and authority-side /api/xr routes.
-        "/api/xr": { target: gatewayTarget },
+        "/api/xr": xrGatewayProxy(gatewayTarget),
       },
     },
     preview: {
@@ -105,7 +118,7 @@ export default defineConfig(({ mode }) => {
       https,
       headers: XR_STANDALONE_SECURITY_HEADERS,
       proxy: {
-        "/api/xr": { target: gatewayTarget },
+        "/api/xr": xrGatewayProxy(gatewayTarget),
       },
     },
     build: {

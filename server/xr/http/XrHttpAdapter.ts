@@ -59,7 +59,7 @@ export type XrHttpAdapterOptions = Readonly<{
    * request body.
    */
   trustedLocalAuthority(request: Request): boolean | Promise<boolean>;
-  /** Exact, canonical browser origins allowed to call renderer/session routes. */
+  /** Exact, canonical browser origins allowed to call renderer routes. */
   rendererOrigins?: readonly string[];
   /** May lower, but never raise, the protocol control-body ceiling. */
   controlBodyLimitBytes?: number;
@@ -98,6 +98,13 @@ const RENDERER_CORS_ROUTES = new Set<XrHttpPath>([
   XR_HTTP_PATHS.rendererUltraSample,
   XR_HTTP_PATHS.sessionDisconnect,
 ]);
+const SHARED_SESSION_ROUTES = new Set<XrHttpPath>([
+  XR_HTTP_PATHS.sessionSend,
+  XR_HTTP_PATHS.sessionPoll,
+  XR_HTTP_PATHS.sessionDisconnect,
+]);
+
+type XrSharedSessionSurface = "authority" | "renderer" | "direct";
 
 const BASE_RESPONSE_HEADERS = Object.freeze({
   "cache-control": "no-store",
@@ -508,6 +515,19 @@ function assetCredential(request: Request): XrRelayCredential {
   return authorizationCredential(request, {});
 }
 
+function requireSharedSessionSurface(
+  relay: XrRelay,
+  credential: XrRelayCredential,
+  surface: XrSharedSessionSurface,
+): void {
+  if (surface === "direct") return;
+  const session = relay.authorizeSession(credential);
+  const expectedRole = surface === "authority" ? "authority" : "xr_renderer";
+  if (session.role !== expectedRole) {
+    throw new XrHttpError(403, "forbidden", "Operation is not allowed.");
+  }
+}
+
 function assetRange(request: Request, totalBytes: number): Readonly<{ start: number; endExclusive: number }> | undefined {
   const raw = request.headers.get("range");
   if (raw === null) return undefined;
@@ -588,6 +608,8 @@ function relayFailure(error: XrRelayControlError, headers: HeadersInit): Respons
     case "session_not_found":
     case "pairing_invalid":
       return errorResponse(401, "unauthorized", "Authentication failed.", headers);
+    case "pairing_rate_limited":
+      return errorResponse(429, "pairing_rate_limited", "Pairing code attempts are temporarily rate limited.", headers);
     case "role_not_allowed":
       return errorResponse(403, "forbidden", "Operation is not allowed.", headers);
     case "authority_already_connected":
@@ -795,7 +817,23 @@ export function createXrHttpHandler(
         return preflightResponse(request, origins);
       }
 
-      if (RENDERER_CORS_ROUTES.has(route)) {
+      let sharedSessionSurface: XrSharedSessionSurface = "direct";
+      if (SHARED_SESSION_ROUTES.has(route) && request.headers.has("origin")) {
+        let trustedAuthority = false;
+        try {
+          trustedAuthority = await abortable(
+            Promise.resolve(options.trustedLocalAuthority(request)),
+            request.signal,
+          );
+        } catch (error) {
+          if (error instanceof XrRequestAbortedError) throw error;
+        }
+        sharedSessionSurface = trustedAuthority
+          ? "authority"
+          : "renderer";
+      }
+
+      if (RENDERER_CORS_ROUTES.has(route) && sharedSessionSurface !== "authority") {
         responseCorsHeaders = corsHeadersFor(request, origins);
       }
       if (request.method !== "POST") {
@@ -857,14 +895,15 @@ export function createXrHttpHandler(
         }
 
         case XR_HTTP_PATHS.rendererConnect: {
-          const input = exactObject(body, ["pairingToken"], ["pairingToken"]);
+          const input = exactObject(body, ["pairingToken", "pairingCode"], []);
           throwIfAborted(request.signal);
-          return successResponse(relay.connectRenderer({ pairingToken: input.pairingToken }), responseCorsHeaders);
+          return successResponse(relay.connectRenderer(input), responseCorsHeaders);
         }
 
         case XR_HTTP_PATHS.sessionSend: {
           const input = exactObject(body, ["sessionId", "message"], ["message"]);
           const credential = authorizationCredential(request, input);
+          requireSharedSessionSurface(relay, credential, sharedSessionSurface);
           throwIfAborted(request.signal);
           return successResponse({ response: relay.acceptMessage(credential, input.message) }, responseCorsHeaders);
         }
@@ -872,6 +911,7 @@ export function createXrHttpHandler(
         case XR_HTTP_PATHS.sessionPoll: {
           const input = exactObject(body, ["sessionId", "acknowledgedDeliveryIds"], []);
           const credential = authorizationCredential(request, input);
+          requireSharedSessionSurface(relay, credential, sharedSessionSurface);
           throwIfAborted(request.signal);
           const deliveries = relay.pollDeliveries(
             credential,
@@ -957,6 +997,7 @@ export function createXrHttpHandler(
         case XR_HTTP_PATHS.sessionDisconnect: {
           const input = exactObject(body, ["sessionId"], []);
           const credential = authorizationCredential(request, input);
+          requireSharedSessionSurface(relay, credential, sharedSessionSurface);
           throwIfAborted(request.signal);
           const disconnected = relay.disconnectSession(credential);
           await relay.drainRendererRemovals();
