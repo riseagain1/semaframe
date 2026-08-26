@@ -1240,13 +1240,21 @@ export class XrRelay {
     sourceSessionId?: string,
   ): boolean {
     const queue = [...(this.#outboxes.get(sessionId) ?? [])];
+    // Every mutation below updates this cached exact total. Re-serializing the
+    // entire growing queue for each delivery made a maximum-sized outbox O(n²)
+    // in payload bytes and could starve an otherwise healthy renderer lease.
+    let queueBytes = this.#outboxBytes.get(sessionId)
+      ?? queue.reduce((total, queued) => total + this.#encodedDeliveryBytes(queued), 0);
     if (message.messageType === "input" && message.inputType === "pose") {
       // Live pose is latest-value telemetry, not an action log. Coalesce every
       // unacknowledged sample so a stalled authority cannot be flooded by the
       // 250ms Agent-readable heartbeat or starve select/panel/voice actions.
       for (let index = queue.length - 1; index >= 0; index -= 1) {
         const queued = queue[index]?.message;
-        if (queued?.messageType === "input" && queued.inputType === "pose") queue.splice(index, 1);
+        if (queued?.messageType === "input" && queued.inputType === "pose") {
+          const [removed] = queue.splice(index, 1);
+          if (removed) queueBytes -= this.#encodedDeliveryBytes(removed);
+        }
       }
     }
     const presenceSource = message.messageType === "ephemeral"
@@ -1269,7 +1277,10 @@ export class XrRelay {
           // latest-value lease telemetry. Distinct transitions such as
           // ended -> replica_ready are an ordered lifecycle log and must both
           // survive until the authority acknowledges them.
-          && queued.payload.phase === presencePhase) queue.splice(index, 1);
+          && queued.payload.phase === presencePhase) {
+          const [removed] = queue.splice(index, 1);
+          if (removed) queueBytes -= this.#encodedDeliveryBytes(removed);
+        }
       }
     }
     const delivery: XrQueuedRelayDelivery = sourceSessionId === undefined
@@ -1284,11 +1295,6 @@ export class XrRelay {
           serverReceivedAtMs: checkedNow(this.#now),
         });
     const deliveryBytes = this.#encodedDeliveryBytes(delivery);
-    // Coalescing above changes the exact byte count before capacity planning.
-    let queueBytes = queue.reduce(
-      (total, queued) => total + this.#encodedDeliveryBytes(queued),
-      0,
-    );
     let ordinaryMessages = queue.filter(({ message: entry }) => !isPendingInputResult(entry)).length;
     while (ordinaryMessages >= this.#maximumOutboxMessages
       || queueBytes + deliveryBytes > MAXIMUM_OUTBOX_BYTES) {
@@ -1328,7 +1334,7 @@ export class XrRelay {
       else return false;
     }
     queue.push(delivery);
-    this.#replaceOutbox(sessionId, queue);
+    this.#replaceOutbox(sessionId, queue, queueBytes + deliveryBytes);
     return true;
   }
 
@@ -1336,12 +1342,13 @@ export class XrRelay {
     return Buffer.byteLength(JSON.stringify(delivery), "utf8");
   }
 
-  #replaceOutbox(sessionId: string, queue: XrQueuedRelayDelivery[]): void {
+  #replaceOutbox(
+    sessionId: string,
+    queue: XrQueuedRelayDelivery[],
+    encodedBytes = queue.reduce((total, delivery) => total + this.#encodedDeliveryBytes(delivery), 0),
+  ): void {
     this.#outboxes.set(sessionId, queue);
-    this.#outboxBytes.set(
-      sessionId,
-      queue.reduce((total, delivery) => total + this.#encodedDeliveryBytes(delivery), 0),
-    );
+    this.#outboxBytes.set(sessionId, encodedBytes);
   }
 
   #rememberRequest(sessionId: string, requestId: string, fingerprint: string): void {
