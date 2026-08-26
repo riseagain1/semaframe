@@ -26,9 +26,10 @@ button:disabled { cursor: not-allowed; opacity: .38; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 .compact-only { display: none !important; }
 
-.app-shell { height: 100dvh; display: grid; grid-template-rows: 58px minmax(0, 1fr); background: var(--stage); }
+.app-shell { position: relative; height: 100dvh; display: grid; grid-template-rows: 58px minmax(0, 1fr); background: var(--stage); }
 .app-shell.is-agent-gated { grid-template-rows: minmax(0, 1fr); }
 .agent-connection-gate { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--paper); }
+.agent-connection-gate.is-blocking { position: absolute; z-index: 2000; inset: 0; }
 .project-bar { z-index: 30; display: grid; grid-template-columns: 350px minmax(220px, 1fr) auto; align-items: center; height: 58px; padding: 0 12px 0 18px; background: #f8f5ee; border-bottom: 1px solid #cec6b8; box-shadow: 0 1px 0 rgba(255,255,255,.7); }
 .brand-lockup { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .brand-lockup > div:last-child { display: grid; line-height: 1.05; }
@@ -59,6 +60,7 @@ button:disabled { cursor: not-allowed; opacity: .38; }
 .menu-separator { height: 1px; background: #ded7cb; margin: 5px 3px; }
 
 .app-workspace { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
+.app-workspace.is-desktop-gated { pointer-events: none; user-select: none; }
 .eyebrow { margin: 0; text-transform: uppercase; font-size: 9px; line-height: 1.2; font-weight: 800; letter-spacing: .18em; color: #827a6e; }
 .workspace-history-list { padding: 10px 0 18px; }
 .workspace-history-entry { display: grid; grid-template-columns: 35px 1fr; gap: 7px; padding: 15px 20px 15px 12px; border-bottom: 1px solid rgba(200,191,176,.7); }

@@ -44,6 +44,8 @@ export type XRHeadsetSessionButtonProps = Readonly<{
   snapshot: WorkspaceRenderSnapshot;
   registryIdentity: string;
   disabled?: boolean;
+  /** Hides only the trusted desktop controls; the XR authority remains live. */
+  desktopControlsVisible?: boolean;
   viewerUrl?: string;
   transportFactory?: () => XrAuthorityTransport;
   openRealityAsset?: (assetId: string, digest: string, signal?: AbortSignal) => Promise<Blob | undefined>;
@@ -82,7 +84,13 @@ export type XRHeadsetSessionButtonHandle = Readonly<{
   showPairing(): void;
   setVoiceRelayEnabled(enabled: boolean): Promise<void>;
   requestExit(): Promise<boolean>;
-  stop(): Promise<void>;
+  stop(): Promise<XRHeadsetStopOutcome>;
+}>;
+
+export type XRHeadsetStopOutcome = Readonly<{
+  locallyReleased: boolean;
+  teardownConfirmed: boolean;
+  error?: string;
 }>;
 
 export type XRHeadsetLifecycleTransition = Readonly<{
@@ -105,6 +113,9 @@ type PendingPanelConfirmation = Readonly<{
   actionDigest: string;
   expiresAtMs: number;
 }>;
+
+/** Non-secret identity retained after a renderer consumes its one-time grant. */
+type ActivePairingReference = Readonly<Pick<XrAuthorityPairingGrant, "pairingId">>;
 
 type XrAssetPublishingTransport = XrAuthorityTransport & Readonly<{
   hasAsset(
@@ -164,15 +175,17 @@ function friendly(cause: unknown): string {
 }
 
 /**
- * Host-authority control for a separate headset browser. Pairing secrets live
- * in URL fragments, durable edits are re-authorized in the App, and the
- * headset never owns a second Workspace store.
+ * Host-authority control for a separate headset browser. The opaque pairing
+ * secret lives only in the URL fragment; its six-digit alias is short-lived
+ * and single-use. Durable edits are re-authorized in the App, and the headset
+ * never owns a second Workspace store.
  */
 export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, XRHeadsetSessionButtonProps>(function XRHeadsetSessionButton(props, ref) {
   const {
     snapshot,
     registryIdentity,
     disabled = false,
+    desktopControlsVisible = true,
     onPhaseChange,
   } = props;
   const viewerUrl = props.viewerUrl
@@ -190,7 +203,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
   const rendererActiveTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
   const rendererActiveRef = useRef(false);
   const rendererSessionIdRef = useRef<string | undefined>(undefined);
-  const grantRef = useRef<XrAuthorityPairingGrant | undefined>(undefined);
+  const pairingRef = useRef<ActivePairingReference | undefined>(undefined);
   const pairingRotationRef = useRef<Promise<void>>(Promise.resolve());
   const voiceRelayEnabledRef = useRef(props.voiceRelayEnabled === true);
   const publishedPhaseRef = useRef<Readonly<{ phase: XRHeadsetSessionPhase; message: string }> | undefined>(undefined);
@@ -233,12 +246,18 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     // Never resurrect immersive state from a heartbeat whose server receipt is
     // already older than the lease it is supposed to establish.
     if (ageMs > 10_000 || ageMs < -5_000) return;
-    const currentGrant = grantRef.current;
+    const currentGrant = pairingRef.current;
     if (!controllerRef.current || !currentGrant
       || presence.sourcePairingId !== currentGrant.pairingId) return;
     const pinned = rendererSessionIdRef.current;
     if (pinned && pinned !== presence.sourceSessionId) return;
     rendererSessionIdRef.current = presence.sourceSessionId;
+    // Renderer presence is authenticated by both relay provenance and the
+    // pairing id. Once observed, remove the consumed code/token from React
+    // state and the DOM while retaining only the non-secret pairing id needed
+    // to validate later presence and high-risk confirmations.
+    setGrant(undefined);
+    setCopied(false);
     const previousTransition = lifecycleTransitionsRef.current.at(-1);
     if (previousTransition?.phase !== presence.phase
       || previousTransition.sourceSessionId !== presence.sourceSessionId) {
@@ -259,7 +278,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
       rendererActiveRef.current = false;
       if (presence.phase === "disconnected" || presence.phase === "expired") {
         rendererSessionIdRef.current = undefined;
-        grantRef.current = undefined;
+        pairingRef.current = undefined;
         setGrant(undefined);
       }
       publish(presence.phase, presence.phase === "immersive_entering"
@@ -282,7 +301,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
       if (!rendererActiveRef.current || !controllerRef.current) return;
       rendererActiveRef.current = false;
       rendererSessionIdRef.current = undefined;
-      grantRef.current = undefined;
+      pairingRef.current = undefined;
       setGrant(undefined);
       publish("expired", "Headset presence expired; create a fresh one-time pairing.");
     }, 9_000);
@@ -293,7 +312,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     onActivate: (componentId) => callbacksRef.current.onActivate(componentId),
     onPanelAction: (action) => callbacksRef.current.onPanelAction(action),
     authorizePanelAction: async (action, request: XrPanelAuthorizationRequest) => {
-      const currentGrant = grantRef.current;
+      const currentGrant = pairingRef.current;
       const pinnedRenderer = rendererSessionIdRef.current;
       const now = callbacksRef.current.now?.() ?? Date.now();
       for (const [challengeId, challenge] of panelConfirmationChallengesRef.current) {
@@ -380,7 +399,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
       : undefined,
   }), [Boolean(props.onSpatialContext), Boolean(props.onVoiceIntent)]);
 
-  const stop = useCallback(async (nextMessage = "Headset session stopped.") => {
+  const stop = useCallback(async (nextMessage = "Headset session stopped."): Promise<XRHeadsetStopOutcome> => {
     clearRendererActivity();
     pollingRef.current?.abort("session_stopped");
     pollingRef.current = undefined;
@@ -391,24 +410,39 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     transportRef.current = undefined;
     processedInputResultsRef.current.clear();
     if (!controller) {
-      grantRef.current = undefined;
+      pairingRef.current = undefined;
       setGrant(undefined);
       publish("idle", nextMessage);
-      return;
+      return Object.freeze({ locallyReleased: true, teardownConfirmed: true });
     }
     publish("stopping", "Stopping the headset session…");
+    let remotelyConfirmed = false;
+    let error: string | undefined;
     try {
       await pairingRotationRef.current.catch(() => undefined);
-      const currentGrant = grantRef.current;
-      grantRef.current = undefined;
+      const currentGrant = pairingRef.current;
+      pairingRef.current = undefined;
       if (currentGrant) await controller.revokePairing(currentGrant.pairingId).catch(() => false);
-      await controller.disconnect();
+      remotelyConfirmed = await controller.disconnect();
+    } catch (cause) {
+      error = friendly(cause);
     } finally {
-      if (!aliveRef.current) return;
-      setGrant(undefined);
-      setCopied(false);
-      publish("idle", nextMessage);
+      if (aliveRef.current) {
+        setGrant(undefined);
+        setCopied(false);
+        publish(
+          remotelyConfirmed ? "idle" : "error",
+          remotelyConfirmed
+            ? nextMessage
+            : error ?? "Headset projection was released locally, but relay teardown could not be confirmed.",
+        );
+      }
     }
+    return Object.freeze({
+      locallyReleased: true,
+      teardownConfirmed: remotelyConfirmed,
+      ...(error ? { error } : {}),
+    });
   }, [clearRendererActivity, publish]);
 
   const failSession = useCallback(async (cause: unknown, expected?: XrAuthorityController) => {
@@ -422,7 +456,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     controllerRef.current = undefined;
     transportRef.current = undefined;
     processedInputResultsRef.current.clear();
-    grantRef.current = undefined;
+    pairingRef.current = undefined;
     setGrant(undefined);
     setCopied(false);
     await controller?.disconnect().catch(() => undefined);
@@ -543,8 +577,8 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     const operation = pairingRotationRef.current.then(async () => {
       if (controllerRef.current !== controller) return;
       clearRendererActivity();
-      const previous = grantRef.current;
-      grantRef.current = undefined;
+      const previous = pairingRef.current;
+      pairingRef.current = undefined;
       setGrant(undefined);
       if (previous) {
         try {
@@ -573,10 +607,10 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
         await controller.revokePairing(next.pairingId).catch(() => false);
         return;
       }
-      grantRef.current = next;
+      pairingRef.current = Object.freeze({ pairingId: next.pairingId });
       setGrant(next);
       setCopied(false);
-      publish("pairing", "Projection ready. Open the one-time link, pair the headset, then enter XR.");
+      publish("pairing", "Projection ready. Enter the six-digit code or open the secure link, then enter XR.");
     });
     pairingRotationRef.current = operation.catch(() => undefined);
     return operation;
@@ -642,6 +676,12 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     };
   }, [clearRendererActivity]);
 
+  useEffect(() => {
+    if (desktopControlsVisible) return;
+    setOpen(false);
+    setCopied(false);
+  }, [desktopControlsVisible]);
+
   const link = grant ? pairingUrl(viewerUrl, grant.pairingToken) : undefined;
   const copy = async () => {
     if (!link) return;
@@ -651,6 +691,15 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
       setMessage("One-time pairing link copied. It expires in five minutes and can be used once.");
     } catch {
       setMessage("Clipboard access was denied. Open the link directly or copy it from the field.");
+    }
+  };
+  const copyPairingCode = async () => {
+    if (!grant) return;
+    try {
+      await globalThis.navigator.clipboard.writeText(grant.pairingCode);
+      setMessage("Six-digit pairing code copied. It expires in five minutes and can be used once.");
+    } catch {
+      setMessage("Clipboard access was denied. Type the six-digit code shown here into the headset.");
     }
   };
 
@@ -668,11 +717,11 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     prepare: async () => {
       setOpen(true);
       if (!controllerRef.current) await start();
-      else if (!grantRef.current) await mintPairing(controllerRef.current);
+      else if (!pairingRef.current) await mintPairing(controllerRef.current);
       return {
         phase: controllerRef.current ? (rendererActiveRef.current ? "active" : "pairing") : phase,
         message: controllerRef.current
-          ? "Headset projection is prepared. Open the one-time pairing link in the headset."
+          ? "Headset projection is prepared. Enter the six-digit code or open the secure link in the headset."
           : message,
         pairingReady: Boolean(controllerRef.current),
         lifecycleSequence: lifecycleSequenceRef.current,
@@ -714,7 +763,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     "expired",
   ].includes(phase);
   return <>
-    <button
+    {desktopControlsVisible && <button
       type="button"
       className={`viewport-xr-toggle${sessionPrepared ? " is-active" : ""}`}
       onClick={() => setOpen(true)}
@@ -724,8 +773,8 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
       aria-pressed={sessionPrepared}
     >
       {busy ? <LoaderCircle className="spin-slow" size={17} aria-hidden="true" /> : <Headset size={17} aria-hidden="true" />}
-    </button>
-    {open && createPortal(<div className="xr-headset-modal-backdrop" role="presentation" onMouseDown={(event) => {
+    </button>}
+    {desktopControlsVisible && open && createPortal(<div className="xr-headset-modal-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) setOpen(false);
     }}>
       <section className="xr-headset-modal" role="dialog" aria-modal="true" aria-labelledby="xr-headset-title">
@@ -740,21 +789,39 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
             <Link2 size={16} /> Start headset session
           </button>
         </> : null}
-        {sessionPrepared && link ? <div className="xr-headset-link-card">
-          <strong>One-time pairing link</strong>
+        {sessionPrepared && link && grant ? <div className="xr-headset-link-card">
+          <label htmlFor="xr-headset-pairing-code"><strong>6-digit pairing code</strong></label>
+          <input
+            id="xr-headset-pairing-code"
+            aria-label="XR six-digit pairing code"
+            readOnly
+            value={grant.pairingCode}
+            onFocus={(event) => event.currentTarget.select()}
+            style={{
+              fontSize: "clamp(2rem, 7vw, 3rem)",
+              fontVariantNumeric: "tabular-nums",
+              fontWeight: 760,
+              letterSpacing: ".18em",
+              textAlign: "center",
+            }}
+          />
+          <div>
+            <button type="button" onClick={() => void copyPairingCode()}><Copy size={15} /> Copy code</button>
+          </div>
+          <strong>Secure one-time link</strong>
           <input aria-label="XR one-time pairing link" readOnly value={link} onFocus={(event) => event.currentTarget.select()} />
           <div>
             <button type="button" onClick={() => void copy()}><Copy size={15} /> {copied ? "Copied" : "Copy link"}</button>
             <a href={link} target="_blank" rel="noreferrer"><Headset size={15} /> Open viewer</a>
-            <button type="button" onClick={() => void mintPairing(controllerRef.current!)}><RefreshCw size={15} /> New link</button>
+            <button type="button" onClick={() => void mintPairing(controllerRef.current!)}><RefreshCw size={15} /> New code</button>
           </div>
-          <small>For another device, set VITE_XR_PUBLIC_URL to the HTTPS/LAN address that device can reach. The fragment secret is scrubbed before pairing.</small>
+          <small>Type the six digits on another device, or open the secure link directly. Both are single-use and expire together after five minutes; the link secret is scrubbed before pairing.</small>
         </div> : null}
         {(phase === "disconnected" || phase === "expired") && controllerRef.current ? <button
           type="button"
           className="xr-headset-primary"
           onClick={() => void mintPairing(controllerRef.current!)}
-        ><RefreshCw size={16} /> Create fresh pairing link</button> : null}
+        ><RefreshCw size={16} /> Create fresh pairing code</button> : null}
         {sessionPrepared || phase === "starting" ? <button
           type="button"
           className="xr-headset-stop"

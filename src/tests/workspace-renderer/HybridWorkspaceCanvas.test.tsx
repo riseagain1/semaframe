@@ -216,6 +216,43 @@ describe("HybridWorkspaceCanvas", () => {
     expect(ref.current?.getContainer()).toHaveAttribute("role", "application");
   });
 
+  it("cancels pending 2D and desktop 3D gestures before a trusted gate takes over", async () => {
+    const port = new FakePort();
+    const ref = createRef<HybridWorkspaceCanvasHandle>();
+    const onPreviewPlacement = vi.fn();
+    const onCommitPlacement = vi.fn();
+    const onCancelPreview = vi.fn();
+    render(<HybridWorkspaceCanvas
+      ref={ref}
+      state={snapshot()}
+      rendererOptions={{ three: new ThreeComponentRenderer({ renderer: port }) }}
+      onPreviewPlacement={onPreviewPlacement}
+      onCommitPlacement={onCommitPlacement}
+      onCancelPreview={onCancelPreview}
+    />);
+    const panel = await screen.findByRole("region", { name: /Status panel, panel component/i });
+    fireEvent(panel, new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 10, clientY: 20 }));
+    fireEvent(document, new MouseEvent("pointermove", { bubbles: true, clientX: 50, clientY: 60 }));
+    expect(onPreviewPlacement).toHaveBeenCalledOnce();
+
+    const threeLayer = ref.current?.getContainer()?.querySelector<HTMLElement>("[data-workspace-three-layer]");
+    expect(threeLayer).toBeTruthy();
+    touchPointer(threeLayer!, "pointerdown", 1, 100, 100);
+    touchPointer(threeLayer!, "pointerdown", 2, 200, 100);
+    touchPointer(threeLayer!, "pointermove", 2, 300, 100);
+    const zoomBeforeCancel = Number(ref.current?.getContainer()?.dataset.canvasZoom);
+    expect(zoomBeforeCancel).toBeGreaterThan(1);
+
+    ref.current?.cancelActiveInteractions();
+    fireEvent(document, new MouseEvent("pointerup", { bubbles: true, clientX: 50, clientY: 60 }));
+    touchPointer(threeLayer!, "pointermove", 2, 400, 100);
+
+    expect(onCommitPlacement).not.toHaveBeenCalled();
+    expect(onCancelPreview).toHaveBeenCalledOnce();
+    expect(port.cancelDesktopInteractions).toHaveBeenCalledOnce();
+    expect(Number(ref.current?.getContainer()?.dataset.canvasZoom)).toBe(zoomBeforeCancel);
+  });
+
   it("mounts, replaces state, and unmounts without nested-root lifecycle warnings", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -504,6 +541,7 @@ class FakePort implements ThreeRendererPort {
   setSelectedEntity = vi.fn();
   startRealityMeasurement = vi.fn((_entityId: string) => false);
   cancelRealityMeasurement = vi.fn();
+  cancelDesktopInteractions = vi.fn();
   enterXR = vi.fn(async (_session: XRSession) => undefined);
   exitXR = vi.fn(async () => undefined);
   isXRPresenting = vi.fn(() => this.enterXR.mock.calls.length > this.exitXR.mock.calls.length);

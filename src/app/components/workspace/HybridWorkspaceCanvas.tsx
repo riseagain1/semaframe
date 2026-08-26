@@ -47,6 +47,7 @@ export type HybridWorkspaceCanvasHandle = Readonly<{
   enterXR: (session: XRSession, config?: ThreeRendererXRConfig) => Promise<void>;
   exitXR: () => Promise<void>;
   isXRPresenting: () => boolean;
+  cancelActiveInteractions: () => void;
   setXRWorldPanels?: (panels: readonly ThreeRendererXRWorldPanel[], workspaceRevision?: number) => void;
 }>;
 
@@ -168,6 +169,7 @@ export const HybridWorkspaceCanvas = forwardRef<HybridWorkspaceCanvasHandle, Hyb
       },
       exitXR: async () => { await rendererRef.current?.exitXR(); },
       isXRPresenting: () => rendererRef.current?.isXRPresenting() ?? false,
+      cancelActiveInteractions: () => rendererRef.current?.cancelActiveInteractions(),
       setXRWorldPanels: (panels, workspaceRevision) => {
         rendererRef.current?.setXRWorldPanels(panels, workspaceRevision);
       },

@@ -41,6 +41,8 @@ const DEFAULT_MAXIMUM_DELTA_HISTORY = 128;
 const DEFAULT_MAXIMUM_OUTBOX_MESSAGES = 512;
 const DEFAULT_MAXIMUM_REQUEST_HISTORY = 512;
 const DEFAULT_MAXIMUM_RENDERER_SESSIONS = 16;
+const MAXIMUM_FAILED_PAIRING_CODE_ATTEMPTS = 5;
+const PAIRING_CODE_FAILURE_WINDOW_MS = 60_000;
 const RENDERER_SESSION_IDLE_TIMEOUT_MS = 10_000;
 const SESSION_BEARER_BYTES = 32;
 const MAXIMUM_OUTBOX_BYTES = XR_PROTOCOL_LIMITS.maximumControlResponseBytes * 2;
@@ -220,6 +222,7 @@ export class XrRelayControlError extends Error {
       | "role_not_allowed"
       | "workspace_mismatch"
       | "pairing_invalid"
+      | "pairing_rate_limited"
       | "renderer_capacity",
     message: string,
     options: { cause?: unknown } = {},
@@ -344,6 +347,7 @@ export class XrRelay {
   readonly #rendererRemovalListeners = new Set<XrRendererRemovalListener>();
   readonly #rendererRemovalCleanups = new Set<Promise<void>>();
   readonly #rendererRemovalFailures: unknown[] = [];
+  readonly #failedPairingCodeAttempts: number[] = [];
   #authority?: MutableSession;
   #state?: RelayState;
 
@@ -457,7 +461,15 @@ export class XrRelay {
   }
 
   connectRenderer(value: unknown): XrRelayConnection {
-    const body = exactRecord(value, ["pairingToken"], ["pairingToken"]);
+    const body = exactRecord(value, ["pairingToken", "pairingCode"], []);
+    const hasPairingToken = Object.hasOwn(body, "pairingToken");
+    const hasPairingCode = Object.hasOwn(body, "pairingCode");
+    if (hasPairingToken === hasPairingCode) {
+      throw new XrRelayControlError(
+        "invalid_control_request",
+        "XR renderer connect requires exactly one pairing credential.",
+      );
+    }
     const authority = this.#authority;
     if (!authority) {
       throw new XrRelayControlError("authority_required", "The XR Workspace authority is unavailable.");
@@ -468,16 +480,23 @@ export class XrRelay {
     // Validate the local capability generator before consuming the one-shot
     // pairing capability, so an adapter configuration error remains retryable.
     const sessionBearer = this.#newSessionBearer();
+    if (hasPairingCode) this.#requirePairingCodeAttempt();
     let consumed;
     try {
-      consumed = this.#pairingStore.consume(body.pairingToken);
+      consumed = hasPairingCode
+        ? this.#pairingStore.consumeCode(body.pairingCode)
+        : this.#pairingStore.consumeToken(body.pairingToken);
     } catch (cause) {
+      if (hasPairingCode && cause instanceof XrPairingError) {
+        this.#recordFailedPairingCodeAttempt();
+      }
       throw new XrRelayControlError(
         "pairing_invalid",
         cause instanceof Error ? cause.message : "XR pairing failed.",
         { cause },
       );
     }
+    if (hasPairingCode) this.#failedPairingCodeAttempts.length = 0;
     const scope = this.#pairingScopes.get(consumed.pairingId);
     if (!scope || consumed.workspaceId !== authority.workspaceId || consumed.authorityEpoch !== authority.authorityEpoch
       || scope.workspaceId !== authority.workspaceId || scope.authorityEpoch !== authority.authorityEpoch) {
@@ -1494,6 +1513,36 @@ export class XrRelay {
       if (this.#rendererSessionByPairingId.has(pairingId)) continue;
       const pairing = this.#pairingStore.get(pairingId);
       if (!pairing || pairing.state !== "active") this.#pairingScopes.delete(pairingId);
+    }
+  }
+
+  #requirePairingCodeAttempt(): void {
+    const now = checkedNow(this.#now);
+    this.#pruneFailedPairingCodeAttempts(now);
+    if (this.#failedPairingCodeAttempts.length >= MAXIMUM_FAILED_PAIRING_CODE_ATTEMPTS) {
+      throw new XrRelayControlError(
+        "pairing_rate_limited",
+        "XR pairing code attempts are temporarily rate limited.",
+      );
+    }
+  }
+
+  #recordFailedPairingCodeAttempt(): void {
+    const now = checkedNow(this.#now);
+    this.#pruneFailedPairingCodeAttempts(now);
+    this.#failedPairingCodeAttempts.push(now);
+    if (this.#failedPairingCodeAttempts.length >= MAXIMUM_FAILED_PAIRING_CODE_ATTEMPTS) {
+      throw new XrRelayControlError(
+        "pairing_rate_limited",
+        "XR pairing code attempts are temporarily rate limited.",
+      );
+    }
+  }
+
+  #pruneFailedPairingCodeAttempts(now: number): void {
+    while (this.#failedPairingCodeAttempts.length > 0
+      && now - this.#failedPairingCodeAttempts[0] >= PAIRING_CODE_FAILURE_WINDOW_MS) {
+      this.#failedPairingCodeAttempts.shift();
     }
   }
 

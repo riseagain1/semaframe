@@ -97,9 +97,20 @@ export interface XrViewerTransportSession {
   close(reason?: string): void | Promise<void>;
 }
 
-export type XrViewerPairRequest = Readonly<{
-  /** A single-use secret. Implementations must not retain it after pair() settles. */
-  pairingToken: string;
+type XrViewerPairCredential =
+  | Readonly<{
+    /** Opaque single-use secret supplied only by a scrubbed deep link. */
+    pairingToken: string;
+    pairingCode?: never;
+  }>
+  | Readonly<{
+    /** Human-enterable single-use alias containing exactly six decimal digits. */
+    pairingCode: string;
+    pairingToken?: never;
+  }>;
+
+export type XrViewerPairRequest = XrViewerPairCredential & Readonly<{
+  /** Implementations must not retain either pairing credential after pair() settles. */
   signal: AbortSignal;
   /** Transports call message/disconnect callbacks only after pair() resolves. */
   onMessage(message: XrViewerIncomingMessage): unknown | Promise<unknown>;

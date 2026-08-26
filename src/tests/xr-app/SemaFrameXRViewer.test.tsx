@@ -322,7 +322,7 @@ function viewer(input: Readonly<{
   const scrub = input.scrub ?? vi.fn();
   const result = render(<SemaFrameXRViewer
     transport={transport}
-    initialPairingToken={input.token ?? "one-time-secret-0001"}
+    initialPairingToken={input.token ?? "T".repeat(43)}
     scrubPairingToken={scrub}
     rendererFactory={rendererFactory}
     {...(input.runtime ? { webXRRuntime: input.runtime } : {})}
@@ -351,7 +351,7 @@ describe("SemaFrameXRViewer", () => {
       transport.request = request;
       return transport.session;
     });
-    const secret = "single-use-pairing-0001";
+    const secret = "S".repeat(43);
     viewer({
       transport,
       token: secret,
@@ -432,8 +432,8 @@ describe("SemaFrameXRViewer", () => {
 
   it("clears a manually entered secret before pairing and redacts transport errors that echo it", async () => {
     const transport = new FakeTransport();
-    transport.pair.mockImplementation(async ({ pairingToken }) => {
-      throw new Error(`Rejected token ${pairingToken}`);
+    transport.pair.mockImplementation(async ({ pairingCode }) => {
+      throw new Error(`Rejected code ${pairingCode}`);
     });
     render(<SemaFrameXRViewer
       transport={transport}
@@ -441,7 +441,7 @@ describe("SemaFrameXRViewer", () => {
       rendererFactory={() => new FakeRenderer()}
       requestIdFactory={() => "viewer-request-0001"}
     />);
-    const secret = "manual-secret-0001";
+    const secret = "123456";
     const input = screen.getByLabelText(/One-time pairing code/i);
     await userEvent.type(input, secret);
     await userEvent.click(screen.getByRole("button", { name: /Pair once/i }));
@@ -724,11 +724,11 @@ describe("SemaFrameXRViewer", () => {
     expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
     expect(firstSession.close).toHaveBeenCalledWith("fresh_pairing_required");
 
-    const freshToken = "fresh-epoch-secret-0002";
-    await userEvent.type(screen.getByLabelText(/One-time pairing code/i), freshToken);
+    const freshCode = "654321";
+    await userEvent.type(screen.getByLabelText(/One-time pairing code/i), freshCode);
     await userEvent.click(screen.getByRole("button", { name: /Pair once/i }));
     await waitFor(() => expect(transport.pair).toHaveBeenCalledTimes(2));
-    expect(transport.pair.mock.calls[1]?.[0].pairingToken).toBe(freshToken);
+    expect(transport.pair.mock.calls[1]?.[0].pairingCode).toBe(freshCode);
 
     const freshSnapshot = { ...(await snapshotMessage(9)), ...nextIdentity };
     await act(async () => {
@@ -1045,21 +1045,72 @@ describe("SemaFrameXRViewer", () => {
     const pairing = screen.getByRole("heading", { name: /Connect this renderer/i }).closest("section");
     expect(pairing).toHaveAttribute("data-xr-layout", "pairing");
     expect(pairing).toHaveClass("xr-viewer-pairing");
-    expect(screen.getByLabelText(/One-time pairing code/i).parentElement).toHaveClass("xr-viewer-pairing-row");
+    const pairingCode = screen.getByLabelText(/One-time pairing code/i);
+    expect(pairingCode.parentElement).toHaveClass("xr-viewer-pairing-row");
+    expect(pairingCode).toHaveAttribute("inputmode", "numeric");
+    expect(pairingCode).toHaveAttribute("maxlength", "6");
+    expect(pairingCode).toHaveAttribute("autocomplete", "one-time-code");
 
-    await userEvent.type(screen.getByLabelText(/One-time pairing code/i), "manual-secret-0002");
+    await userEvent.type(pairingCode, "12ab34567");
+    expect(pairingCode).toHaveValue("123456");
     await userEvent.click(screen.getByRole("button", { name: /Pair once/i }));
     await waitFor(() => expect(transport.pair).toHaveBeenCalledOnce());
+    expect(transport.pair.mock.calls[0]?.[0]).toMatchObject({ pairingCode: "123456" });
+    expect(transport.pair.mock.calls[0]?.[0]).not.toHaveProperty("pairingToken");
     expect(document.querySelector('[data-xr-layout="connected"]')).toHaveClass("xr-viewer-connected");
   });
 
-  it("visibly labels the non-immersive fallback and explains when no voice provider is configured", async () => {
-    const { transport } = viewer();
+  it("keeps a normal headset pairing renderer-only without a Voice Relay provider warning", async () => {
+    const { transport, renderer } = viewer();
     await waitFor(() => expect(transport.pair).toHaveBeenCalledOnce());
     await transport.publishSnapshot();
     expect(await screen.findByText("Desktop simulator · Non-immersive")).toBeVisible();
+    expect(screen.queryByText("Voice provider not configured")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Voice Relay" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Start push to talk/i })).not.toBeInTheDocument();
+    expect(renderer.setXRVoiceFeedback).toHaveBeenLastCalledWith({ phase: "hidden" });
+  });
+
+  it("checks the headset speech provider only after standalone Voice Relay is explicitly granted", async () => {
+    const relay = new FakeVoiceRelay();
+    const { transport } = viewer({ voiceRelay: relay });
+    await waitFor(() => expect(transport.pair).toHaveBeenCalledOnce());
+    await transport.publishSnapshot();
+    expect(await screen.findByRole("heading", { name: "Voice Relay" })).toBeVisible();
     expect(screen.getByText("Voice provider not configured")).toBeVisible();
     expect(screen.getByRole("button", { name: /Start push to talk/i })).toBeDisabled();
+  });
+
+  it("keeps Voice Relay feedback hidden throughout immersive XR when the pairing is renderer-only", async () => {
+    const runtime: XrViewerWebXRRuntimePort = {
+      probe: vi.fn(async () => ({
+        runtimeId: "test-webxr",
+        available: true,
+        sessionModes: ["immersive-vr"] as const,
+        referenceSpaces: ["local-floor"] as const,
+        features: ["local-floor"] as const,
+        inputCapabilities: ["controller"] as const,
+      })),
+      requestSession: vi.fn(async () => ({
+        id: "webxr-session-renderer-only",
+        mode: "immersive-vr" as const,
+        referenceSpace: "local-floor" as const,
+        rawSession: {} as XRSession,
+        end: vi.fn(async () => undefined),
+        onEnded: () => () => undefined,
+      })),
+    };
+    const { transport, renderer } = viewer({ runtime });
+    await waitFor(() => expect(transport.pair).toHaveBeenCalledOnce());
+    await transport.publishSnapshot();
+    await userEvent.click(await screen.findByRole("button", { name: "Enter XR" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Exit XR" })).toBeVisible());
+
+    expect(renderer.setXRVoiceFeedback).toHaveBeenLastCalledWith({ phase: "hidden" });
+    expect(renderer.setXRVoiceFeedback).not.toHaveBeenCalledWith(expect.objectContaining({
+      phase: "error",
+      message: "Voice provider not configured",
+    }));
   });
 
   it("keeps Voice Relay off by default and never starts the microphone while the relay is disabled", async () => {
@@ -1072,6 +1123,23 @@ describe("SemaFrameXRViewer", () => {
     expect(await screen.findByText(/Voice Relay is off\. Ask the Agent/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /Start push to talk/i })).toBeDisabled();
     expect(speech.begin).not.toHaveBeenCalled();
+  });
+
+  it("does not require a headset speech provider until Voice Relay is explicitly armed", async () => {
+    const relay = new FakeVoiceRelay();
+    relay.status = Object.freeze({
+      enabled: true,
+      armed: false,
+      phase: "ready",
+      target: relayTarget,
+    });
+    const { transport, renderer } = viewer({ voiceRelay: relay });
+    await waitFor(() => expect(transport.pair).toHaveBeenCalledOnce());
+    await transport.publishSnapshot();
+
+    expect(await screen.findByText(/Voice Relay is not armed for this session/i)).toBeVisible();
+    expect(screen.queryByText("Voice provider not configured")).not.toBeInTheDocument();
+    expect(renderer.setXRVoiceFeedback).toHaveBeenLastCalledWith({ phase: "hidden" });
   });
 
   it("lets the headset user mute earcons without removing visual or haptic feedback", async () => {

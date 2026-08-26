@@ -345,9 +345,21 @@ describe("XrAuthorityController", () => {
     const relay = new XrRelay();
     const authority = new XrAuthorityController(new MemoryAuthorityTransport(relay));
     await authority.connect(state, "registry");
-    await authority.disconnect();
+    await expect(authority.disconnect()).resolves.toBe(true);
     expect(authority.snapshot).toEqual({ phase: "idle", rendererInputCount: 0 });
     expect(state).toEqual(before);
     expect(relay.authority).toBeUndefined();
+  });
+
+  it("releases local authority state while reporting an unconfirmed transport disconnect", async () => {
+    const relay = new XrRelay();
+    const transport = new MemoryAuthorityTransport(relay);
+    transport.disconnect = async () => { throw new Error("lost acknowledgement"); };
+    const authority = new XrAuthorityController(transport);
+    await authority.connect(snapshot(0), "registry");
+
+    await expect(authority.disconnect()).resolves.toBe(false);
+
+    expect(authority.snapshot).toEqual({ phase: "idle", rendererInputCount: 0 });
   });
 });

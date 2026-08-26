@@ -11,9 +11,11 @@ import { AgentHistoryDrawer, AgentWorkspaceControls } from "../../app/components
 import type { WorkspaceHistoryEntry } from "../../app/uiTypes";
 import {
   isAgentWorkspaceUnlocked,
+  quiesceAgentBridgeForProjectReplacement,
   replaceAgentOfferAndRestoreBridge,
   restoreAgentBrowserBridge,
   shouldClearRealityMeasurementForWorkspaceGate,
+  stopXrSessionsForProjectReplacement,
 } from "../../app/App";
 
 afterEach(() => {
@@ -55,6 +57,104 @@ describe("Agent connection offer lifecycle", () => {
     expect(shouldClearRealityMeasurementForWorkspaceGate(true, measurement)).toBe(false);
     expect(shouldClearRealityMeasurementForWorkspaceGate(false, undefined)).toBe(false);
     expect(shouldClearRealityMeasurementForWorkspaceGate(false, measurement)).toBe(true);
+  });
+
+  it("keeps transient Agent gating separate from the explicit project-replacement XR teardown", async () => {
+    const success = { locallyReleased: true, teardownConfirmed: true } as const;
+    const exitFromUserGesture = vi.fn(async () => success);
+    const stop = vi.fn(async () => success);
+
+    await stopXrSessionsForProjectReplacement({ exitFromUserGesture }, { stop });
+
+    expect(exitFromUserGesture).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+
+    exitFromUserGesture.mockClear();
+    stop.mockClear();
+    await stopXrSessionsForProjectReplacement({ exitFromUserGesture }, { stop });
+
+    expect(exitFromUserGesture).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("reports an XR teardown that could not be remotely confirmed", async () => {
+    const failure = new Error("relay unavailable");
+    const outcomes = await stopXrSessionsForProjectReplacement(
+      { exitFromUserGesture: vi.fn(async () => ({ locallyReleased: true, teardownConfirmed: true })) },
+      { stop: vi.fn(async () => { throw failure; }) },
+    );
+
+    expect(outcomes).toEqual([{ target: "headset", reason: failure }]);
+  });
+
+  it("reports a fulfilled production teardown outcome that is only locally released", async () => {
+    const outcomes = await stopXrSessionsForProjectReplacement(undefined, {
+      stop: vi.fn(async () => ({
+        locallyReleased: true,
+        teardownConfirmed: false,
+        error: "relay acknowledgement was lost",
+      })),
+    });
+
+    expect(outcomes).toEqual([{
+      target: "headset",
+      reason: "relay acknowledgement was lost",
+    }]);
+  });
+
+  it("revokes and aborts the old Agent bridge before waiting for it to settle", async () => {
+    const events: string[] = [];
+    let finishRun!: () => void;
+    let finishTrust!: () => void;
+    let finishDisable!: () => void;
+    const previousRun = new Promise<void>((resolve) => { finishRun = resolve; });
+    const trustBarrier = new Promise<void>((resolve) => { finishTrust = resolve; });
+    const disabled = new Promise<void>((resolve) => { finishDisable = resolve; });
+    const client = {
+      running: true,
+      start: vi.fn(() => { events.push("capture-run"); return previousRun; }),
+      stop: vi.fn(() => { events.push("stop"); }),
+      disable: vi.fn(() => { events.push("disable"); return disabled; }),
+    };
+
+    let settled = false;
+    const quiescence = quiesceAgentBridgeForProjectReplacement({
+      client,
+      occupied: false,
+      revoke: () => { events.push("revoke"); },
+      waitForTrustRevocation: () => trustBarrier,
+    }).then(() => { settled = true; });
+
+    expect(events).toEqual(["capture-run", "revoke", "stop", "disable"]);
+    expect(client.stop).toHaveBeenCalledWith("disabled");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finishRun();
+    finishTrust();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finishDisable();
+    await quiescence;
+    expect(settled).toBe(true);
+  });
+
+  it("does not globally disable a bridge currently occupied by another browser", async () => {
+    const client = {
+      running: false,
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(),
+      disable: vi.fn(async () => undefined),
+    };
+
+    await quiesceAgentBridgeForProjectReplacement({
+      client,
+      occupied: true,
+      revoke: vi.fn(),
+      waitForTrustRevocation: async () => undefined,
+    });
+
+    expect(client.stop).toHaveBeenCalledWith("disconnected");
+    expect(client.disable).not.toHaveBeenCalled();
   });
 
   const replacementConfig: AgentGatewayConfig = {

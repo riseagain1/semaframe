@@ -76,6 +76,7 @@ describe("XrAuthorityHttpTransport", () => {
         return jsonSuccess({
           pairingId: "pairing-id-0001",
           pairingToken: PAIRING_TOKEN,
+          pairingCode: "012345",
           workspaceId: WORKSPACE_ID,
           authorityEpoch: AUTHORITY_EPOCH,
           expiresAtMs: 31_000,
@@ -157,6 +158,7 @@ describe("XrAuthorityHttpTransport", () => {
     }]);
     const pairing = await transport.createPairing(30_000);
     expect(pairing.pairingToken).toBe(PAIRING_TOKEN);
+    expect(pairing.pairingCode).toBe("012345");
     expect(JSON.stringify(transport)).not.toContain(PAIRING_TOKEN);
     await expect(transport.revokePairing(pairing.pairingId)).resolves.toBe(true);
     const put = await transport.putAsset(

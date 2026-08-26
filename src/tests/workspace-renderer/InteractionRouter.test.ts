@@ -114,6 +114,52 @@ describe("InteractionRouter", () => {
     root.remove();
   });
 
+  it("releases pointer capture and makes a cancelled drag immune to a late pointer-up", () => {
+    const root = document.createElement("div");
+    const item = document.createElement("div");
+    item.dataset.workspaceComponentId = "desk";
+    item.dataset.workspaceDraggable = "true";
+    root.appendChild(item);
+    document.body.appendChild(root);
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.defineProperties(item, {
+      setPointerCapture: { configurable: true, value: setPointerCapture },
+      hasPointerCapture: { configurable: true, value: vi.fn(() => true) },
+      releasePointerCapture: { configurable: true, value: releasePointerCapture },
+    });
+    const commitPlacement = vi.fn();
+    const cancelPreview = vi.fn();
+    const placement: WorkspacePlacement = {
+      space: "world3d",
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    };
+    const router = new InteractionRouter({
+      selection: new SelectionCoordinator(),
+      getBaseRevision: () => 1,
+      getPlacement: () => placement,
+      previewPlacement: vi.fn(),
+      cancelPreview,
+      commitPlacement,
+    });
+    router.attach(root);
+
+    fireEvent(item, new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+    fireEvent(document, new MouseEvent("pointermove", { bubbles: true, clientX: 20, clientY: 20 }));
+    router.cancelActiveDrag();
+    fireEvent(document, new MouseEvent("pointerup", { bubbles: true, clientX: 20, clientY: 20 }));
+
+    expect(setPointerCapture).toHaveBeenCalledWith(1);
+    expect(releasePointerCapture).toHaveBeenCalledWith(1);
+    expect(cancelPreview).toHaveBeenCalledWith("desk", placement);
+    expect(commitPlacement).not.toHaveBeenCalled();
+    expect(item).not.toHaveAttribute("data-dragging");
+    router.dispose();
+    root.remove();
+  });
+
   it("previews box resizing during pointer movement and commits once on pointer-up", async () => {
     const root = document.createElement("div");
     const item = document.createElement("div");
@@ -231,6 +277,60 @@ describe("InteractionRouter", () => {
       "video-1",
       { kind: "box2d", size: { width: 480, height: 306 } },
     );
+    router.dispose();
+    root.remove();
+  });
+
+  it("releases pointer capture and makes a cancelled resize immune to a late pointer-up", () => {
+    const root = document.createElement("div");
+    const item = document.createElement("div");
+    item.dataset.workspaceComponentId = "video-1";
+    const handle = document.createElement("button");
+    handle.dataset.workspaceResizeHandle = "se";
+    item.appendChild(handle);
+    root.appendChild(item);
+    document.body.appendChild(root);
+    const releasePointerCapture = vi.fn();
+    Object.defineProperties(handle, {
+      setPointerCapture: { configurable: true, value: vi.fn() },
+      hasPointerCapture: { configurable: true, value: vi.fn(() => true) },
+      releasePointerCapture: { configurable: true, value: releasePointerCapture },
+    });
+    const placement: WorkspacePlacement = {
+      space: "viewport",
+      anchor: "center",
+      offset: { x: 0, y: 0 },
+      size: { width: 480, height: 306 },
+    };
+    const commitResize = vi.fn();
+    const cancelResizePreview = vi.fn();
+    const router = new InteractionRouter({
+      selection: new SelectionCoordinator(),
+      getBaseRevision: () => 4,
+      getPlacement: () => placement,
+      getResizePolicy: () => ASPECT_BOX_POLICY,
+      previewPlacement: vi.fn(),
+      cancelPreview: vi.fn(),
+      commitPlacement: vi.fn(),
+      previewResize: vi.fn(),
+      cancelResizePreview,
+      commitResize,
+    });
+    router.attach(root);
+
+    fireEvent(handle, new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 0, clientY: 0 }));
+    fireEvent(document, new MouseEvent("pointermove", { bubbles: true, clientX: 40, clientY: 30 }));
+    router.cancelActiveResize();
+    fireEvent(document, new MouseEvent("pointerup", { bubbles: true, clientX: 40, clientY: 30 }));
+
+    expect(releasePointerCapture).toHaveBeenCalledWith(1);
+    expect(cancelResizePreview).toHaveBeenCalledWith(
+      "video-1",
+      { kind: "box2d", size: { width: 480, height: 306 } },
+    );
+    expect(commitResize).not.toHaveBeenCalled();
+    expect(handle).not.toHaveAttribute("data-resizing");
+    expect(item).not.toHaveAttribute("data-resizing");
     router.dispose();
     root.remove();
   });

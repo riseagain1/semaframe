@@ -242,6 +242,7 @@ export class ThreeRenderer implements RendererAdapter {
   private selectedEntityId: EntityId | null = null;
   private selectionHelper: THREE.BoxHelper | null = null;
   private pointerOrigin: PointerOrigin | null = null;
+  private readonly activeDesktopPointerIds = new Set<number>();
   private reducedMotion = false;
   private reducedMotionQuery: MediaQueryList | null = null;
   private disposed = false;
@@ -1149,6 +1150,39 @@ export class ThreeRenderer implements RendererAdapter {
     this.clearRealityMeasurement(true);
   }
 
+  /** Cancel only desktop DOM gestures; an immersive WebXR session stays live. */
+  cancelDesktopInteractions(): void {
+    this.pointerOrigin = null;
+    const canvas = this.renderer?.domElement;
+    if (!canvas) {
+      this.activeDesktopPointerIds.clear();
+      return;
+    }
+    const PointerEventConstructor = canvas.ownerDocument.defaultView?.PointerEvent;
+    for (const pointerId of [...this.activeDesktopPointerIds].reverse()) {
+      let event: Event;
+      if (PointerEventConstructor) {
+        event = new PointerEventConstructor("pointercancel", {
+          pointerId,
+          bubbles: false,
+          cancelable: true,
+        });
+      } else {
+        event = new Event("pointercancel", { bubbles: false, cancelable: true });
+        Object.defineProperty(event, "pointerId", { configurable: true, value: pointerId });
+      }
+      canvas.dispatchEvent(event);
+      try {
+        if (canvas.hasPointerCapture?.(pointerId) !== false) {
+          canvas.releasePointerCapture?.(pointerId);
+        }
+      } catch {
+        // OrbitControls may already have released capture while handling cancel.
+      }
+    }
+    this.activeDesktopPointerIds.clear();
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -1180,6 +1214,7 @@ export class ThreeRenderer implements RendererAdapter {
     this.reducedMotionQuery = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.cancelDesktopInteractions();
     this.controls?.dispose();
     this.controls = null;
     if (this.renderer) {
@@ -2785,6 +2820,7 @@ export class ThreeRenderer implements RendererAdapter {
   }
 
   private handlePointerDown = (event: PointerEvent): void => {
+    this.activeDesktopPointerIds.add(event.pointerId ?? 0);
     this.keyboardTarget?.focus({ preventScroll: true });
     if (event.isPrimary === false) {
       this.pointerOrigin = null;
@@ -2798,6 +2834,7 @@ export class ThreeRenderer implements RendererAdapter {
   };
 
   private handlePointerUp = (event: PointerEvent): void => {
+    this.activeDesktopPointerIds.delete(event.pointerId ?? 0);
     if (!this.pointerOrigin) return;
     const origin = this.pointerOrigin;
     this.pointerOrigin = null;
@@ -2812,19 +2849,21 @@ export class ThreeRenderer implements RendererAdapter {
   };
 
   private handlePointerCancel = (event: PointerEvent): void => {
+    this.activeDesktopPointerIds.delete(event.pointerId ?? 0);
     if (this.pointerOrigin?.pointerId === (event.pointerId ?? 0)) this.pointerOrigin = null;
   };
 
   private handleLostPointerCapture = (event: PointerEvent): void => {
+    const pointerId = event.pointerId ?? 0;
     const origin = this.pointerOrigin;
-    if (!origin || origin.pointerId !== (event.pointerId ?? 0)) return;
     // OrbitControls releases pointer capture from its pointerup listener, which
     // may dispatch lostpointercapture before our pointerup listener runs. Defer
-    // the fail-closed reset one microtask so a matching, already-dispatched up
-    // can complete, while a genuinely lost capture cannot leak into a later
-    // measurement session.
+    // cleanup one microtask: a normal up/cancel removes the id in the same task;
+    // an abnormal loss leaves it tracked, so synthesize cancel to reset the
+    // controls' private pointer/state machine before the desktop can resume.
     queueMicrotask(() => {
-      if (this.pointerOrigin === origin) this.pointerOrigin = null;
+      if (this.activeDesktopPointerIds.has(pointerId)) this.cancelDesktopInteractions();
+      else if (origin && this.pointerOrigin === origin) this.pointerOrigin = null;
     });
   };
 

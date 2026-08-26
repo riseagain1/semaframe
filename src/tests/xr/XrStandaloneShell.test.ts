@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   XR_STANDALONE_CONTENT_SECURITY_POLICY,
   XR_STANDALONE_SECURITY_HEADERS,
+  xrGatewayProxy,
 } from "../../../vite.xr.config";
 
 function directive(policy: string, name: string): string {
@@ -44,5 +45,12 @@ describe("XR standalone shell hardening", () => {
     expect(narrow).toContain("grid-template-columns: minmax(0, 1fr)");
     expect(narrow).toContain(".xr-viewer-panels");
     expect(narrow).toContain("border-left: 0");
+  });
+
+  it("normalizes Quest LAN Host headers before forwarding to the loopback gateway", () => {
+    expect(xrGatewayProxy("http://127.0.0.1:8788")).toEqual({
+      target: "http://127.0.0.1:8788",
+      changeOrigin: true,
+    });
   });
 });

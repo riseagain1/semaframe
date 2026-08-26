@@ -145,8 +145,13 @@ function defaultId(): string {
 }
 defaultId.counter = 0;
 
-function tokenIsValid(value: string): boolean {
-  return value.length >= 8 && value.length <= 512 && !/[\s\p{Cc}]/u.test(value);
+function pairingCredentialIsValid(
+  kind: "pairingToken" | "pairingCode",
+  value: string,
+): boolean {
+  return kind === "pairingToken"
+    ? /^[A-Za-z0-9_-]{43}$/u.test(value)
+    : /^[0-9]{6}$/u.test(value);
 }
 
 function safeMessage(cause: unknown, secret?: string): string {
@@ -284,11 +289,11 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
     () => new XrViewerRealityAssetRuntime(props.assetCache),
     [props.assetCache],
   );
-  const [tokenInput, setTokenInput] = useState("");
+  const [pairingCodeInput, setPairingCodeInput] = useState("");
   const [connectionPhase, setConnectionPhase] = useState<XrViewerConnectionPhase>("unpaired");
   const [projection, setProjection] = useState<XrWorkspaceProjection>();
   const [selectedComponentId, setSelectedComponentId] = useState<string>();
-  const [statusMessage, setStatusMessage] = useState("Enter a one-time pairing code to begin.");
+  const [statusMessage, setStatusMessage] = useState("Enter the six-digit pairing code to begin.");
   const [errorMessage, setErrorMessage] = useState<string>();
   const [rendererReady, setRendererReady] = useState(false);
   const [immersivePhase, setImmersivePhase] = useState<XrViewerImmersivePhase>("probing");
@@ -848,31 +853,38 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
       if (!aliveRef.current || sessionGenerationRef.current !== nextGeneration) return;
       setConnectionPhase("unpaired");
       setImmersivePhase(immersiveVrAvailableRef.current ? "ready" : "unavailable");
-      setStatusMessage("The XR session ended. Enter a new one-time pairing code.");
+      setStatusMessage("The XR session ended. Enter a new six-digit pairing code.");
     });
   }, [assetRuntime, teardownVoiceSession, teardownXRSession]);
 
-  const pairWithSecret = useCallback(async (rawSecret: string) => {
+  const pairWithSecret = useCallback(async (
+    rawSecret: string,
+    credentialKind: "pairingToken" | "pairingCode",
+  ) => {
     const generation = sessionGenerationRef.current + 1;
     sessionGenerationRef.current = generation;
     pendingEndedPresenceRef.current = false;
     let secret = rawSecret.trim();
-    setTokenInput("");
+    setPairingCodeInput("");
     if (inputRef.current) inputRef.current.value = "";
-    try {
-      scrubPairingToken();
-    } catch {
-      secret = "";
-      setConnectionPhase("error");
-      setStatusMessage("Pairing stopped.");
-      setErrorMessage("The pairing link could not be cleared securely.");
-      return;
+    if (credentialKind === "pairingToken") {
+      try {
+        scrubPairingToken();
+      } catch {
+        secret = "";
+        setConnectionPhase("error");
+        setStatusMessage("Pairing stopped.");
+        setErrorMessage("The pairing link could not be cleared securely.");
+        return;
+      }
     }
-    if (!tokenIsValid(secret)) {
+    if (!pairingCredentialIsValid(credentialKind, secret)) {
       secret = "";
       setConnectionPhase("error");
       setStatusMessage("Pairing stopped.");
-      setErrorMessage("The one-time pairing code is invalid or expired.");
+      setErrorMessage(credentialKind === "pairingCode"
+        ? "Enter the complete six-digit pairing code."
+        : "The one-time pairing link is invalid or expired.");
       return;
     }
     assetRuntime.clear();
@@ -884,8 +896,11 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
     setStatusMessage("Pairing securely…");
     setErrorMessage(undefined);
     try {
+      const credential = credentialKind === "pairingToken"
+        ? { pairingToken: secret } as const
+        : { pairingCode: secret } as const;
       const session = await transport.pair({
-        pairingToken: secret,
+        ...credential,
         signal: abort.signal,
         onMessage: (message) => applyIncoming(message, generation),
         onReconnectDelivery: (delivery) => applyReconnectDelivery(delivery, generation),
@@ -937,12 +952,12 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
   useLayoutEffect(() => {
     if (consumedInitialRef.current || !initialPairingToken) return;
     consumedInitialRef.current = true;
-    void pairWithSecret(initialPairingToken);
+    void pairWithSecret(initialPairingToken, "pairingToken");
   }, [initialPairingToken, pairWithSecret]);
 
   const submitPairing = (event: FormEvent) => {
     event.preventDefault();
-    void pairWithSecret(tokenInput);
+    void pairWithSecret(pairingCodeInput, "pairingCode");
   };
 
   const reconnect = useCallback(async () => {
@@ -1444,23 +1459,27 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
     && voiceRelayStatus.target.capabilities.explicitSend);
   const voiceMode: "relay" | undefined = relayReady ? "relay" : undefined;
 
-  const voiceUnavailableReason = !speech
-    ? "Voice provider not configured"
-    : !projection || connectionPhase !== "connected"
-      ? "Voice is available after a Workspace snapshot connects"
-      : voiceRelay
-        ? !voiceRelayStatus
-          ? "Checking Voice Relay…"
-          : !voiceRelayStatus.enabled
-            ? "Voice Relay is off. Ask the Agent to configure and arm it on the desktop."
-            : !voiceRelayStatus.armed
-              ? "Voice Relay is not armed for this session. Confirm it on the desktop."
-              : !voiceRelayStatus.target
-                ? "Voice Relay needs a configured Agent target."
+  // A normal headset pairing is a renderer/input client. Voice-capable Agents
+  // keep using the computer microphone and need no speech provider in XR.
+  // `voiceRelay` exists only when the desktop explicitly grants the optional
+  // standalone relay capability for this one-time renderer pairing.
+  const voiceUnavailableReason = !voiceRelay
+    ? undefined
+    : !voiceRelayStatus
+      ? "Checking Voice Relay…"
+      : !voiceRelayStatus.enabled
+        ? "Voice Relay is off. Ask the Agent to configure and arm it on the desktop."
+        : !voiceRelayStatus.target
+          ? "Voice Relay needs a configured Agent target."
+          : !voiceRelayStatus.armed
+            ? "Voice Relay is not armed for this session. Confirm it on the desktop."
+            : !speech
+              ? "Voice provider not configured"
+              : !projection || connectionPhase !== "connected"
+                ? "Voice is available after a Workspace snapshot connects"
                 : !relayReady
                   ? "The configured Agent target cannot safely insert and explicitly send drafts."
-                  : undefined
-        : "Voice Relay is off";
+                  : undefined;
 
   const signalVoiceCue = useCallback((cue: XrVoiceCue) => {
     if (audibleVoiceCues) void Promise.resolve(voiceCues.play(cue)).catch(() => undefined);
@@ -1801,6 +1820,13 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
       renderer.setXRVoiceFeedback({ phase: "hidden" });
       return;
     }
+    // A granted-but-off Relay is still renderer-only. Do not turn its setup
+    // state into a persistent headset warning; desktop setup/arming owns that
+    // transition and only an armed Relay may surface provider feedback in XR.
+    if (!voiceRelay || !voiceRelayStatus?.enabled || !voiceRelayStatus.armed) {
+      renderer.setXRVoiceFeedback({ phase: "hidden" });
+      return;
+    }
     const targetLabel = voiceRelayStatus?.target?.label;
     if (voiceUnavailableReason) {
       renderer.setXRVoiceFeedback({ phase: "error", message: voiceUnavailableReason });
@@ -1861,7 +1887,7 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
       return;
     }
     renderer.setXRVoiceFeedback({ phase: "ready", ...(targetLabel ? { targetLabel } : {}) });
-  }, [immersivePhase, rendererReady, voicePhase, voiceReply, voiceText, voiceRelayStatus?.target?.label, voiceUnavailableReason]);
+  }, [immersivePhase, rendererReady, voicePhase, voiceRelay, voiceReply, voiceText, voiceRelayStatus?.target?.label, voiceUnavailableReason]);
 
   useEffect(() => {
     // React Strict Mode replays mount effects in development, so explicitly
@@ -1945,20 +1971,32 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
 
     {pairingVisible && <section aria-labelledby="xr-pairing-title" className="xr-viewer-pairing" data-xr-layout="pairing">
       <h1 id="xr-pairing-title">Connect this renderer</h1>
-      <p className="xr-viewer-muted">Use the one-time code shown by the authoritative SemaFrame Workspace.</p>
+      <p className="xr-viewer-muted">Type the six digits shown by the authoritative SemaFrame Workspace.</p>
       <form onSubmit={submitPairing}>
-        <label htmlFor="xr-pairing-token" className="xr-viewer-pairing-label">One-time pairing code</label>
+        <label htmlFor="xr-pairing-code" className="xr-viewer-pairing-label">One-time pairing code</label>
         <div className="xr-viewer-pairing-row">
           <input
             ref={inputRef}
-            id="xr-pairing-token"
-            type="password"
-            autoComplete="off"
+            id="xr-pairing-code"
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9]{6}"
+            maxLength={6}
+            placeholder="123456"
             spellCheck={false}
             required
-            value={tokenInput}
-            onChange={(event) => setTokenInput(event.currentTarget.value)}
+            value={pairingCodeInput}
+            onChange={(event) => setPairingCodeInput(
+              event.currentTarget.value.replace(/[^0-9]/gu, "").slice(0, 6),
+            )}
             className="xr-viewer-pairing-input"
+            style={{
+              fontSize: "clamp(1.25rem, 7vw, 2rem)",
+              fontVariantNumeric: "tabular-nums",
+              letterSpacing: ".16em",
+              textAlign: "center",
+            }}
           />
           <button type="submit" style={buttonStyle} className="xr-viewer-pairing-submit">Pair once</button>
         </div>
@@ -1977,6 +2015,7 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
         <p style={{ fontSize: 12, color: "#91a6ba", margin: "0 0 12px" }}>Desktop HTML fallback for renderer-neutral immersive panel DTOs.</p>
         {panelResult.error && <p role="alert" style={{ color: "#ffb4ad" }}>{panelResult.error}</p>}
         <XrPanelFallback panels={panelResult.panels} onAction={(action, panelId) => void invokePanelAction(action, panelId)} />
+        {voiceRelay && <>
         <hr style={{ border: 0, borderTop: "1px solid rgba(137, 177, 215, .2)", margin: "18px 0" }} />
         <h2 style={{ fontSize: 15, margin: "0 0 8px" }}>Voice Relay</h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
@@ -2080,6 +2119,7 @@ export function SemaFrameXRViewer(props: SemaFrameXRViewerProps) {
           borderLeft: "2px solid #68d5ff",
           paddingLeft: 10,
         }}>{voiceReply}</p>}
+        </>}
       </aside>
     </div>}
 

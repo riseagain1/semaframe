@@ -279,8 +279,38 @@ describe("ThreeRenderer Reality two-point measurement", () => {
     ]);
   });
 
+  it("cancels a captured desktop gesture without ending the measurement or accepting its late pointer-up", () => {
+    const { renderer, access, canvas, runtime, events } = createHarness();
+    runtime.raycastSurface.mockReturnValue(surfaceHit(
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0, z: 0 },
+      5,
+    ));
+    const pointerCancels: number[] = [];
+    canvas.addEventListener("pointercancel", (event) => {
+      pointerCancels.push((event as PointerEvent).pointerId);
+    });
+    renderer.startRealityMeasurement(REALITY_ID);
+    const stalePointer = pointerAt(100, 50, 41);
+    access.handlePointerDown(stalePointer);
+
+    renderer.cancelDesktopInteractions();
+    access.handlePointerUp(stalePointer);
+
+    expect(pointerCancels).toEqual([41]);
+    expect(runtime.raycastSurface).not.toHaveBeenCalled();
+    expect(events.map((event) => event.kind)).toEqual(["started"]);
+    clickAt(access, 100, 50);
+    expect(runtime.raycastSurface).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toMatchObject({ kind: "point", pointIndex: 1 });
+  });
+
   it("clears an unmatched lost pointer capture before a later pointerup", async () => {
-    const { renderer, access, runtime, events } = createHarness();
+    const { renderer, access, canvas, runtime, events } = createHarness();
+    const pointerCancels: number[] = [];
+    canvas.addEventListener("pointercancel", (event) => {
+      pointerCancels.push((event as PointerEvent).pointerId);
+    });
     runtime.raycastSurface.mockReturnValue(surfaceHit(
       { x: 0, y: 0, z: 0 },
       { x: 0, y: 0, z: 0 },
@@ -293,6 +323,7 @@ describe("ThreeRenderer Reality two-point measurement", () => {
     await Promise.resolve();
     access.handlePointerUp(lostPointer);
 
+    expect(pointerCancels).toEqual([31]);
     expect(runtime.raycastSurface).not.toHaveBeenCalled();
     expect(events.map((event) => event.kind)).toEqual(["started"]);
   });
