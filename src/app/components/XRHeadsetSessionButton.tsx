@@ -100,7 +100,7 @@ export type XRHeadsetLifecycleTransition = Readonly<{
   sourceSessionId: string;
 }>;
 
-const DEFAULT_VIEWER_URL = "http://127.0.0.1:4174/xr.html";
+export const DEFAULT_XR_VIEWER_URL = "http://127.0.0.1:4174/xr.html";
 const XR_ASSET_TTL_MS = 24 * 60 * 60_000;
 const XR_PANEL_CONFIRMATION_TTL_MS = 15_000;
 const MAXIMUM_PANEL_CONFIRMATION_CHALLENGES = 64;
@@ -144,17 +144,30 @@ function supportsAssetPublishing(transport: XrAuthorityTransport): transport is 
   return typeof candidate.hasAsset === "function" && typeof candidate.putAsset === "function";
 }
 
-function canonicalViewerUrl(value: string): URL {
+export function isLoopbackXrViewerHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost"
+    || normalized === "::1"
+    || normalized === "0:0:0:0:0:0:0:1"
+    || /^127(?:\.\d{1,3}){3}$/u.test(normalized);
+}
+
+export function canonicalXrViewerUrl(value: string): URL {
   const result = new URL(value, globalThis.location?.href ?? "http://127.0.0.1/");
   if ((result.protocol !== "http:" && result.protocol !== "https:")
     || result.username || result.password || result.search || result.hash) {
     throw new Error("The XR viewer URL must be an HTTP(S) page without credentials, query parameters, or a fragment.");
   }
+  if (result.protocol === "http:" && !isLoopbackXrViewerHost(result.hostname)) {
+    throw new Error(
+      "A remote XR viewer must use HTTPS. Plain HTTP is allowed only for a localhost or loopback simulator. Configure VITE_XR_PUBLIC_URL with a reachable HTTPS xr.html address.",
+    );
+  }
   return result;
 }
 
 function pairingUrl(viewerUrl: string, pairingToken: string): string {
-  const result = canonicalViewerUrl(viewerUrl);
+  const result = canonicalXrViewerUrl(viewerUrl);
   result.hash = new URLSearchParams({ pair: pairingToken }).toString();
   return result.toString();
 }
@@ -189,7 +202,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     onPhaseChange,
   } = props;
   const viewerUrl = props.viewerUrl
-    ?? (import.meta.env.VITE_XR_PUBLIC_URL?.trim() || DEFAULT_VIEWER_URL);
+    ?? (import.meta.env.VITE_XR_PUBLIC_URL?.trim() || DEFAULT_XR_VIEWER_URL);
   const pollIntervalMs = props.pollIntervalMs ?? 80;
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<XRHeadsetSessionPhase>("idle");
@@ -576,6 +589,10 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
   ): Promise<void> => {
     const operation = pairingRotationRef.current.then(async () => {
       if (controllerRef.current !== controller) return;
+      // Validate the renderer origin before revoking an existing grant or
+      // minting a new capability. An insecure LAN URL must never receive a
+      // fragment secret, even transiently.
+      canonicalXrViewerUrl(viewerUrl);
       clearRendererActivity();
       const previous = pairingRef.current;
       pairingRef.current = undefined;
@@ -621,6 +638,9 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     publish("starting", "Starting the authoritative XR projection…");
     let attemptedController: XrAuthorityController | undefined;
     try {
+      // Fail closed before authority connect/createPairing. Loopback HTTP is
+      // intentionally retained for the same-machine simulator only.
+      canonicalXrViewerUrl(viewerUrl);
       const transport = props.transportFactory?.()
         ?? new XrAuthorityHttpTransport({ baseUrl: globalThis.location.origin });
       const operationAbort = new AbortController();
@@ -641,7 +661,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     } catch (cause) {
       await failSession(cause, attemptedController);
     }
-  }, [beginPolling, failSession, mintPairing, phase, props.transportFactory, publish, publishRealityAssets, registryIdentity]);
+  }, [beginPolling, failSession, mintPairing, phase, props.transportFactory, publish, publishRealityAssets, registryIdentity, viewerUrl]);
 
   useEffect(() => {
     const controller = controllerRef.current;
@@ -833,4 +853,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
   </>;
 });
 
-export const __xrHeadsetSessionTest = Object.freeze({ pairingUrl, canonicalViewerUrl });
+export const __xrHeadsetSessionTest = Object.freeze({
+  pairingUrl,
+  canonicalViewerUrl: canonicalXrViewerUrl,
+});

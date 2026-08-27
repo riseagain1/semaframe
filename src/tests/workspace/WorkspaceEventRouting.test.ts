@@ -12,13 +12,24 @@ import {
 } from "../../workspace/state";
 import { workspaceBatch } from "./helpers";
 
-function createButton(id: string, opId = `create_${id}`): CreateComponentOperation {
+function createButton(
+  id: string,
+  opId = `create_${id}`,
+  layoutIndex = 0,
+): CreateComponentOperation {
+  const column = layoutIndex % 13;
+  const row = Math.floor(layoutIndex / 13);
   return {
     op: "create_component",
     op_id: opId,
     id,
     component_type: DEFAULT_COMPONENT_REGISTRY.ref("button"),
-    placement: { space: "viewport", anchor: "center", offset: { x: 0, y: 0 } },
+    placement: {
+      space: "viewport",
+      anchor: "center",
+      offset: { x: -576 + column * 96, y: -168 + row * 48 },
+      size: { width: 80, height: 32 },
+    },
   };
 }
 
@@ -190,7 +201,7 @@ describe("Workspace deterministic event routing", () => {
   it("caps routed action fan-out without committing a partial cascade", () => {
     const store = new WorkspaceStore({ clock: () => 40 });
     const targets = Array.from({ length: MAX_ACTION_EFFECTS_PER_COMMIT }, (_, index) =>
-      createButton(`TARGET_${String(index).padStart(3, "0")}`));
+      createButton(`TARGET_${String(index).padStart(3, "0")}`, undefined, index + 1));
     store.apply(workspaceBatch(store, "buttons_a", [createButton("SOURCE"), ...targets.slice(0, 49)]));
     store.apply(workspaceBatch(store, "buttons_b", targets.slice(49)));
     store.apply(workspaceBatch(store, "connections", targets.map((target, index) => connect(

@@ -1,0 +1,55 @@
+.agent-connection-page.status-approved .agent-connection-mark {
+  border-color: #9fb8a5;
+  background: #e4ede5;
+  color: #4d745b;
+}
+
+.agent-connection-page.status-unavailable .agent-connection-mark,
+.agent-connection-page.status-invalid .agent-connection-mark {
+  border-color: #d0aaa4;
+  background: #f0dfdc;
+  color: #9a4c43;
+}
+
+.agent-experience-card,
+.agent-approved-card {
+  padding: 18px;
+  border: 1px solid #c7beb1;
+  border-radius: 11px;
+  background: rgba(255, 250, 242, .8);
+  box-shadow: 0 12px 34px rgba(53, 47, 39, .07);
+}
+
+.agent-experience-card {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 11px;
+  color: #65756b;
+}
+
+.agent-experience-card.is-error { color: #984b43; border-color: #d0aaa4; background: #f3e3df; }
+.agent-experience-card.is-warning { color: #8a672e; border-color: #d3bf94; background: #f5eddc; }
+.agent-experience-card h2 { margin: 0; color: #37352f; font: 500 20px/1.15 Georgia, "Times New Roman", serif; }
+.agent-experience-card p { margin: 7px 0 0; color: #746d62; font-size: 10.5px; line-height: 1.55; }
+
+.agent-approved-card { border-color: #afc3b2; background: #edf3ec; }
+.agent-approved-card .agent-recovery-actions { margin-left: 0; }
+.agent-handshake-progress { margin: 17px 0 0; padding: 0; display: grid; gap: 8px; list-style: none; }
+.agent-handshake-progress li { min-height: 45px; padding: 8px 10px; display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 9px; align-items: start; border: 1px solid #cbd8cd; border-radius: 8px; background: rgba(255,255,255,.57); color: #65796b; }
+.agent-handshake-progress li[aria-current="step"] { border-color: #9db8a3; background: #fffdf8; color: #4c7158; }
+.agent-handshake-progress li > span { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: #dce9de; font-size: 10px; font-weight: 800; }
+.agent-handshake-progress li > svg { margin: 2px; }
+.agent-handshake-progress li div { display: grid; gap: 2px; }
+.agent-handshake-progress strong { color: #3f4d43; font-size: 10.5px; }
+.agent-handshake-progress small { color: #748078; font-size: 9.5px; line-height: 1.4; }
+.agent-approved-note { margin: 12px 0 0; color: #5f7065; font-size: 10px; line-height: 1.5; }
+
+.agent-approval-card .agent-scope-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.agent-approval-card .agent-scope-list li { min-width: 0; display: grid; gap: 3px; }
+.agent-approval-card .agent-scope-list li::before { display: none; }
+.agent-scope-list span { color: #5f533c; font-size: 9.5px; }
+.agent-scope-list code { color: #8c7956; font-size: 8px; overflow-wrap: anywhere; }
+
+@media (max-width: 520px) {
+  .agent-approval-card .agent-scope-list { grid-template-columns: 1fr; }
+}

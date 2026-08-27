@@ -63,6 +63,7 @@ const EXPECTED_WORKSPACE_TOOLS = [
   "inspect_workspace_photo_reconstruction",
   "inspect_workspace_physics",
   "inspect_workspace_space",
+  "query_layout_placement",
   "query_spatial_placement",
   "query_stable_placement",
   "read_workspace_events",
@@ -75,7 +76,7 @@ const EXPECTED_WORKSPACE_TOOLS = [
 ];
 
 describe("composable Workspace MCP tools", () => {
-  it("registers all twenty-four Workspace tools and its guide", async () => {
+  it("registers all twenty-five Workspace tools and its guide", async () => {
     const recorder = new RecordingMcpServer();
     const dispatch = vi.fn(async (name: WorkspaceAgentToolName, input: unknown) => ({
       responseOk: true,
@@ -192,6 +193,43 @@ describe("composable Workspace MCP tools", () => {
       candidate: {
         ...semanticCadCandidate.candidate,
         geometry: { kind: "box", sizeM: { x: 1, y: 1, z: 1 } },
+      },
+    }).success).toBe(false);
+
+    const layoutPlacementInput = recorder.tools.get("query_layout_placement")
+      ?.definition.inputSchema as ZodType | undefined;
+    const exactLayoutCandidate = {
+      session_token: "workspace_session_1234567890",
+      instruction_digest: "guide_digest_1234567890",
+      candidate: {
+        component_id: "PANEL_A",
+        placement: {
+          space: "viewport",
+          anchor: "top_left",
+          offset: { x: 20, y: 20 },
+          size: { width: 320, height: 220 },
+          zIndex: 5,
+        },
+      },
+    };
+    expect(layoutPlacementInput?.safeParse(exactLayoutCandidate).success).toBe(true);
+    expect(layoutPlacementInput?.safeParse({
+      ...exactLayoutCandidate,
+      candidate: {
+        placement: { space: "canvas2d", position: { x: 0, y: 0 } },
+      },
+    }).success).toBe(false);
+    expect(layoutPlacementInput?.safeParse({
+      ...exactLayoutCandidate,
+      candidate: {
+        placement: exactParametricCandidate.candidate.placement,
+      },
+    }).success).toBe(false);
+    expect(layoutPlacementInput?.safeParse({
+      ...exactLayoutCandidate,
+      candidate: {
+        ...exactLayoutCandidate.candidate,
+        placement: { ...exactLayoutCandidate.candidate.placement, collision: { enabled: true } },
       },
     }).success).toBe(false);
     expect(spatialPlacementInput?.safeParse({
@@ -607,6 +645,36 @@ describe("Workspace REST adapter", () => {
       session_token: "workspace_session_1234567890",
       instruction_digest: "guide_digest_1234567890",
       resource_id: "RES_traffic_feed",
+    });
+
+    const layoutCandidate = {
+      placement: {
+        space: "viewport",
+        anchor: "center",
+        offset: { x: 0, y: 0 },
+        size: { width: 320, height: 220 },
+      },
+    };
+    const layout = await handler(new Request(
+      `http://localhost${WORKSPACE_REST_PATHS.query_layout_placement}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer paired",
+        },
+        body: JSON.stringify({
+          session_token: "workspace_session_1234567890",
+          instruction_digest: "guide_digest_1234567890",
+          candidate: layoutCandidate,
+        }),
+      },
+    ));
+    expect(layout.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledWith("query_layout_placement", {
+      session_token: "workspace_session_1234567890",
+      instruction_digest: "guide_digest_1234567890",
+      candidate: layoutCandidate,
     });
   });
 

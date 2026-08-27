@@ -165,7 +165,10 @@ describe("Workspace Protocol 1.1 resize_component", () => {
     const store = new WorkspaceStore();
     store.apply(batch(store, "create_locked", [
       viewportTimer("CMP_000001", { resize: true }),
-      viewportTimer("CMP_000002", { placement: true }),
+      {
+        ...viewportTimer("CMP_000002", { placement: true }),
+        placement: { space: "viewport" as const, anchor: "center" as const, offset: { x: 300, y: 0 } },
+      },
       stage(),
       {
         op: "upsert_resource",

@@ -371,16 +371,20 @@ try {
 
   const initialConnectionGate = await cdp.evaluate(`({
     connectionLabel: document.querySelector('.agent-connection-gate')?.getAttribute('aria-label'),
-    hasWorkspace: Boolean(document.querySelector('.app-workspace')),
+    workspaceMounted: Boolean(document.querySelector('.app-workspace')),
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
+    workspaceAriaHidden: document.querySelector('.app-workspace')?.getAttribute('aria-hidden'),
     hasProjectBar: Boolean(document.querySelector('.project-bar')),
     hasBackButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('Back to workspace')),
     hasLegacyModeSwitch: Boolean(document.querySelector('.control-mode-switch')),
     hasLegacyAgentDialog: Boolean(document.querySelector('.agent-mode-dialog')),
   })`);
-  if (initialConnectionGate.connectionLabel !== "Agent connection" || initialConnectionGate.hasWorkspace ||
-      initialConnectionGate.hasProjectBar || initialConnectionGate.hasBackButton ||
+  if (initialConnectionGate.connectionLabel !== "Agent connection" || !initialConnectionGate.workspaceMounted ||
+      initialConnectionGate.workspaceActive !== "false" || !initialConnectionGate.workspaceInert ||
+      initialConnectionGate.workspaceAriaHidden !== "true" || initialConnectionGate.hasProjectBar || initialConnectionGate.hasBackButton ||
       initialConnectionGate.hasLegacyModeSwitch || initialConnectionGate.hasLegacyAgentDialog) {
-    throw new Error(`The app did not open behind the exclusive Agent connection gate: ${JSON.stringify(initialConnectionGate)}`);
+    throw new Error(`The app did not open with a mounted inert Workspace behind the exclusive Agent connection gate: ${JSON.stringify(initialConnectionGate)}`);
   }
   if (!await cdp.evaluate(clickButton("Enable agent control"))) {
     const disabledState = await cdp.evaluate(`({
@@ -397,7 +401,11 @@ try {
   }
   const preConnectionUi = await cdp.evaluate(`({
     hasLegacyModeSwitch: Boolean(document.querySelector('.control-mode-switch')),
-    hasViewport: Boolean(document.querySelector('.viewport-canvas')),
+    workspaceMounted: Boolean(document.querySelector('.app-workspace')),
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
+    workspaceAriaHidden: document.querySelector('.app-workspace')?.getAttribute('aria-hidden'),
+    hasMountedViewport: Boolean(document.querySelector('.viewport-canvas')),
     hasComposer: Boolean(document.querySelector('textarea[aria-label="Describe what happens next"]')),
     hasDialog: Boolean(document.querySelector('.agent-mode-dialog')),
     guidance: document.querySelector('.agent-copy-guidance')?.textContent,
@@ -405,8 +413,11 @@ try {
     connectionUrl: document.querySelector('.agent-connection-url-wrap input')?.value,
     expiresAt: document.querySelector('.agent-expiry time')?.dateTime,
   })`);
-  if (preConnectionUi.hasLegacyModeSwitch || preConnectionUi.hasViewport || preConnectionUi.hasComposer || preConnectionUi.hasDialog) {
-    throw new Error(`The waiting Agent connection gate exposed the Workspace before the handshake: ${JSON.stringify(preConnectionUi)}`);
+  if (preConnectionUi.hasLegacyModeSwitch || !preConnectionUi.workspaceMounted ||
+      preConnectionUi.workspaceActive !== "false" || !preConnectionUi.workspaceInert ||
+      preConnectionUi.workspaceAriaHidden !== "true" || !preConnectionUi.hasMountedViewport ||
+      preConnectionUi.hasComposer || preConnectionUi.hasDialog) {
+    throw new Error(`The waiting Agent connection gate did not keep the mounted Workspace inert before the handshake: ${JSON.stringify(preConnectionUi)}`);
   }
   if (!preConnectionUi.guidance?.includes("paste it into your agent") || !preConnectionUi.copyLabel) {
     throw new Error("Agent connection management did not clearly tell the user to copy and paste the URL into their agent.");
@@ -505,8 +516,8 @@ try {
   }
   await poll(
     occupiedCdp,
-    "Boolean(document.querySelector('.agent-connection-page.status-waiting')) && !document.querySelector('.app-workspace')",
-    "successful browser takeover at the waiting connection gate",
+    "Boolean(document.querySelector('.agent-connection-page.status-waiting')) && Boolean(document.querySelector('.app-workspace[data-agent-workspace-active=\"false\"][inert][aria-hidden=\"true\"]'))",
+    "successful browser takeover at the waiting connection gate with mounted inert Workspace",
     6_000,
   );
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-disconnected'))", "old bridge invalidation after takeover", 6_000);
@@ -575,7 +586,7 @@ try {
   const tools = await mcpClient.listTools();
   const toolNames = new Set(tools.tools.map((tool) => tool.name));
   const expectedTools = [
-    "get_workspace_instructions", "inspect_workspace", "inspect_workspace_component", "read_workspace_resource_snapshot", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
+    "get_workspace_instructions", "inspect_workspace", "inspect_workspace_component", "read_workspace_resource_snapshot", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "query_layout_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
     "undo_workspace_batch", "redo_workspace_batch", "read_workspace_events", "begin_workspace_photo_reconstruction", "start_workspace_photo_reconstruction", "inspect_workspace_photo_reconstruction", "cancel_workspace_photo_reconstruction", "finalize_workspace_photo_reconstruction",
     "inspect_voice_relay", "prepare_voice_relay_setup", "run_voice_relay_diagnostics", "request_voice_relay_arm", "inspect_xr_readiness", "prepare_xr_session", "request_enter_xr", "wait_for_xr_session_state", "request_exit_xr", "get_live_xr_context",
   ];
@@ -672,14 +683,14 @@ try {
   try {
     await poll(
       cdp,
-      `document.querySelector('.agent-last-client strong')?.textContent?.includes(${JSON.stringify(workspaceClientName)}) === true && !document.querySelector('.agent-connection-permission')`,
+      `document.querySelector('.agent-connection-page.status-approved .agent-approved-card h2')?.textContent?.includes(${JSON.stringify(workspaceClientName)}) === true && !document.querySelector('.agent-connection-permission')`,
       "approved Workspace client handoff",
     );
   } catch (error) {
     const transitionalState = await cdp.evaluate(`({
       pageClass: document.querySelector('.agent-connection-page')?.className,
       pageText: document.querySelector('.agent-connection-page')?.innerText,
-      client: document.querySelector('.agent-last-client strong')?.textContent,
+      client: document.querySelector('.agent-approved-card h2')?.textContent,
       destructivePermissionVisible: Boolean(document.querySelector('.agent-connection-permission')),
       status: document.querySelector('.agent-workspace-status')?.textContent,
     })`);
@@ -713,12 +724,16 @@ try {
   await poll(cdp, "Boolean(document.querySelector('.agent-workspace-controls.status-connected')) && !document.querySelector('.agent-connection-page')", "automatic Agent handoff to the Workspace");
   const connectedUi = await cdp.evaluate(`({
     status: document.querySelector('.agent-workspace-status')?.textContent,
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
     hasViewport: Boolean(document.querySelector('.viewport-canvas')),
     hasComposer: Boolean(document.querySelector('textarea[aria-label="Describe what happens next"]')),
     hasLegacyModeSwitch: Boolean(document.querySelector('.control-mode-switch')),
     hasLegacyStoryRail: Boolean(document.querySelector('.story-rail')),
   })`);
-  if (!connectedUi.status?.includes(workspaceClientName) || !connectedUi.hasViewport || connectedUi.hasComposer || connectedUi.hasLegacyModeSwitch || connectedUi.hasLegacyStoryRail) {
+  if (!connectedUi.status?.includes(workspaceClientName) || connectedUi.workspaceActive !== "true" ||
+      connectedUi.workspaceInert || !connectedUi.hasViewport || connectedUi.hasComposer ||
+      connectedUi.hasLegacyModeSwitch || connectedUi.hasLegacyStoryRail) {
     throw new Error(`Successful native Workspace handshake did not return to the unified Workspace: ${JSON.stringify(connectedUi)}`);
   }
 
@@ -1005,11 +1020,14 @@ try {
     overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
     hasLegacyModeSwitch: Boolean(document.querySelector('.control-mode-switch')),
     connectionGateVisible: Boolean(document.querySelector('.agent-connection-page')),
-    workspaceVisible: Boolean(document.querySelector('.app-workspace')),
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
     controlsVisible: Boolean(document.querySelector('.agent-workspace-controls.status-connected')),
     composerVisible: Boolean(document.querySelector('textarea[aria-label="Describe what happens next"]')),
   })`);
-  if (mobileLayout.overflow || mobileLayout.hasLegacyModeSwitch || mobileLayout.connectionGateVisible || !mobileLayout.workspaceVisible || !mobileLayout.controlsVisible || mobileLayout.composerVisible) {
+  if (mobileLayout.overflow || mobileLayout.hasLegacyModeSwitch || mobileLayout.connectionGateVisible ||
+      mobileLayout.workspaceActive !== "true" || mobileLayout.workspaceInert ||
+      !mobileLayout.controlsVisible || mobileLayout.composerVisible) {
     throw new Error(`Mobile connected Agent Workspace was not usable: ${JSON.stringify(mobileLayout)}`);
   }
 
@@ -1017,15 +1035,24 @@ try {
   if (!await cdp.evaluate(clickExactButton("Manage"))) throw new Error("Agent connection management control was unavailable.");
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-connected'))", "connected Agent management page");
   if (!await cdp.evaluate(clickButton("Disable agent control"))) throw new Error("Agent control could not be disabled.");
-  await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-disabled')) && !document.querySelector('.app-workspace')", "disabled Agent connection gate");
+  await poll(
+    cdp,
+    "Boolean(document.querySelector('.agent-connection-page.status-disabled')) && Boolean(document.querySelector('.app-workspace[data-agent-workspace-active=\"false\"][inert][aria-hidden=\"true\"]'))",
+    "disabled Agent connection gate with mounted inert Workspace",
+  );
   const disabledGate = await cdp.evaluate(`({
     hasConnectionPage: Boolean(document.querySelector('.agent-connection-page.status-disabled')),
-    hasWorkspace: Boolean(document.querySelector('.app-workspace')),
+    workspaceMounted: Boolean(document.querySelector('.app-workspace')),
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
+    workspaceAriaHidden: document.querySelector('.app-workspace')?.getAttribute('aria-hidden'),
     hasProjectBar: Boolean(document.querySelector('.project-bar')),
     hasBackButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('Back to workspace')),
   })`);
-  if (!disabledGate.hasConnectionPage || disabledGate.hasWorkspace || disabledGate.hasProjectBar || disabledGate.hasBackButton) {
-    throw new Error(`Disabling Agent control did not return to the exclusive connection gate: ${JSON.stringify(disabledGate)}`);
+  if (!disabledGate.hasConnectionPage || !disabledGate.workspaceMounted || disabledGate.workspaceActive !== "false" ||
+      !disabledGate.workspaceInert || disabledGate.workspaceAriaHidden !== "true" ||
+      disabledGate.hasProjectBar || disabledGate.hasBackButton) {
+    throw new Error(`Disabling Agent control did not return to the connection gate with a mounted inert Workspace: ${JSON.stringify(disabledGate)}`);
   }
   const revokedOffer = await fetch(connectionUrl, { cache: "no-store" });
   if (revokedOffer.ok) throw new Error("Disabling Agent control did not revoke the copied connection offer.");
@@ -1039,6 +1066,7 @@ try {
       openApi.paths?.["/workspace/models/inspect"]?.post?.operationId !== "inspect_workspace_model" ||
       openApi.paths?.["/workspace/space/inspect"]?.post?.operationId !== "inspect_workspace_space" ||
       openApi.paths?.["/workspace/space/query"]?.post?.operationId !== "query_spatial_placement" ||
+      openApi.paths?.["/workspace/layout/query"]?.post?.operationId !== "query_layout_placement" ||
       openApi.paths?.["/workspace/physics/inspect"]?.post?.operationId !== "inspect_workspace_physics" ||
       openApi.paths?.["/workspace/physics/placement/query"]?.post?.operationId !== "query_stable_placement" ||
       openApi.paths?.["/workspace/physics/simulate"]?.post?.operationId !== "simulate_workspace_physics" ||
@@ -1046,11 +1074,11 @@ try {
       openApi.paths?.["/assets/imports/complete"]?.post?.operationId !== "complete_workspace_asset_import" ||
       openApi.paths?.["/reconstructions/begin"]?.post?.operationId !== "begin_workspace_photo_reconstruction" ||
       openApi.paths?.["/reconstructions/finalize"]?.post?.operationId !== "finalize_workspace_photo_reconstruction" ||
-      Object.keys(openApi.paths ?? {}).length !== 25 ||
+      Object.keys(openApi.paths ?? {}).length !== 26 ||
       /get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u.test(JSON.stringify(openApi))) {
     throw new Error("Agent OpenAPI discovery document is incomplete.");
   }
-  console.log("Agent browser smoke passed: exclusive thirty-four-tool MCP and twenty-five-route OpenAPI contract, explicit approval, exact snapshot-read and photo-reconstruction discovery, SSG 3.2 and physics inspect/stable-placement/settle discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
+  console.log("Agent browser smoke passed: exclusive thirty-five-tool MCP and twenty-six-route OpenAPI contract, explicit approval, exact snapshot-read and photo-reconstruction discovery, separate world3d/ui2d graphs plus layout/physics placement discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
 } catch (error) {
   const safeLogs = diagnosticText(processLogs.join(""));
   if (safeLogs.trim()) console.error(safeLogs.slice(-4_000));

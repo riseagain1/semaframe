@@ -170,6 +170,7 @@ describe("human component creation", () => {
       onUpgradeManifest={onUpgradeManifest}
     />);
 
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     expect(screen.getByText(/pinned to 1\.0\.0/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Upgrade component interactions" }));
     expect(onUpgradeManifest).toHaveBeenCalledWith("CMP_VIDEO");

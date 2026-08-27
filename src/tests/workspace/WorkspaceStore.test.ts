@@ -105,7 +105,10 @@ describe("WorkspaceStore atomic kernel", () => {
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "components", [
       createPanel("CMP_000001"),
-      createPanel("CMP_000002"),
+      {
+        ...createPanel("CMP_000002"),
+        placement: { space: "viewport", anchor: "top_right", offset: { x: -24, y: 24 } },
+      },
     ]));
     expect(() => store.apply(workspaceBatch(store, "attach_cycle", [
       { op: "attach_component", op_id: "a", child_id: "CMP_000001", parent_id: "CMP_000002" },

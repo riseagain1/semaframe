@@ -61,6 +61,7 @@ describe("Workspace physics Inspector", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     render(<WorkspaceInspector component={component} physicsReport={report} onUpdate={onUpdate} />);
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
 
     expect(screen.getByRole("heading", { name: "Physics validation" })).toBeVisible();
     expect(screen.getByText("Stable")).toBeVisible();
@@ -87,6 +88,7 @@ describe("Workspace physics Inspector", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     render(<WorkspaceInspector component={component} physicsReport={{ ...report, enabled: false, stabilityReason: "disabled", supportPolygon: [], stabilityMarginM: null, supports: [] }} onUpdate={onUpdate} />);
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     expect(screen.getByText("Disabled")).toBeVisible();
     await user.click(screen.getByRole("checkbox", { name: "Physics enabled" }));
     expect(screen.getByRole("spinbutton", { name: "Mass (kg)" })).toBeDisabled();
@@ -102,6 +104,7 @@ describe("Workspace physics Inspector", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     render(<WorkspaceInspector component={component} onUpdate={onUpdate} />);
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Shape" }), "box");
     const sizeInputs = screen.getByRole("group", { name: "Box size (m)" }).querySelectorAll("input");
     await user.clear(sizeInputs[0]!);

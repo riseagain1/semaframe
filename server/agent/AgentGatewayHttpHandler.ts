@@ -620,6 +620,17 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
       },
     };
   }
+  if (pathname === "/v1/workspace/layout/query" && method === "POST") {
+    const body = exactObject(value, ["session_token", "instruction_digest", "candidate"]);
+    return {
+      name: "query_layout_placement",
+      input: {
+        session_token: boundedString(body.session_token, "session_token", 8, 256),
+        instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
+        candidate: body.candidate,
+      },
+    };
+  }
   if (pathname === "/v1/workspace/physics/inspect" && method === "POST") {
     const body = exactObject(value, ["session_token", "instruction_digest", "component_ids"], [
       "session_token", "instruction_digest",

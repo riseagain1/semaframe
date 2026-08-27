@@ -55,12 +55,19 @@ The next public Agent contract keeps the v0.3 modeling and Reality foundation, a
 | **Editable CAD parts** | Versioned SI parameters, bounded constraint sketches, ordered feature history, real OCCT B-rep evaluation, host-authored evidence, human Inspector editing, and atomic Agent authoring |
 | **Verified CAD handoff** | A deterministic ZIP with a non-unioned AP242/XCAF assembly, names/colors/occurrences, OpenUSD scene layer, editable SemaFrame sidecar, limitations report, and geometric OCCT re-import proof |
 | **Exact approved feed readback** | A revision-preserving `read_workspace_resource_snapshot` tool for canonical inline or HTTP-feed snapshots, gated by `workspace:read` plus non-default `effect:data_read` approval and bounded to exact non-secret results |
+| **Independent 2D layout reasoning** | A derived 1440×900 Layout Graph, exact rotated-rectangle overlap checks, deterministic placement suggestions, legacy-safe repair, and auto-arrange—kept completely separate from physical 3D collision |
 | **Routed spatial movement** | A typed `move_to` action for entities, exact primitives, CAD parts, and assemblies, with scale preservation, atomic event fan-out, endpoint collision and enforced-physics validation, and ordinary renderer transitions |
 | **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid project-schema 1.3 files reopen without weakening history validation |
 | **Photo-set Reality reconstruction** | Human and approval-gated Agent flows for digest-bound photo upload, explicit local reconstruction, bounded progress/cancellation, browser-authoritative preflight, and content-addressed Reality registration |
 | **Cross-platform XR renderer** | A separately paired WebXR client with revisioned Workspace replication, collision-safe teleport, renderer-neutral live panels, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, fresh authenticated spatial context, renderer-only build reveals, resumable Reality assets, reconnect, and a fail-closed Windows PCVR Ultra gate |
 
-The development surface is now Workspace Protocol 1.3 with project schema 1.4, 24 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.0, MCP server 1.9.0, Agent Gateway OpenAPI 1.2.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
+The development surface is now Workspace Protocol 1.3 with project schema 1.4, 25 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
+
+The v0.4 release candidate also hardens the product surface around those
+contracts: explicit Agent states, Start and Checks centers, Basic/Advanced
+inspection, one atomic Sources Wizard, an outcome-aware Export Center, an XR
+Setup Assistant, verified IndexedDB recovery, enforced CI coverage, and a
+packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0-rc.1 notes](./docs/release-v0.4.0-rc.1.md).
 
 ## What's new in v0.3
 
@@ -86,6 +93,7 @@ Together, these capabilities support one inspectable workflow: import captured c
 - [A practical Jarvis-like workspace](#a-practical-jarvis-like-workspace)
 - [What it can do](#what-it-can-do)
 - [Quick start](#quick-start)
+- [Hardware and runtime support](./docs/hardware-support.md)
 - [XR and PCVR viewer](#xr-and-pcvr-viewer)
 - [First Agent connection](#first-agent-connection)
 - [Product tour](#product-tour)
@@ -168,10 +176,26 @@ If that optional Apple Object Capture requirement is unavailable, SemaFrame repo
 
 ### Install and run
 
+The source-distributed CLI can be tried in one line directly from GitHub. It
+checks the Node version, required package files, and local ports before it
+starts anything:
+
+```bash
+npm exec --yes --package=github:riseagain1/semaframe -- semaframe doctor
+npm exec --yes --package=github:riseagain1/semaframe -- semaframe start
+```
+
+Use `semaframe xr` instead of `semaframe start` to include the separate XR
+renderer. A remote headset still needs a trusted HTTPS URL reachable on the
+LAN; the doctor reports this as an explicit warning rather than pretending a
+physical headset was verified. Voice Relay is optional and off by default.
+
+For development or a version-pinned checkout:
+
 ```bash
 git clone https://github.com/riseagain1/semaframe.git
 cd semaframe
-npm install
+npm ci
 npm run dev
 ```
 
@@ -198,7 +222,13 @@ npm run build:xr          # standalone XR production bundle in dist-xr/
 npm run build:voice-relay # native macOS or Windows Voice Relay helper
 npm run build:all         # typecheck and build both production origins
 npm run preview           # preview the production bundle
+npm run doctor            # non-mutating local host/port preflight
+npm run test:cli:package  # pack, prod-only install, CLI and service-start smoke
 ```
+
+The [hardware and runtime support matrix](./docs/hardware-support.md) states
+which paths have automated, host-smoke, or physical-device evidence. SemaFrame
+does not currently claim universal XR hardware certification.
 
 ### What appears on first launch
 
@@ -511,6 +541,17 @@ Current import limits are 256 MiB, 4 million splats, and 128 registered descript
 
 ## Spatial understanding and physics
 
+### Universal Space Data: two independent occupancy domains
+
+`inspect_workspace_space` returns two parallel, revision-bound JSON projections of the same authoritative Workspace:
+
+- `data.layout_graph` is **SemaFrame Layout Graph 1.0** with `dimension_domain: "ui2d"`. It resolves `canvas2d` and `viewport` components onto one logical 1440×900 authoring plane, including authored size, rotation, polygon bounds, overlap relations, and deterministic placement preflight through `query_layout_placement`.
+- `data.spatial_graph` is **SemaFrame Spatial Graph 3.2** with `dimension_domain: "world3d"`. It contains metre-based world transforms, geometry, colliders, physical relations, and Reality/proxy semantics.
+
+These domains are intentionally disjoint: 2D rectangles are checked only against other 2D rectangles, and physical 3D colliders only against other physical 3D colliders. A 2D panel may appear over a 3D object without creating a collision. New 2D overlaps reject the complete atomic update; old projects with pre-existing overlaps still open, expose blocking Checks, permit non-layout edits and overlap reduction, and can repair movable panels with **Auto-arrange 2D**.
+
+`surface`, `billboard`, and non-spatial `world3d` cards remain in the 2D graph but are marked `projection_dependent`: their apparent screen overlap varies with camera, target surface, and viewport, so a persisted camera-independent Store cannot honestly claim a permanent hard result for them. The canonical layout and spatial graphs together are SemaFrame's **Universal Space Data** for Agent reasoning; neither is Pixar OpenUSD.
+
 ### SemaFrame Spatial Graph
 
 `inspect_workspace_space` returns **SemaFrame Spatial Graph 3.2 (SSG)** in `data.spatial_graph`: a revision-bound, model-readable projection of the open Workspace. It includes:
@@ -528,7 +569,7 @@ Current import limits are 256 MiB, 4 million splats, and 128 registered descript
 - containment, intersection, contact, and support relations;
 - optional deltas through `since_revision` when the change is unambiguous.
 
-SSG is derived JSON, not a second scene database and not a Pixar OpenUSD file. The authoritative data remains the Workspace. The names USD and OpenUSD are reserved for Pixar's interchange format.
+SSG is derived JSON, not a second scene database and not a Pixar OpenUSD file. The authoritative data remains the Workspace.
 
 ### Collision
 
@@ -591,7 +632,7 @@ Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, 
 
 ## Agent integration
 
-SemaFrame exposes 24 authoritative Workspace MCP tools. When the browser-backed
+SemaFrame exposes 25 authoritative Workspace MCP tools. When the browser-backed
 host-control surface is available, the same approved connection also exposes 10
 ephemeral Voice Relay and XR preparation tools. Host-control calls prepare or
 inspect a user-visible local action; they are not a second mutation path, and
@@ -606,6 +647,7 @@ the Agent still changes the scene only through Workspace transaction tools.
 | Inspect | `inspect_workspace_asset` |
 | Inspect | `inspect_workspace_model` |
 | Inspect | `inspect_workspace_space` |
+| Inspect | `query_layout_placement` |
 | Inspect | `query_spatial_placement` |
 | Inspect | `inspect_workspace_physics` |
 | Inspect | `query_stable_placement` |
@@ -862,6 +904,8 @@ npm run build:voice-relay               # native helper for current macOS/Window
 npm run dev:xr                          # host, gateway, and separate XR dev origin
 npm run test:xr:launcher                # launcher/env contract tests on this host
 npm run smoke:xr:launcher               # execute the shell-free npm launcher path
+npm run test:cli                         # CLI parsing and doctor contracts
+npm run test:cli:package                 # packed prod-only install and real service-start smoke
 npm run test:cad:bundle                 # assert lazy Worker/WASM packaging and no duplicate/inlined OCCT binary
 npm run test:csg:bundle                 # assert the Manifold Worker uses one external fingerprinted WASM binary
 npm run test:reality:runtime            # verify Reality runtime lifecycle and the lazy Spark/Three bundle boundary

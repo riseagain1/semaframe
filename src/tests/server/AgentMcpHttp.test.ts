@@ -35,6 +35,7 @@ const expectedTools = [
   "inspect_xr_readiness",
   "prepare_voice_relay_setup",
   "prepare_xr_session",
+  "query_layout_placement",
   "query_spatial_placement",
   "query_stable_placement",
   "read_workspace_events",
@@ -168,9 +169,9 @@ describe("Agent MCP connection offers", () => {
     expect(client.getNegotiatedProtocolVersion()).toMatch(version);
     expect(client.getServerVersion()).toEqual({
       name: "semaframe-workspace-engine",
-      version: "1.9.0",
+      version: "1.10.0",
     });
-    expect(expectedTools).toHaveLength(34);
+    expect(expectedTools).toHaveLength(35);
     expect(tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     expect(tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
     expect(tools.every((tool) => Boolean(tool.outputSchema))).toBe(true);

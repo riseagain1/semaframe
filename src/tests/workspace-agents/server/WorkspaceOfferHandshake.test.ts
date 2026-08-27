@@ -210,6 +210,7 @@ describe("Workspace MCP connection offer", () => {
       "inspect_xr_readiness",
       "prepare_voice_relay_setup",
       "prepare_xr_session",
+      "query_layout_placement",
       "query_spatial_placement",
       "query_stable_placement",
       "read_workspace_events",

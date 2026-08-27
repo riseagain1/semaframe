@@ -8,7 +8,11 @@ import {
   type ComponentResizePolicy,
   type JSONObject,
 } from "../components/componentTypes";
-import { ComponentRegistryError } from "../components/ComponentRegistry";
+import {
+  ComponentRegistryError,
+  WORKSPACE_BOX_SIZE_MAX,
+  WORKSPACE_BOX_SIZE_MIN,
+} from "../components/ComponentRegistry";
 import { workspaceConnectorCapabilityManifest } from "../data/connectorCatalog";
 import { parseParametricPrimitive } from "../modeling/parametricGeometry";
 import {
@@ -53,8 +57,15 @@ import {
   type SpatialPlacementCandidate,
 } from "../spatial";
 import {
+  buildSemaFrameLayoutGraph,
+  queryLayoutPlacement,
+  type LayoutOverlapConflict,
+  type LayoutPlacementCandidate,
+} from "../layout";
+import {
   isPhysicalSpatialTypeId,
   isSpatialRenderTypeId,
+  spatialComponentKind,
 } from "../spatial/spatialComponentKinds";
 import {
   buildPhysicsValidationReport,
@@ -69,6 +80,7 @@ import {
   StaleRegistryDigestError,
   StaleWorkspaceRevisionError,
   SpatialCollisionStoreError,
+  LayoutOverlapStoreError,
   PhysicsValidationStoreError,
   WorkspacePermissionError,
   WorkspaceStore,
@@ -99,6 +111,7 @@ import {
   type WorkspaceResourceSnapshotView,
   type WorkspaceSpatialPlacementView,
   type WorkspaceSpatialStateView,
+  type WorkspaceLayoutPlacementView,
   type WorkspacePhysicsPlacementView,
   type WorkspacePhysicsSimulationView,
   type WorkspacePhysicsStateView,
@@ -207,10 +220,20 @@ function spatialConflictForAgent(conflict: {
   };
 }
 
+function layoutConflictForAgent(conflict: LayoutOverlapConflict) {
+  return {
+    component_id: conflict.componentId,
+    conflicts_with: conflict.conflictsWith,
+    collision_domain: conflict.collisionDomain,
+    overlap: conflict.overlap,
+  };
+}
+
 function spatialGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameSpatialGraph>): JSONValue {
   return asJSON({
     format: snapshot.format,
     version: snapshot.version,
+    dimension_domain: "world3d",
     workspace_id: snapshot.workspaceId,
     workspace_revision: snapshot.workspaceRevision,
     coordinate_system: {
@@ -349,6 +372,46 @@ function spatialGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameSpatialG
     removed_node_ids: snapshot.removedNodeIds,
     collision_conflicts: snapshot.collisionConflicts.map(spatialConflictForAgent),
     collision_conflicts_truncated: snapshot.collisionConflictsTruncated,
+    omitted_node_count: snapshot.omittedNodeCount,
+  });
+}
+
+function layoutGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameLayoutGraph>): JSONValue {
+  return asJSON({
+    format: snapshot.format,
+    version: snapshot.version,
+    dimension_domain: snapshot.dimensionDomain,
+    workspace_id: snapshot.workspaceId,
+    workspace_revision: snapshot.workspaceRevision,
+    coordinate_system: {
+      units: snapshot.coordinateSystem.units,
+      origin: snapshot.coordinateSystem.origin,
+      width: snapshot.coordinateSystem.width,
+      height: snapshot.coordinateSystem.height,
+      safe_inset: snapshot.coordinateSystem.safeInset,
+    },
+    mode: snapshot.mode,
+    ...(snapshot.sinceRevision === undefined ? {} : { since_revision: snapshot.sinceRevision }),
+    nodes: snapshot.nodes.map((node) => ({
+      id: node.id,
+      label: node.label,
+      type_id: node.typeId,
+      dimension_domain: node.dimensionDomain,
+      resolution: node.resolution,
+      ...(node.collisionDomain ? { collision_domain: node.collisionDomain } : {}),
+      ...(node.projectionDependency ? { projection_dependency: node.projectionDependency } : {}),
+      visibility: node.visibility,
+      placement: node.placement,
+      size: node.size,
+      rotation_deg: node.rotationDeg,
+      z_index: node.zIndex,
+      ...(node.bounds ? { bounds: node.bounds } : {}),
+      ...(node.polygon ? { polygon: node.polygon } : {}),
+      relations: node.relations,
+    })),
+    removed_node_ids: snapshot.removedNodeIds,
+    overlap_conflicts: snapshot.overlapConflicts.map(layoutConflictForAgent),
+    overlap_conflicts_truncated: snapshot.overlapConflictsTruncated,
     omitted_node_count: snapshot.omittedNodeCount,
   });
 }
@@ -548,6 +611,125 @@ function parseSpatialPlacementCandidate(value: unknown): ParsedSpatialPlacementC
     },
     ...(collision ? { collision } : {}),
   };
+}
+
+function invalidLayoutCandidate(message: string): WorkspaceEngineError {
+  return new WorkspaceEngineError("invalid_layout_candidate", message, {
+    retryable: true,
+    requiredAction: "query_layout_placement",
+  });
+}
+
+function parseLayoutPlacementCandidate(value: unknown): LayoutPlacementCandidate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidLayoutCandidate("candidate must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set(["component_id", "componentId", "placement"]);
+  if (Object.keys(record).some((key) => !allowed.has(key))) {
+    throw invalidLayoutCandidate("candidate contains unsupported fields");
+  }
+  if (record.component_id !== undefined && record.componentId !== undefined) {
+    throw invalidLayoutCandidate("candidate must not contain both component_id and componentId");
+  }
+  const rawComponentId = record.component_id ?? record.componentId;
+  if (rawComponentId !== undefined
+    && (typeof rawComponentId !== "string" || !rawComponentId || rawComponentId.length > 256)) {
+    throw invalidLayoutCandidate("component_id must be a non-empty string no longer than 256 characters");
+  }
+  if (!record.placement || typeof record.placement !== "object" || Array.isArray(record.placement)) {
+    throw invalidLayoutCandidate("candidate.placement must be canvas2d or viewport");
+  }
+  const placement = record.placement as Record<string, unknown>;
+  const finiteNumber = (candidate: unknown, field: string, min: number, max: number): number => {
+    if (typeof candidate !== "number" || !Number.isFinite(candidate) || candidate < min || candidate > max) {
+      throw invalidLayoutCandidate(`${field} is out of bounds`);
+    }
+    return candidate;
+  };
+  const vector = (candidate: unknown, field: string) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw invalidLayoutCandidate(`${field} must be a vector`);
+    }
+    const item = candidate as Record<string, unknown>;
+    if (Object.keys(item).some((key) => key !== "x" && key !== "y")) {
+      throw invalidLayoutCandidate(`${field} contains unsupported fields`);
+    }
+    return {
+      x: finiteNumber(item.x, `${field}.x`, -1_000_000, 1_000_000),
+      y: finiteNumber(item.y, `${field}.y`, -1_000_000, 1_000_000),
+    };
+  };
+  const size = (candidate: unknown) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw invalidLayoutCandidate("candidate.placement.size is required");
+    }
+    const item = candidate as Record<string, unknown>;
+    if (Object.keys(item).some((key) => key !== "width" && key !== "height")) {
+      throw invalidLayoutCandidate("candidate.placement.size contains unsupported fields");
+    }
+    return {
+      width: finiteNumber(
+        item.width,
+        "candidate.placement.size.width",
+        WORKSPACE_BOX_SIZE_MIN,
+        WORKSPACE_BOX_SIZE_MAX,
+      ),
+      height: finiteNumber(
+        item.height,
+        "candidate.placement.size.height",
+        WORKSPACE_BOX_SIZE_MIN,
+        WORKSPACE_BOX_SIZE_MAX,
+      ),
+    };
+  };
+  const zIndex = placement.zIndex === undefined
+    ? undefined
+    : finiteNumber(placement.zIndex, "candidate.placement.zIndex", -10_000, 10_000);
+  if (zIndex !== undefined && !Number.isInteger(zIndex)) {
+    throw invalidLayoutCandidate("candidate.placement.zIndex must be an integer");
+  }
+  if (placement.space === "canvas2d") {
+    if (Object.keys(placement).some((key) => !["space", "position", "size", "rotationDeg", "zIndex"].includes(key))) {
+      throw invalidLayoutCandidate("candidate.placement contains unsupported canvas2d fields");
+    }
+    const rotationDeg = placement.rotationDeg === undefined
+      ? undefined
+      : finiteNumber(placement.rotationDeg, "candidate.placement.rotationDeg", -1_000_000, 1_000_000);
+    return {
+      ...(rawComponentId ? { componentId: rawComponentId as string } : {}),
+      placement: {
+        space: "canvas2d",
+        position: vector(placement.position, "candidate.placement.position"),
+        size: size(placement.size),
+        ...(rotationDeg === undefined ? {} : { rotationDeg }),
+        ...(zIndex === undefined ? {} : { zIndex }),
+      },
+    };
+  }
+  if (placement.space === "viewport") {
+    if (Object.keys(placement).some((key) => !["space", "anchor", "offset", "size", "zIndex"].includes(key))) {
+      throw invalidLayoutCandidate("candidate.placement contains unsupported viewport fields");
+    }
+    const anchors = new Set([
+      "top_left", "top", "top_right", "left", "center", "right",
+      "bottom_left", "bottom", "bottom_right",
+    ]);
+    if (typeof placement.anchor !== "string" || !anchors.has(placement.anchor)) {
+      throw invalidLayoutCandidate("candidate.placement.anchor is invalid");
+    }
+    return {
+      ...(rawComponentId ? { componentId: rawComponentId as string } : {}),
+      placement: {
+        space: "viewport",
+        anchor: placement.anchor as "top_left" | "top" | "top_right" | "left" | "center" | "right" | "bottom_left" | "bottom" | "bottom_right",
+        offset: vector(placement.offset, "candidate.placement.offset"),
+        size: size(placement.size),
+        ...(zIndex === undefined ? {} : { zIndex }),
+      },
+    };
+  }
+  throw invalidLayoutCandidate("candidate.placement.space must be canvas2d or viewport");
 }
 
 type ParsedPhysicsPlacementCandidate = ParsedSpatialPlacementCandidate & Readonly<{
@@ -823,6 +1005,7 @@ function workspaceSummary(
   maxBytes: number,
 ): JSONValue {
   const physicsReport = buildPhysicsValidationReport(state);
+  const layoutGraph = buildSemaFrameLayoutGraph(state, { maxNodes: 2_000, maxConflicts: 100 });
   const components = [...state.components.values()]
     .sort((left, right) => left.id.localeCompare(right.id));
   const resources = [...state.resources.values()]
@@ -963,6 +1146,7 @@ function workspaceSummary(
     spatial_graph: {
       format: "semaframe-spatial-graph",
       version: SEMAFRAME_SPATIAL_GRAPH_VERSION,
+      dimension_domain: "world3d",
       workspace_revision: state.revision,
       spatial_node_count: components.filter((component) =>
         isSpatialRenderTypeId(component.type.typeId)).length,
@@ -973,6 +1157,25 @@ function workspaceSummary(
       }).length,
       inspect_tool: "inspect_workspace_space",
       placement_preflight_tool: "query_spatial_placement",
+    },
+    layout_graph: {
+      format: layoutGraph.format,
+      version: layoutGraph.version,
+      dimension_domain: layoutGraph.dimensionDomain,
+      workspace_revision: state.revision,
+      layout_node_count: components.filter((component) =>
+        spatialComponentKind(component.type.typeId) === undefined).length,
+      canonical_node_count: components.filter((component) =>
+        spatialComponentKind(component.type.typeId) === undefined
+        && (component.placement.space === "canvas2d" || component.placement.space === "viewport")).length,
+      projection_dependent_node_count: components.filter((component) =>
+        spatialComponentKind(component.type.typeId) === undefined
+        && component.placement.space !== "canvas2d"
+        && component.placement.space !== "viewport").length,
+      overlap_conflict_count: layoutGraph.overlapConflicts.length,
+      overlap_conflicts_truncated: layoutGraph.overlapConflictsTruncated,
+      inspect_tool: "inspect_workspace_space",
+      placement_preflight_tool: "query_layout_placement",
     },
     physics_validation: {
       format: physicsReport.format,
@@ -1791,10 +1994,17 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
       }
 
       let space;
+      let layout;
       if (sinceRevision === undefined || sinceRevision === 0) {
         space = buildSemaFrameSpatialGraph(state);
+        layout = buildSemaFrameLayoutGraph(state);
       } else if (sinceRevision === state.revision) {
         space = buildSemaFrameSpatialGraph(state, {
+          mode: "delta",
+          sinceRevision,
+          changedNodeIds: new Set(),
+        });
+        layout = buildSemaFrameLayoutGraph(state, {
           mode: "delta",
           sinceRevision,
           changedNodeIds: new Set(),
@@ -1838,12 +2048,16 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         space = requireFull
           ? buildSemaFrameSpatialGraph(state)
           : buildSemaFrameSpatialGraph(state, { mode: "delta", sinceRevision, changedNodeIds: changed });
+        layout = requireFull
+          ? buildSemaFrameLayoutGraph(state)
+          : buildSemaFrameLayoutGraph(state, { mode: "delta", sinceRevision, changedNodeIds: changed });
       }
       return {
         workspaceId: state.workspaceId,
         revision: state.revision,
         registryDigest: state.registryDigest,
         spatialGraph: spatialGraphForAgent(space),
+        layoutGraph: layoutGraphForAgent(layout),
       };
     });
   }
@@ -1910,6 +2124,39 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           "invalid_spatial_candidate",
           cause instanceof Error ? cause.message : "Spatial placement candidate is invalid",
           { retryable: true, requiredAction: "query_spatial_placement" },
+        );
+      }
+    });
+  }
+
+  queryLayoutPlacement(
+    candidate: unknown,
+    principal: WorkspaceAgentPrincipal,
+  ): Promise<WorkspaceLayoutPlacementView> {
+    return this.runSerialized(() => {
+      requireAgentScope(principal, "workspace:read");
+      const state = this.store.getState();
+      try {
+        const parsed = parseLayoutPlacementCandidate(candidate);
+        const check = queryLayoutPlacement(state, parsed);
+        return {
+          workspaceId: state.workspaceId,
+          revision: state.revision,
+          registryDigest: state.registryDigest,
+          placementCheck: asJSON({
+            valid: check.valid,
+            candidate_id: check.candidateId,
+            conflicts: check.conflicts.map(layoutConflictForAgent),
+            suggested_placements: check.suggestedPlacements,
+            dimension_domain: "ui2d",
+            collision_domain: "overlay2d:canonical",
+            mutates_workspace: false,
+          }),
+        };
+      } catch (cause) {
+        if (cause instanceof WorkspaceEngineError) throw cause;
+        throw invalidLayoutCandidate(
+          cause instanceof Error ? cause.message : "Layout placement candidate is invalid",
         );
       }
     });
@@ -2357,6 +2604,15 @@ function mapStoreError(cause: unknown): WorkspaceEngineError {
           conflicts_with: conflict.conflictsWith,
           overlap: conflict.overlap,
         })),
+      },
+    });
+  }
+  if (cause instanceof LayoutOverlapStoreError) {
+    return new WorkspaceEngineError("layout_overlap", cause.message, {
+      retryable: true,
+      requiredAction: "query_layout_placement",
+      details: {
+        conflicts: cause.conflicts.map(layoutConflictForAgent),
       },
     });
   }

@@ -100,11 +100,12 @@ afterEach(() => {
 });
 
 describe("AgentGatewayClient", () => {
-  it("accepts all 34 public commands plus the reconstruction-only internal completion command", () => {
-    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(35);
+  it("accepts all 35 public commands plus the reconstruction-only internal completion command", () => {
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(36);
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("read_workspace_resource_snapshot");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("begin_workspace_photo_reconstruction");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("finalize_workspace_photo_reconstruction");
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("query_layout_placement");
   });
 
   it("binds the browser-owned Fetch implementation before storing it", async () => {

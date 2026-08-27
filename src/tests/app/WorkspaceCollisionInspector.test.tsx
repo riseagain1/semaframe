@@ -34,6 +34,7 @@ describe("spatial collision Inspector", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     render(<WorkspaceInspector component={spatial()} onUpdate={onUpdate} />);
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
 
     expect(screen.getByRole("heading", { name: "Collision volume" })).toBeVisible();
     expect(screen.getByText("3.24 m")).toBeVisible();
@@ -55,6 +56,7 @@ describe("spatial collision Inspector", () => {
     const user = userEvent.setup();
     const onUpdate = vi.fn();
     const view = render(<WorkspaceInspector component={spatial()} onUpdate={onUpdate} />);
+    await user.click(screen.getByRole("button", { name: "Advanced" }));
     const margin = screen.getByRole("spinbutton", { name: "Margin (m)" });
     await user.clear(margin);
     await user.type(margin, "11");

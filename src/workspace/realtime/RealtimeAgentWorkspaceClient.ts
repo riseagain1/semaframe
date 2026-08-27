@@ -5,6 +5,7 @@ import type {
   ReadWorkspaceResourceSnapshotData,
   InspectWorkspaceSpaceData,
   QuerySpatialPlacementData,
+  QueryLayoutPlacementData,
   InspectWorkspacePhysicsData,
   QueryStablePlacementData,
   SimulateWorkspacePhysicsData,
@@ -207,6 +208,17 @@ export class RealtimeAgentWorkspaceClient {
     const session = sessionInput(this.session);
     if ("ok" in session) return session;
     return this.transport.call<QuerySpatialPlacementData>("query_spatial_placement", {
+      ...session,
+      candidate,
+    });
+  }
+
+  async queryLayoutPlacement(
+    candidate: unknown,
+  ): Promise<WorkspaceAgentResult<QueryLayoutPlacementData>> {
+    const session = sessionInput(this.session);
+    if ("ok" in session) return session;
+    return this.transport.call<QueryLayoutPlacementData>("query_layout_placement", {
       ...session,
       candidate,
     });

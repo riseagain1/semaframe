@@ -1,0 +1,134 @@
+.viewport-tools .viewport-xr-setup {
+  width: auto;
+  min-width: 88px;
+  padding: 0 11px;
+  display: inline-flex;
+  gap: 7px;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.xr-setup-backdrop {
+  position: fixed;
+  z-index: 185;
+  inset: 0;
+  padding: 20px;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: rgba(6, 10, 12, .72);
+  backdrop-filter: blur(10px);
+}
+
+.xr-setup-dialog {
+  width: min(850px, calc(100vw - 28px));
+  max-height: min(900px, calc(100dvh - 28px));
+  overflow: auto;
+  border: 1px solid rgba(151, 184, 202, .28);
+  border-radius: 20px;
+  background: #10191e;
+  color: #ecf3f5;
+  box-shadow: 0 30px 100px rgba(0, 0, 0, .52);
+}
+
+.xr-setup-header {
+  padding: 24px 24px 19px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid rgba(151, 184, 202, .14);
+}
+
+.xr-setup-header h2 { margin: 4px 0 7px; font-size: 25px; letter-spacing: -.025em; }
+.xr-setup-header p { max-width: 650px; margin: 0; color: #9dafb8; font-size: 12.5px; line-height: 1.5; }
+.xr-setup-eyebrow { color: #77d7f4; font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.xr-setup-header > button { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid rgba(151, 184, 202, .23); border-radius: 10px; background: transparent; color: #c4d2d7; cursor: pointer; }
+.xr-setup-header > button:disabled { opacity: .45; cursor: wait; }
+
+.xr-setup-modes {
+  padding: 18px 24px 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+}
+
+.xr-setup-modes > button {
+  min-height: 68px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(151, 184, 202, .17);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .018);
+  color: #bbcad0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.xr-setup-modes > button[aria-selected="true"] { border-color: rgba(109, 210, 242, .58); background: rgba(74, 150, 177, .15); color: #eff9fc; }
+.xr-setup-modes > button > span { display: grid; gap: 3px; }
+.xr-setup-modes strong { font-size: 12px; }
+.xr-setup-modes small { color: #8499a3; font-size: 10px; line-height: 1.25; }
+
+.xr-setup-panel { margin: 14px 24px 0; padding: 18px; border: 1px solid rgba(151, 184, 202, .14); border-radius: 15px; background: rgba(255, 255, 255, .018); }
+.xr-setup-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.xr-setup-panel-heading > div { min-width: 0; display: grid; gap: 3px; }
+.xr-setup-panel-heading > div > span { color: #7f96a0; font-size: 9px; font-weight: 780; letter-spacing: .08em; text-transform: uppercase; }
+.xr-setup-panel-heading > div > strong { font-size: 14px; }
+.xr-setup-state { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; background: rgba(255, 202, 104, .1); color: #ffd17c; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.xr-setup-state[data-tone="pass"] { background: rgba(91, 216, 149, .11); color: #87e6b2; }
+.xr-setup-state[data-tone="warn"] { background: rgba(255, 133, 122, .1); color: #ffaaa1; }
+.xr-setup-current { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: rgba(89, 135, 154, .1); color: #a9bbc3; font-size: 11.5px; line-height: 1.45; }
+
+.xr-setup-steps { margin: 15px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; list-style: none; }
+.xr-setup-steps li { min-width: 0; padding: 11px; display: grid; grid-template-columns: 25px 1fr; align-items: start; gap: 8px; border-radius: 10px; background: rgba(255, 255, 255, .026); }
+.xr-setup-steps li > span { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; background: rgba(119, 215, 244, .11); color: #77d7f4; font-size: 10px; font-weight: 800; }
+.xr-setup-steps strong { font-size: 11px; line-height: 1.25; }
+.xr-setup-steps p { margin: 5px 0 0; color: #8fa3ac; font-size: 10px; line-height: 1.45; }
+
+.xr-setup-actions { margin-top: 15px; display: flex; flex-wrap: wrap; gap: 8px; }
+.xr-setup-actions button, .xr-setup-voice button, .xr-setup-address button { min-height: 37px; padding: 8px 12px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid rgba(151, 184, 202, .25); border-radius: 9px; background: #19272e; color: #dce9ed; font: inherit; font-size: 11px; font-weight: 720; cursor: pointer; }
+.xr-setup-actions button.primary { border-color: #62cae9; background: #76d7f3; color: #09212a; }
+.xr-setup-actions button.danger { border-color: rgba(255, 136, 126, .38); background: rgba(112, 42, 39, .18); color: #ffaaa1; }
+.xr-setup-actions button:disabled, .xr-setup-voice button:disabled, .xr-setup-address button:disabled { opacity: .43; cursor: not-allowed; }
+.xr-setup-callout { margin: 13px 0 0; padding: 10px 11px; display: flex; align-items: flex-start; gap: 8px; border: 1px solid rgba(255, 200, 99, .19); border-radius: 10px; background: rgba(108, 78, 28, .1); color: #d8bc83; font-size: 10.5px; line-height: 1.45; }
+.xr-setup-callout svg { flex: 0 0 auto; }
+
+.xr-setup-address { margin-top: 14px; padding: 13px; border: 1px solid rgba(151, 184, 202, .13); border-radius: 11px; background: rgba(0, 0, 0, .12); }
+.xr-setup-address > label { display: block; margin-bottom: 7px; color: #acbec5; font-size: 10px; font-weight: 730; }
+.xr-setup-address > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.xr-setup-address input { min-width: 0; min-height: 37px; padding: 0 10px; border: 1px solid rgba(151, 184, 202, .22); border-radius: 8px; background: #0c1418; color: #d7e6eb; font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; }
+.xr-setup-address ul { margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 7px; list-style: none; }
+.xr-setup-address li { padding: 5px 7px; display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; background: rgba(255, 137, 126, .08); color: #dca49f; font-size: 9.5px; }
+.xr-setup-address li[data-pass="true"] { background: rgba(91, 216, 149, .08); color: #a1d9b9; }
+.xr-setup-address li svg { width: 12px; height: 12px; }
+.xr-setup-address small { display: block; margin-top: 9px; color: #81969f; font-size: 9.5px; line-height: 1.45; }
+
+.xr-setup-voice { margin-top: 14px; padding: 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 11px; border: 1px solid rgba(151, 184, 202, .14); border-radius: 11px; background: rgba(65, 105, 122, .08); }
+.xr-setup-voice[data-armed="true"] { border-color: rgba(91, 216, 149, .27); background: rgba(47, 117, 78, .1); }
+.xr-setup-voice > svg { color: #79d8f5; }
+.xr-setup-voice strong { font-size: 11px; }
+.xr-setup-voice p { margin: 4px 0 0; color: #8ea3ac; font-size: 10px; line-height: 1.45; }
+.xr-setup-feedback { margin: 12px 24px 0; padding: 10px 12px; border: 1px solid rgba(119, 215, 244, .19); border-radius: 10px; background: rgba(72, 139, 163, .1); color: #abd5e2; font-size: 11px; line-height: 1.4; }
+.xr-setup-dialog > footer { margin-top: 17px; padding: 14px 24px 21px; border-top: 1px solid rgba(151, 184, 202, .12); }
+.xr-setup-dialog > footer p { margin: 0; color: #7f939b; font-size: 10px; line-height: 1.5; }
+
+@media (max-width: 760px) {
+  .xr-setup-backdrop { padding: 7px; }
+  .xr-setup-dialog { width: calc(100vw - 14px); max-height: calc(100dvh - 14px); border-radius: 15px; }
+  .xr-setup-header { padding: 18px 17px 15px; }
+  .xr-setup-modes { padding: 13px 17px 0; grid-template-columns: 1fr; }
+  .xr-setup-modes > button { min-height: 54px; }
+  .xr-setup-panel { margin: 12px 17px 0; padding: 14px; }
+  .xr-setup-steps { grid-template-columns: 1fr; }
+  .xr-setup-voice { grid-template-columns: auto 1fr; }
+  .xr-setup-voice button { grid-column: 1 / -1; }
+  .xr-setup-feedback { margin-inline: 17px; }
+  .xr-setup-dialog > footer { padding-inline: 17px; }
+  .viewport-tools .viewport-xr-setup { min-width: 44px; width: 44px; padding: 0; }
+  .viewport-tools .viewport-xr-setup span { display: none; }
+}

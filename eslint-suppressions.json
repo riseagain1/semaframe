@@ -1,0 +1,67 @@
+{
+  "scripts/reality-twin-demo-capture.mjs": {
+    "no-unsafe-finally": {
+      "count": 1
+    }
+  },
+  "src/app/App.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 13
+    }
+  },
+  "src/app/components/AgentConnectionPage.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/app/components/Viewport.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 5
+    }
+  },
+  "src/app/components/VoiceRelaySettingsDialog.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/app/components/XRHeadsetSessionButton.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 4
+    }
+  },
+  "src/app/components/XRWorkspaceButton.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/app/components/workspace/VideoPlayerView.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/app/components/workspace/WorkspaceChrome.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 2
+    }
+  },
+  "src/app/components/workspace/WorkspaceInspector.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/app/components/workspace/WorkspaceModelLibrary.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 1
+    }
+  },
+  "src/tests/xr-assets/XrAssetRelayCache.test.ts": {
+    "no-unreachable": {
+      "count": 1
+    }
+  },
+  "src/xr/app/SemaFrameXRViewer.tsx": {
+    "react-hooks/exhaustive-deps": {
+      "count": 5
+    }
+  }
+}

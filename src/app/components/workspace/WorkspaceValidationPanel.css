@@ -1,0 +1,178 @@
+.workspace-validation-panel {
+  width: min(390px, 100%);
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  border-left: 1px solid #d7cfc3;
+  background: #f8f5ee;
+  color: #3c3933;
+}
+
+.workspace-validation-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-validation-panel__header p {
+  margin: 0 0 2px;
+  color: #817768;
+  font-size: 8.5px;
+  font-weight: 750;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+
+.workspace-validation-panel__header h2 {
+  margin: 0;
+  font: 500 22px/1.1 Georgia, "Times New Roman", serif;
+}
+
+.workspace-validation-panel__header > span {
+  padding: 4px 6px;
+  border: 1px solid #d4ccc0;
+  border-radius: 999px;
+  color: #746d63;
+  font-size: 8.5px;
+}
+
+.workspace-validation-panel__boundary {
+  margin: 11px 0;
+  padding: 8px 9px;
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  border: 1px solid #c9d4c9;
+  border-radius: 8px;
+  background: #edf2ea;
+  color: #5d6f60;
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.workspace-validation-panel__boundary svg { flex: 0 0 auto; }
+
+.workspace-validation-panel__counts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.workspace-validation-panel__counts div {
+  padding: 8px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: baseline;
+  border: 1px solid #d7cfc3;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.workspace-validation-panel__counts dt { color: #766f65; font-size: 8px; text-transform: uppercase; }
+.workspace-validation-panel__counts dd { margin: 0; font-size: 15px; font-weight: 750; }
+.workspace-validation-panel__counts .is-blocking dd { color: #9b4d44; }
+.workspace-validation-panel__counts .is-warning dd { color: #9a732e; }
+.workspace-validation-panel__counts .is-info dd { color: #557166; }
+
+.workspace-validation-panel__auto-arrange {
+  width: 100%;
+  margin-top: 9px;
+  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #b9c8bb;
+  border-radius: 8px;
+  background: #e8f0e7;
+  color: #47604d;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.workspace-validation-panel__auto-arrange:hover:not(:disabled) { background: #dce9dc; }
+.workspace-validation-panel__auto-arrange:disabled { cursor: not-allowed; opacity: .5; }
+.workspace-validation-panel__auto-arrange:focus-visible { outline: 2px solid #446d58; outline-offset: 2px; }
+
+.workspace-validation-panel__clear {
+  margin-top: 12px;
+  padding: 13px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid #c8d4c9;
+  border-radius: 9px;
+  background: #edf3eb;
+  color: #5b735f;
+}
+
+.workspace-validation-panel__clear h3 { margin: 0; color: #415447; font-size: 10.5px; }
+.workspace-validation-panel__clear p { margin: 4px 0 0; font-size: 9px; line-height: 1.45; }
+
+.workspace-validation-panel__groups { margin-top: 13px; display: grid; gap: 13px; }
+.workspace-validation-panel__group h3 { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+.workspace-validation-panel__group h3 span { min-width: 18px; padding: 2px 5px; border-radius: 999px; background: #e5dfd4; text-align: center; font-size: 8px; }
+.workspace-validation-panel__group ul { margin: 0; padding: 0; display: grid; gap: 6px; list-style: none; }
+
+.workspace-validation-panel__group li {
+  padding: 9px;
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: start;
+  border: 1px solid #d8d0c5;
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: #fffdf9;
+}
+
+.workspace-validation-panel__group li.is-blocking { border-left-color: #a6544a; }
+.workspace-validation-panel__group li.is-warning { border-left-color: #b08234; }
+.workspace-validation-panel__group li.is-info { border-left-color: #608277; }
+.workspace-validation-panel__issue-icon { padding-top: 2px; color: #776f64; }
+.workspace-validation-panel__group li.is-blocking .workspace-validation-panel__issue-icon { color: #a6544a; }
+.workspace-validation-panel__group li.is-warning .workspace-validation-panel__issue-icon { color: #9d7228; }
+.workspace-validation-panel__group li.is-info .workspace-validation-panel__issue-icon { color: #55796c; }
+.workspace-validation-panel__group li > div { min-width: 0; display: grid; gap: 3px; }
+
+.workspace-validation-panel__issue-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.workspace-validation-panel__issue-meta span { font-size: 7.5px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.workspace-validation-panel__issue-meta code { color: #8b8275; font-size: 7.5px; overflow-wrap: anywhere; }
+.workspace-validation-panel__group strong { font-size: 10px; }
+.workspace-validation-panel__group small { color: #726b61; font-size: 8.5px; line-height: 1.45; }
+
+.workspace-validation-panel__group button {
+  padding: 4px 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  border-radius: 5px;
+  background: #ece7de;
+  color: #59544c;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.workspace-validation-panel__group button:hover:not(:disabled) { background: #ded7cc; }
+.workspace-validation-panel__group button:disabled { cursor: not-allowed; opacity: .5; }
+.workspace-validation-panel__group button:focus-visible,
+.workspace-validation-panel__details summary:focus-visible { outline: 2px solid #446d58; outline-offset: 2px; }
+
+.workspace-validation-panel__details { margin-top: 14px; border-top: 1px solid #d9d1c5; }
+.workspace-validation-panel__details summary { padding: 10px 2px 4px; display: flex; gap: 6px; align-items: center; cursor: pointer; color: #645e55; font-size: 9px; font-weight: 700; }
+.workspace-validation-panel__details section { margin-top: 9px; }
+.workspace-validation-panel__details h3 { margin: 0; font-size: 8.5px; text-transform: uppercase; }
+.workspace-validation-panel__details ul { margin: 5px 0 0; padding-left: 17px; color: #746d63; font-size: 8.5px; line-height: 1.5; }
+
+@media (max-width: 420px) {
+  .workspace-validation-panel { width: 100%; border-left: 0; }
+  .workspace-validation-panel__group li { grid-template-columns: 19px minmax(0, 1fr); }
+  .workspace-validation-panel__group li > button { grid-column: 2; justify-self: start; }
+}

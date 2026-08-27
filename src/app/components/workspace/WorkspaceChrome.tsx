@@ -1,4 +1,4 @@
-import { Boxes, Database, PackageOpen, PanelRightClose, ScanLine, SlidersHorizontal, TimerReset } from "lucide-react";
+import { Boxes, Database, PackageOpen, PanelRightClose, ScanLine, ShieldCheck, SlidersHorizontal, TimerReset } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkspaceRenderComponent } from "../../../workspace/renderer";
 import type { ComponentResizePolicy } from "../../../workspace/components";
@@ -30,6 +30,7 @@ import type {
 } from "../../../workspace/data";
 import {
   WorkspaceSourcePanel,
+  type WorkspaceSourceAtomicCreateRequest,
   type WorkspaceInlineSourceSaveRequest,
   type WorkspaceSourceBindingTarget,
   type WorkspaceSourceItem,
@@ -50,8 +51,15 @@ import type {
   PhotoReconstructionJobView,
   PhotoReconstructionProfile,
 } from "../../../reconstruction/contracts";
+import {
+  WorkspaceValidationPanel,
+} from "./WorkspaceValidationPanel";
+import type {
+  WorkspaceValidationTarget,
+  WorkspaceValidationView,
+} from "../../validation/buildWorkspaceValidationView";
 
-export type WorkspacePanel = "library" | "inspector" | "models" | "reality" | "sources" | null;
+export type WorkspacePanel = "library" | "inspector" | "models" | "reality" | "sources" | "validation" | null;
 
 export type WorkspaceChromeProps = Readonly<{
   catalog: readonly ComponentLibraryItem[];
@@ -60,6 +68,9 @@ export type WorkspaceChromeProps = Readonly<{
   sources: readonly WorkspaceSourceItem[];
   bindingTargets?: readonly WorkspaceSourceBindingTarget[];
   bindingDiagnostics?: readonly ResourceBindingDiagnostic[];
+  validationView?: WorkspaceValidationView;
+  onValidationNavigate?: (target: WorkspaceValidationTarget) => void;
+  onAutoArrange2D?: () => void;
   disabled?: boolean;
   panelState?: WorkspacePanel;
   onPanelStateChange?: (panel: WorkspacePanel) => void;
@@ -111,6 +122,8 @@ export type WorkspaceChromeProps = Readonly<{
   onRefreshSource?: (sourceId: string) => void;
   onPreviewHostFeed?: (request: WorkspaceHostFeedPreviewRequest) => Promise<HostFeedFetchResponse>;
   onSaveHostFeed?: (request: WorkspaceHostFeedSaveRequest) => boolean | Promise<boolean>;
+  onCommitSourceWithNewTarget?: (request: WorkspaceSourceAtomicCreateRequest) => boolean | Promise<boolean>;
+  sourceScopeKey?: string | number;
   onUnbindSource?: (bindingId: string) => void;
   onDeleteSource?: (sourceId: string) => void;
   /** Keep only the human-approved Sources surface while external control stays connected. */
@@ -125,6 +138,9 @@ export function WorkspaceChrome({
   sources,
   bindingTargets,
   bindingDiagnostics,
+  validationView,
+  onValidationNavigate,
+  onAutoArrange2D,
   disabled = false,
   onCreate,
   onAction,
@@ -172,6 +188,8 @@ export function WorkspaceChrome({
   onRefreshSource,
   onPreviewHostFeed,
   onSaveHostFeed,
+  onCommitSourceWithNewTarget,
+  sourceScopeKey,
   onUnbindSource,
   onDeleteSource,
   sourcesOnly = false,
@@ -237,6 +255,14 @@ export function WorkspaceChrome({
         return started;
       }
     : undefined;
+  const navigateValidation = (target: WorkspaceValidationTarget) => {
+    if (onValidationNavigate) {
+      onValidationNavigate(target);
+      return;
+    }
+    if (target.componentId) onSelectComponent?.(target.componentId);
+    setPanel(target.surface === "sources" ? "sources" : target.surface === "reality" ? "reality" : "inspector");
+  };
   const createFromLibrary = (typeId: string, options?: ComponentCreationOptions) => {
     const configureOnCreate = catalog.find((item) => item.typeId === typeId)?.configureOnCreate === true;
     const createdId = onCreate(typeId, options);
@@ -260,6 +286,10 @@ export function WorkspaceChrome({
         <button type="button" disabled={disabled} aria-expanded={panel === "sources"} aria-controls="workspace-tool-panel" onClick={() => toggle("sources")}>
           <Database size={17} /><span>Sources</span>
         </button>
+        {!sourcesOnly && <button type="button" className="workspace-validation-toggle" disabled={disabled} aria-expanded={panel === "validation"} aria-controls="workspace-tool-panel" onClick={() => toggle("validation")}>
+          <ShieldCheck size={17} /><span>Checks</span>
+          {validationView && validationView.counts.total > 0 && <strong aria-label={`${validationView.counts.total} current check issues`}>{validationView.counts.total}</strong>}
+        </button>}
         {!sourcesOnly && <button type="button" disabled={disabled} onClick={onCreateShowcase} title="Add a working timer over the 3D scene">
           <TimerReset size={17} /><span>Mixed demo</span>
         </button>}
@@ -283,6 +313,7 @@ export function WorkspaceChrome({
               models: "Models",
               reality: "Reality",
               sources: "Sources",
+              validation: "Checks",
             }[panel]}</strong>
             <button className="workspace-tool-panel__close" type="button" aria-label={`Close ${panel} panel`} onClick={closePanel}>
               <PanelRightClose size={17} />
@@ -329,6 +360,7 @@ export function WorkspaceChrome({
               hierarchyItems={modelHierarchyItems}
               selectedComponentId={selected?.id}
               onSelectComponent={onSelectComponent}
+              onOpenValidation={validationView ? () => setPanel("validation") : undefined}
             />}
             {panel === "reality" && <WorkspaceRealityAssets
               items={realityAssets}
@@ -356,8 +388,16 @@ export function WorkspaceChrome({
               onRefresh={onRefreshSource}
               onPreviewHostFeed={onPreviewHostFeed}
               onSaveHostFeed={onSaveHostFeed}
+              onCommitSourceWithNewTarget={onCommitSourceWithNewTarget}
+              scopeKey={sourceScopeKey}
               onUnbindSource={onUnbindSource}
               onDeleteSource={onDeleteSource}
+            />}
+            {panel === "validation" && validationView && <WorkspaceValidationPanel
+              view={validationView}
+              disabled={disabled}
+              onNavigate={navigateValidation}
+              onAutoArrange2D={onAutoArrange2D}
             />}
           </div>
         </div>

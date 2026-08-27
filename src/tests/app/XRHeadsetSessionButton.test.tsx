@@ -488,7 +488,38 @@ describe("XRHeadsetSessionButton", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
     expect(await screen.findByText(/without credentials, query parameters, or a fragment/u)).toBeVisible();
-    expect(fake.disconnect).toHaveBeenCalledTimes(1);
+    expect(fake.connect).not.toHaveBeenCalled();
+    expect(fake.createPairing).not.toHaveBeenCalled();
+    expect(fake.disconnect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "XR one-time pairing link" })).not.toBeInTheDocument();
+  });
+
+  it("fails closed before authority connect or pairing when a remote viewer uses LAN HTTP", async () => {
+    expect(() => __xrHeadsetSessionTest.canonicalViewerUrl("http://192.168.8.240:4174/xr.html"))
+      .toThrow(/remote XR viewer must use HTTPS/u);
+    expect(() => __xrHeadsetSessionTest.canonicalViewerUrl("http://127.0.0.1:4174/xr.html"))
+      .not.toThrow();
+    expect(() => __xrHeadsetSessionTest.canonicalViewerUrl("http://localhost:4174/xr.html"))
+      .not.toThrow();
+
+    const fake = transport();
+    render(<XRHeadsetSessionButton
+      snapshot={snapshot}
+      registryIdentity="registry:test"
+      viewerUrl="http://192.168.8.240:4174/xr.html"
+      transportFactory={() => fake}
+      onSelect={vi.fn()}
+      onActivate={vi.fn()}
+      onPanelAction={vi.fn()}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
+
+    expect(await screen.findByText(/remote XR viewer must use HTTPS/u)).toBeVisible();
+    expect(fake.connect).not.toHaveBeenCalled();
+    expect(fake.createPairing).not.toHaveBeenCalled();
+    expect(fake.disconnect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "XR six-digit pairing code" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "XR one-time pairing link" })).not.toBeInTheDocument();
   });
 

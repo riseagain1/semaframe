@@ -16,7 +16,7 @@ import {
   restoreAgentBrowserBridge,
   shouldClearRealityMeasurementForWorkspaceGate,
   stopXrSessionsForProjectReplacement,
-} from "../../app/App";
+} from "../../app/lifecycle";
 
 afterEach(() => {
   cleanup();

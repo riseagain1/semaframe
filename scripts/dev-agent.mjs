@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { resolveNpmLaunch } from "./lib/npm-launcher.mjs";
 import { loadRootEnvironment } from "./lib/root-env.mjs";
 import { buildVoiceRelayNativeHelper } from "./build-voice-relay.mjs";
 
 loadRootEnvironment();
+const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 if (process.env.SEMAFRAME_VOICE_RELAY_SKIP_BUILD !== "1") {
   buildVoiceRelayNativeHelper({ optional: true });
 }
@@ -45,6 +47,7 @@ const viteEnvironment = {
 function spawnNpm(args, environment) {
   const launch = resolveNpmLaunch(args);
   return spawn(launch.command, launch.args, {
+    cwd: packageRoot,
     stdio: "inherit",
     env: environment,
     shell: false,

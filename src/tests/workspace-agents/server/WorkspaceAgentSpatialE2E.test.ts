@@ -43,6 +43,7 @@ describe("Workspace Agent SemaFrame Spatial Graph", () => {
         spatial_graph: {
           format: "semaframe-spatial-graph",
           version: "3.2",
+          dimension_domain: "world3d",
           mode: "full",
           stage: {
             component_id: "STAGE",
@@ -118,6 +119,157 @@ describe("Workspace Agent SemaFrame Spatial Graph", () => {
     expect(delta).toMatchObject({
       ok: true,
       data: { spatial_graph: { mode: "delta", since_revision: 1, nodes: [expect.objectContaining({ id: componentId })] } },
+    });
+  });
+
+  it("exposes an independent ui2d graph, preflights explicit-size panels, and keeps a rejected transaction repairable", async () => {
+    const store = new WorkspaceStore();
+    const panelPlacement = {
+      space: "viewport" as const,
+      anchor: "top_left" as const,
+      offset: { x: 0, y: 0 },
+      size: { width: 320, height: 220 },
+      zIndex: 10,
+    };
+    store.apply(workspaceBatch(store, "seed_layout_domains", [{
+      op: "create_component", op_id: "stage", id: "STAGE",
+      component_type: DEFAULT_COMPONENT_REGISTRY.ref("stage-3d"), placement: placement(0),
+    }, {
+      op: "create_component", op_id: "entity", id: "ENTITY_A",
+      component_type: DEFAULT_COMPONENT_REGISTRY.ref("spatial-entity"), placement: placement(0),
+      props: { assetId: "primitive_box", entityKind: "primitive" },
+    }, {
+      op: "create_component", op_id: "panel", id: "PANEL_A",
+      component_type: DEFAULT_COMPONENT_REGISTRY.ref("panel"), placement: panelPlacement,
+    }]));
+    const controller = new WorkspaceAgentController(new WorkspaceStoreEngineAdapter(store), {
+      randomToken: (() => { let counter = 0; return (prefix) => `${prefix}_${String(++counter).padStart(24, "0")}`; })(),
+      grantScopes: ({ requestedScopes }) => requestedScopes,
+    });
+    const instructions = await controller.getWorkspaceInstructions({ client_id: "layout-e2e" });
+    if (!instructions.ok) throw new Error(JSON.stringify(instructions.error));
+    const session = {
+      session_token: instructions.data.session_token,
+      instruction_digest: instructions.data.guide_digest,
+    };
+
+    const full = await controller.inspectWorkspaceSpace(session);
+    expect(full).toMatchObject({
+      ok: true,
+      data: {
+        spatial_graph: {
+          dimension_domain: "world3d",
+          nodes: [expect.objectContaining({ id: "ENTITY_A" })],
+        },
+        layout_graph: {
+          format: "semaframe-layout-graph",
+          version: "1.0",
+          dimension_domain: "ui2d",
+          coordinate_system: { units: "logical_px", width: 1440, height: 900, safe_inset: 20 },
+          nodes: [expect.objectContaining({
+            id: "PANEL_A",
+            dimension_domain: "ui2d",
+            resolution: "canonical",
+            collision_domain: "overlay2d:canonical",
+          })],
+        },
+      },
+    });
+    if (!full.ok) return;
+    const spatialIds = ((full.data.spatial_graph as { nodes: Array<{ id: string }> }).nodes).map(({ id }) => id);
+    const layoutIds = ((full.data.layout_graph as { nodes: Array<{ id: string }> }).nodes).map(({ id }) => id);
+    expect(spatialIds).not.toContain("PANEL_A");
+    expect(layoutIds).not.toContain("ENTITY_A");
+    expect(layoutIds).not.toContain("STAGE");
+
+    const candidate = {
+      placement: {
+        ...panelPlacement,
+        offset: { x: 40, y: 30 },
+        zIndex: 999,
+      },
+    };
+    const preflight = await controller.queryLayoutPlacement({ ...session, candidate });
+    expect(preflight).toMatchObject({
+      ok: true,
+      data: {
+        workspace_revision: 1,
+        placement_check: {
+          valid: false,
+          dimension_domain: "ui2d",
+          collision_domain: "overlay2d:canonical",
+          mutates_workspace: false,
+          conflicts: [expect.objectContaining({
+            conflicts_with: "PANEL_A",
+            collision_domain: "overlay2d:canonical",
+          })],
+          suggested_placements: expect.any(Array),
+        },
+      },
+    });
+    if (!preflight.ok) return;
+    expect(store.getRevision()).toBe(1);
+    const suggestions = (preflight.data.placement_check as {
+      suggested_placements: Array<typeof panelPlacement>;
+    }).suggested_placements;
+    expect(suggestions.length).toBeGreaterThan(0);
+
+    expect(await controller.queryLayoutPlacement({
+      ...session,
+      candidate: { placement: placement(0) },
+    })).toMatchObject({
+      ok: false,
+      error: { code: "invalid_layout_candidate", required_action: "query_layout_placement" },
+    });
+    expect(await controller.queryLayoutPlacement({
+      ...session,
+      candidate: { placement: { space: "canvas2d", position: { x: 0, y: 0 } } },
+    })).toMatchObject({
+      ok: false,
+      error: { code: "invalid_layout_candidate", required_action: "query_layout_placement" },
+    });
+
+    const prepared = await controller.beginWorkspaceUpdate({
+      ...session,
+      intent: "Add a second non-overlapping panel",
+      requested_component_ids: 1,
+    });
+    if (!prepared.ok) throw new Error(JSON.stringify(prepared.error));
+    const componentId = prepared.data.reserved_component_ids[0]!;
+    const operation = (target: typeof panelPlacement) => ({
+      op: "create_component" as const,
+      op_id: "create_second_panel",
+      id: componentId,
+      component_type: DEFAULT_COMPONENT_REGISTRY.ref("panel"),
+      placement: target,
+    });
+    const rejected = await controller.submitWorkspaceBatch({
+      ...session,
+      transaction_token: prepared.data.transaction_token,
+      batch: { ...prepared.data.envelope, operations: [operation(candidate.placement)] },
+    });
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "layout_overlap", retryable: true, required_action: "query_layout_placement" },
+    });
+    expect(store.getRevision()).toBe(1);
+
+    const corrected = await controller.submitWorkspaceBatch({
+      ...session,
+      transaction_token: prepared.data.transaction_token,
+      batch: { ...prepared.data.envelope, operations: [operation(suggestions[0]!)] },
+    });
+    expect(corrected).toMatchObject({ ok: true, data: { resulting_workspace_revision: 2 } });
+    const delta = await controller.inspectWorkspaceSpace({ ...session, since_revision: 1 });
+    expect(delta).toMatchObject({
+      ok: true,
+      data: {
+        layout_graph: {
+          mode: "delta",
+          since_revision: 1,
+          nodes: [expect.objectContaining({ id: componentId })],
+        },
+      },
     });
   });
 

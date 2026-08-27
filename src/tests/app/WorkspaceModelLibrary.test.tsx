@@ -1,9 +1,10 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   WorkspaceChrome,
   WorkspaceModelLibrary,
+  workspaceModelExportPresentation,
 } from "../../app/components/workspace";
 import type { ModelDefinition } from "../../workspace/modeling";
 import type { WorkspaceRenderComponent } from "../../workspace/renderer";
@@ -56,6 +57,36 @@ function definition(): ModelDefinition {
 }
 
 describe("Workspace model library", () => {
+  it("explains built-in formats by downstream use and editability", () => {
+    expect(workspaceModelExportPresentation({
+      id: "openusd-usda",
+      label: "USDA",
+      onExport: vi.fn(),
+    })).toMatchObject({
+      group: "scene",
+      formatName: "OpenUSD scene",
+      editability: expect.stringContaining("Structured scene"),
+    });
+    expect(workspaceModelExportPresentation({
+      id: "cad-handoff",
+      label: "CAD package",
+      onExport: vi.fn(),
+    })).toMatchObject({
+      group: "cad",
+      formatName: "Verified CAD handoff",
+      preparation: expect.stringContaining("round-trip"),
+    });
+    expect(workspaceModelExportPresentation({
+      id: "solid-stl",
+      label: "STL",
+      onExport: vi.fn(),
+    })).toMatchObject({
+      group: "mesh",
+      formatName: "STL mesh",
+      editability: expect.stringContaining("Mesh only"),
+    });
+  });
+
   it("validates identity fields and publishes the selected assembly as one explicit request", async () => {
     const user = userEvent.setup();
     const onPublish = vi.fn(() => true);
@@ -241,5 +272,117 @@ describe("Workspace model library", () => {
     expect(onExport).toHaveBeenCalledTimes(1);
     finish?.();
     await waitFor(() => expect(screen.getByRole("button", { name: "STL" })).toBeEnabled());
+  });
+
+  it("rejects two export activations in the same render frame", async () => {
+    let finish: (() => void) | undefined;
+    const onExport = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<WorkspaceModelLibrary
+      definitions={[definition()]}
+      exportActions={[{ id: "openusd-usda", label: "USDA", onExport }]}
+    />);
+
+    const button = screen.getByRole("button", { name: "USDA" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(onExport).toHaveBeenCalledTimes(1);
+    finish?.();
+    await waitFor(() => expect(screen.getByRole("button", { name: "USDA" })).toBeEnabled());
+  });
+
+  it("groups export choices, explains readiness, and opens scene-wide Checks", async () => {
+    const user = userEvent.setup();
+    const onOpenValidation = vi.fn();
+    render(<WorkspaceModelLibrary
+      definitions={[definition()]}
+      onOpenValidation={onOpenValidation}
+      exportActions={[
+        { id: "openusd-usda", label: "USDA", onExport: vi.fn() },
+        { id: "cad-step", label: "STEP", onExport: vi.fn() },
+        {
+          id: "solid-obj",
+          label: "OBJ",
+          onExport: vi.fn(),
+          isAvailable: () => false,
+          unavailableReason: "Boolean operations must be resolved first.",
+        },
+      ]}
+    />);
+
+    expect(screen.getByRole("heading", { name: "Export center" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Scene & simulation" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "CAD & manufacturing" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Mesh & visualization" })).toBeVisible();
+    expect(screen.getByText("2 ready · 1 unavailable")).toBeVisible();
+    expect(screen.getByText(/source feature history may not transfer/i)).toBeVisible();
+    const unavailable = screen.getByRole("button", { name: "OBJ" });
+    const reason = screen.getByText(/Boolean operations must be resolved first/);
+    expect(unavailable).toBeDisabled();
+    expect(unavailable).toHaveAttribute("aria-describedby", reason.id);
+
+    await user.click(screen.getByRole("button", { name: "Review Checks" }));
+    expect(onOpenValidation).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves from a model export preflight into the Workspace Checks panel", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceChrome
+      catalog={[]}
+      sources={[]}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onAction={vi.fn()}
+      onCreateShowcase={vi.fn()}
+      modelDefinitions={[definition()]}
+      modelExportActions={[{ id: "openusd-usda", label: "USDA", onExport: vi.fn() }]}
+      validationView={{
+        workspaceId: "workspace-test",
+        revision: 12,
+        bounded: true,
+        counts: { blocking: 0, warning: 0, info: 0, total: 0 },
+        issues: [],
+        coverage: ["Current collision checks"],
+        limitations: ["Not engineering certification"],
+      }}
+    />);
+
+    await user.click(screen.getByRole("button", { name: "Models" }));
+    await user.click(screen.getByRole("button", { name: "Review Checks" }));
+    expect(screen.getByRole("region", { name: "validation panel" })).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "Workspace checks" })).toHaveTextContent("Revision 12");
+  });
+
+  it("announces honest export completion, handled failure, and thrown errors", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceModelLibrary
+      definitions={[definition()]}
+      exportActions={[
+        { id: "good", label: "Good format", onExport: vi.fn(() => true) },
+        { id: "handled-failure", label: "Handled failure", onExport: vi.fn(() => false) },
+        { id: "throwing", label: "Throwing format", onExport: vi.fn(() => { throw new Error("Exporter disconnected."); }) },
+      ]}
+    />);
+
+    await user.click(screen.getByRole("button", { name: "Good format" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Good format export completed");
+    await user.click(screen.getByRole("button", { name: "Handled failure" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("did not complete");
+    await user.click(screen.getByRole("button", { name: "Throwing format" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Exporter disconnected");
+  });
+
+  it("turns a failed compatibility probe into a visible unavailable reason", () => {
+    render(<WorkspaceModelLibrary
+      definitions={[definition()]}
+      exportActions={[{
+        id: "unstable-extension",
+        label: "Extension export",
+        onExport: vi.fn(),
+        isAvailable: () => { throw new Error("Worker is not installed."); },
+      }]}
+    />);
+
+    expect(screen.getByRole("button", { name: "Extension export" })).toBeDisabled();
+    expect(screen.getByText(/compatibility check failed: Worker is not installed/)).toBeVisible();
   });
 });

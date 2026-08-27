@@ -29,6 +29,7 @@ export const AGENT_GATEWAY_COMMAND_NAMES = [
   "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
+  "query_layout_placement",
   "inspect_workspace_physics",
   "query_stable_placement",
   "simulate_workspace_physics",

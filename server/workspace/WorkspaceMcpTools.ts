@@ -32,7 +32,7 @@ import {
 
 export const WORKSPACE_MCP_SERVER_INFO = Object.freeze({
   name: "semaframe-workspace-engine",
-  version: "1.9.0",
+  version: "1.10.0",
 });
 
 export type WorkspaceMcpBackendResult = Readonly<{
@@ -97,6 +97,7 @@ const requiredActionSchema = z.enum([
   "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
+  "query_layout_placement",
   "inspect_workspace_physics",
   "query_stable_placement",
   "simulate_workspace_physics",
@@ -757,6 +758,55 @@ export function registerWorkspaceTools(
     async (input, context) => toolResult(
       "query_spatial_placement",
       await backend.dispatch("query_spatial_placement", input, clientContext({}, context, protocolEra)),
+    ),
+  );
+
+  const layoutVectorSchema = z.strictObject({
+    x: z.number().finite().min(-1_000_000).max(1_000_000),
+    y: z.number().finite().min(-1_000_000).max(1_000_000),
+  });
+  const layoutSizeSchema = z.strictObject({
+    width: z.number().finite().min(1).max(4_096),
+    height: z.number().finite().min(1).max(4_096),
+  });
+  const layoutPlacementSchema = z.discriminatedUnion("space", [
+    z.strictObject({
+      space: z.literal("canvas2d"),
+      position: layoutVectorSchema,
+      size: layoutSizeSchema,
+      rotationDeg: z.number().finite().min(-1_000_000).max(1_000_000).optional(),
+      zIndex: z.number().int().min(-10_000).max(10_000).optional(),
+    }),
+    z.strictObject({
+      space: z.literal("viewport"),
+      anchor: z.enum([
+        "top_left", "top", "top_right", "left", "center", "right",
+        "bottom_left", "bottom", "bottom_right",
+      ]),
+      offset: layoutVectorSchema,
+      size: layoutSizeSchema,
+      zIndex: z.number().int().min(-10_000).max(10_000).optional(),
+    }),
+  ]);
+  const layoutCandidateSchema = z.strictObject({
+    component_id: z.string().min(1).max(256).optional(),
+    placement: layoutPlacementSchema,
+  });
+  server.registerTool(
+    "query_layout_placement",
+    {
+      title: "Preflight a non-overlapping 2D layout placement",
+      description: "Checks one explicit-size canvas2d or viewport placement against the independent ui2d layout graph without mutating the Workspace. It compares only 2D layout nodes: it never treats a visual 2D panel overlapping 3D content as a collision and never weakens world3d collision checks.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        candidate: layoutCandidateSchema,
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult(
+      "query_layout_placement",
+      await backend.dispatch("query_layout_placement", input, clientContext({}, context, protocolEra)),
     ),
   );
 

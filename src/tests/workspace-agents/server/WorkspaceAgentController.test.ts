@@ -26,6 +26,7 @@ import type {
   WorkspaceResourceSnapshotView,
   WorkspaceSpatialPlacementView,
   WorkspaceSpatialStateView,
+  WorkspaceLayoutPlacementView,
   WorkspacePhysicsPlacementView,
   WorkspacePhysicsSimulationView,
   WorkspacePhysicsStateView,
@@ -234,7 +235,8 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
       workspaceId: "workspace_main",
       revision: this.revision,
       registryDigest: this.registryDigest,
-      spatialGraph: { format: "semaframe-spatial-graph", version: "2.0", nodes: [] },
+      spatialGraph: { format: "semaframe-spatial-graph", version: "3.2", dimension_domain: "world3d", nodes: [] },
+      layoutGraph: { format: "semaframe-layout-graph", version: "1.0", dimension_domain: "ui2d", nodes: [] },
     };
   }
 
@@ -244,6 +246,21 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
       revision: this.revision,
       registryDigest: this.registryDigest,
       placementCheck: { valid: true, candidate_id: "candidate", conflicts: [], suggested_placements: [] },
+    };
+  }
+
+  queryLayoutPlacement(): WorkspaceLayoutPlacementView {
+    return {
+      workspaceId: "workspace_main",
+      revision: this.revision,
+      registryDigest: this.registryDigest,
+      placementCheck: {
+        valid: true,
+        candidate_id: "candidate",
+        conflicts: [],
+        suggested_placements: [],
+        dimension_domain: "ui2d",
+      },
     };
   }
 
@@ -406,7 +423,7 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("3.0");
+    expect(instructions.guide.guide_version).toBe("3.2");
     expect(instructions.guide.protocol_version).toBe("1.3");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),

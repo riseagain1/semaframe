@@ -48,6 +48,7 @@ const agentControlErrorSchema = {
         "inspect_workspace_model",
         "inspect_workspace_space",
         "query_spatial_placement",
+        "query_layout_placement",
         "inspect_workspace_physics",
         "query_stable_placement",
         "simulate_workspace_physics",
@@ -595,7 +596,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
     openapi: "3.1.0",
     info: {
       title: "SemaFrame Agent Gateway",
-      version: "1.2.0",
+      version: "1.3.0",
       description: "Provider-neutral control of the browser-authoritative universal Workspace. Obtain the ephemeral bearer from the in-app agent setup; never place it in a URL.",
     },
     servers: [{ url: `${publicBaseUrl.replace(/\/$/u, "")}/v1` }],
@@ -1026,7 +1027,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/space/inspect": {
         post: {
           operationId: "inspect_workspace_space",
-          summary: "Inspect the derived SemaFrame Spatial Graph with world transforms, bounds, collisions, and relations.",
+          summary: "Inspect the independent world3d Spatial Graph and ui2d Layout Graph at one Workspace revision.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
@@ -1052,6 +1053,58 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
               session_token: { type: "string", minLength: 8, maxLength: 256 },
               instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
               candidate: { type: "object" },
+            },
+          }),
+          responses: successResponses,
+        },
+      },
+      "/workspace/layout/query": {
+        post: {
+          operationId: "query_layout_placement",
+          summary: "Preflight an explicit-size canvas2d or viewport placement against only the ui2d overlap domain without mutation.",
+          requestBody: jsonBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["session_token", "instruction_digest", "candidate"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              candidate: {
+                type: "object",
+                additionalProperties: false,
+                required: ["placement"],
+                properties: {
+                  component_id: { type: "string", minLength: 1, maxLength: 256 },
+                  placement: {
+                    oneOf: [
+                      {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["space", "position", "size"],
+                        properties: {
+                          space: { const: "canvas2d" },
+                          position: { $ref: "#/components/schemas/LayoutVec2" },
+                          size: { $ref: "#/components/schemas/LayoutSize2" },
+                          rotationDeg: { type: "number", minimum: -1_000_000, maximum: 1_000_000 },
+                          zIndex: { type: "integer", minimum: -10_000, maximum: 10_000 },
+                        },
+                      },
+                      {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["space", "anchor", "offset", "size"],
+                        properties: {
+                          space: { const: "viewport" },
+                          anchor: { enum: ["top_left", "top", "top_right", "left", "center", "right", "bottom_left", "bottom", "bottom_right"] },
+                          offset: { $ref: "#/components/schemas/LayoutVec2" },
+                          size: { $ref: "#/components/schemas/LayoutSize2" },
+                          zIndex: { type: "integer", minimum: -10_000, maximum: 10_000 },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
             },
           }),
           responses: successResponses,
@@ -1281,6 +1334,24 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
           },
         },
         RealityAssetDescriptor: realityAssetDescriptorSchema,
+        LayoutVec2: {
+          type: "object",
+          additionalProperties: false,
+          required: ["x", "y"],
+          properties: {
+            x: { type: "number", minimum: -1_000_000, maximum: 1_000_000 },
+            y: { type: "number", minimum: -1_000_000, maximum: 1_000_000 },
+          },
+        },
+        LayoutSize2: {
+          type: "object",
+          additionalProperties: false,
+          required: ["width", "height"],
+          properties: {
+            width: { type: "number", minimum: 1, maximum: 4_096 },
+            height: { type: "number", minimum: 1, maximum: 4_096 },
+          },
+        },
         WorkspaceSession: {
           type: "object",
           additionalProperties: false,

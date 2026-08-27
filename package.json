@@ -1,7 +1,7 @@
 {
   "name": "semaframe",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0-rc.1",
   "license": "MIT",
   "description": "A semantic spatial workspace for AI agents.",
   "repository": {
@@ -13,6 +13,32 @@
     "url": "https://github.com/riseagain1/semaframe/issues"
   },
   "type": "module",
+  "bin": {
+    "semaframe": "./bin/semaframe.mjs"
+  },
+  "files": [
+    "bin/",
+    ".env.example",
+    "index.html",
+    "xr.html",
+    "integrations/agent-skills/",
+    "native/voice-relay/",
+    "public/",
+    "server/",
+    "src/",
+    "scripts/agent-mcp.ts",
+    "scripts/apple-object-capture.swift",
+    "scripts/build-voice-relay.mjs",
+    "scripts/dev-agent.mjs",
+    "scripts/lib/",
+    "tsconfig.json",
+    "tsconfig.app.json",
+    "tsconfig.node.json",
+    "vite.config.ts",
+    "vite.shared.ts",
+    "vite.xr.config.ts",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "engines": {
     "node": ">=22.12"
   },
@@ -35,13 +61,19 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "lint": "eslint src server scripts vite.config.ts vite.xr.config.ts vite.shared.ts eslint.config.js",
     "test:xr:launcher": "node --test scripts/npm-launcher.test.mjs scripts/root-env.test.mjs",
     "smoke:xr:launcher": "node scripts/xr-launcher-smoke.mjs",
+    "test:cli": "node --test scripts/semaframe-cli.test.mjs",
+    "test:cli:package": "node scripts/verify-cli-package.mjs",
+    "doctor": "node bin/semaframe.mjs doctor",
     "test:cad:bundle": "node scripts/verify-cad-bundle.mjs",
     "test:csg:bundle": "node scripts/verify-csg-bundle.mjs",
     "test:reality:runtime": "vitest run src/tests/renderer/RealitySplatRuntime.test.ts && node scripts/verify-reality-runtime.mjs",
     "smoke:workspace": "node scripts/workspace-smoke.mjs",
     "smoke:agent": "node scripts/agent-smoke.mjs",
+    "benchmark:workspace": "tsx scripts/workspace-performance-benchmark.ts",
+    "test:performance:workspace": "vitest run src/tests/performance/WorkspacePerformanceBenchmark.test.ts",
     "demo:capture": "node scripts/demo-video-capture.mjs",
     "demo:capture:realityops": "node scripts/realityops-demo-capture.mjs",
     "demo:capture:living-room": "node scripts/living-room-demo-capture.mjs",
@@ -117,6 +149,7 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "@monogrid/gainmap-js": "^3.1.0",
     "@sparkjsdev/spark": "2.1.0",
+    "@vitejs/plugin-react": "^4.7.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "lucide-react": "^0.468.0",
@@ -128,9 +161,12 @@
     "saxes": "^6.0.0",
     "sharp": "^0.35.0",
     "three": "0.180.0",
+    "tsx": "^4.23.12",
+    "vite": "^7.1.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@gltf-transform/core": "^4.4.2",
     "@modelcontextprotocol/client": "^2.0.0",
     "@remotion/cli": "^4.0.512",
@@ -143,12 +179,14 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@types/three": "0.180.0",
-    "@vitejs/plugin-react": "^4.7.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.4.0",
     "jsdom": "^26.1.0",
     "remotion": "^4.0.512",
-    "tsx": "^4.23.12",
     "typescript": "^5.9.2",
-    "vite": "^7.1.2",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^3.2.4"
   }
 }

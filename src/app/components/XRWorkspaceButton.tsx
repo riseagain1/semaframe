@@ -37,9 +37,16 @@ export type XRWorkspaceButtonHandle = Readonly<{
     phase: XRWorkspaceButtonPhase;
     message: string;
     renderProfile: string;
+    ultraAvailable: boolean;
+    ultraPhase: UltraLocalActivationSnapshot["phase"];
+    ultraMessage: string;
   }>;
+  /** Permission-free capability refresh; safe to call outside a user gesture. */
+  refreshReadiness(): Promise<void>;
   /** Must be called synchronously from the user's click/select handler. */
   enterFromUserGesture(): Promise<void>;
+  /** Must be called from the explicit Ultra check/benchmark user action. */
+  verifyUltraFromUserGesture(): Promise<void>;
   exitFromUserGesture(): Promise<XRWorkspaceExitOutcome>;
 }>;
 
@@ -180,7 +187,12 @@ export const XRWorkspaceButton = forwardRef<XRWorkspaceButtonHandle, XRWorkspace
   };
 
   const verifyUltra = async () => {
-    if (!ultraEvidenceRef.current || ultra.phase === "benchmarking" || ultra.phase === "confirming") return;
+    if (!ultraEvidenceRef.current
+      || phase === "active"
+      || phase === "requesting"
+      || phase === "ending"
+      || ultra.phase === "benchmarking"
+      || ultra.phase === "confirming") return;
     ultraAbortRef.current?.abort("superseded");
     const abort = new AbortController();
     ultraAbortRef.current = abort;
@@ -207,6 +219,21 @@ export const XRWorkspaceButton = forwardRef<XRWorkspaceButtonHandle, XRWorkspace
         message: cause instanceof Error ? cause.message : "Windows PCVR Ultra verification failed.",
         profile: ultraControllerRef.current.snapshot.profile,
       });
+    }
+  };
+
+  const refreshReadiness = async () => {
+    if (sessionRef.current || getCanvas()?.isXRPresenting() || phase === "requesting" || phase === "ending") return;
+    publish("probing", "Checking this browser for WebXR…");
+    try {
+      const capability = await runtimeRef.current.probe();
+      if (capability.available && capability.sessionModes.includes("immersive-vr")) {
+        publish("ready", READY_MESSAGE);
+      } else {
+        publish("unsupported", "Immersive WebXR is unavailable in this browser");
+      }
+    } catch {
+      publish("error", "WebXR capability detection failed");
     }
   };
 
@@ -238,10 +265,19 @@ export const XRWorkspaceButton = forwardRef<XRWorkspaceButtonHandle, XRWorkspace
   };
 
   useImperativeHandle(ref, () => ({
-    inspect: () => ({ phase, message, renderProfile: ultra.profile.mode }),
+    inspect: () => ({
+      phase,
+      message,
+      renderProfile: ultra.profile.mode,
+      ultraAvailable: Boolean(ultraEvidenceRef.current),
+      ultraPhase: ultra.phase,
+      ultraMessage: ultra.message,
+    }),
+    refreshReadiness,
     enterFromUserGesture: enter,
+    verifyUltraFromUserGesture: verifyUltra,
     exitFromUserGesture: exit,
-  }), [message, phase, ultra.profile.mode]);
+  }), [message, phase, ultra.message, ultra.phase, ultra.profile.mode]);
 
   const busy = phase === "probing" || phase === "requesting" || phase === "ending";
   const unavailable = phase === "unsupported";
