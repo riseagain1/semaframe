@@ -830,6 +830,58 @@ describe("AgentGatewayClient", () => {
     expect(client.running).toBe(false);
   });
 
+  it("keeps an idle browser poll alive beyond the ordinary UI request deadline", async () => {
+    vi.useFakeTimers();
+    let resolvePollStarted!: () => void;
+    const pollStarted = new Promise<void>((resolve) => { resolvePollStarted = resolve; });
+    let pollSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (input === "/api/agent/config") return Promise.resolve(jsonResponse(config()));
+      if (input === "/api/agent/browser/register") {
+        return Promise.resolve(jsonResponse({ browserConnectionId: "browser-connection-idle" }));
+      }
+      if (input === "/api/agent/browser/poll") {
+        pollSignal = init?.signal ?? undefined;
+        resolvePollStarted();
+        return new Promise<Response>((_resolve, reject) => {
+          pollSignal?.addEventListener(
+            "abort",
+            () => reject(pollSignal?.reason ?? new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      if (input === "/api/agent/browser/unregister") return Promise.resolve(new Response(null, { status: 204 }));
+      throw new Error(`Unexpected Agent Gateway request: ${String(input)}`);
+    });
+    const statuses: string[] = [];
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-idle-poll",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+      onStatus: (status) => statuses.push(status),
+    });
+    let outcome: unknown;
+    const running = client.start().then(
+      () => { outcome = "resolved"; },
+      (error: unknown) => { outcome = error; },
+    );
+
+    await pollStarted;
+    await vi.advanceTimersByTimeAsync(12_001);
+    expect(pollSignal?.aborted).toBe(false);
+    expect(outcome).toBeUndefined();
+    expect(statuses).toEqual(["waiting"]);
+
+    client.stop();
+    await running;
+    expect(outcome).toBe("resolved");
+    expect(pollSignal?.aborted).toBe(true);
+    expect(statuses).toEqual(["waiting", "disconnected"]);
+  });
+
   it("registers, dispatches exact command input, and returns a structured result", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse(config()))

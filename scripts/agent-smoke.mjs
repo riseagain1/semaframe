@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { launchChromeForSmoke } from "./lib/chrome-smoke-launcher.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const artifacts = resolve("artifacts");
@@ -300,10 +301,28 @@ const diagnosticText = (value) => redactAgentSmokeDiagnosticText(value, sensitiv
 
 const gatewayPort = await freePort();
 const vitePort = await freePort();
-const cdpPort = await freePort();
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const appUrl = `http://127.0.0.1:${vitePort}/`;
 const profile = mkdtempSync(join(tmpdir(), "semaframe-agent-smoke-"));
+let browserStartup;
+try {
+  browserStartup = await launchChromeForSmoke({
+    executable: browserExecutable(),
+    profile,
+    extraArgs: [
+      "--headless=new",
+      "--disable-gpu-sandbox",
+      "--enable-webgl",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+    ],
+  });
+} catch (error) {
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  throw error;
+}
+const { browser, cdpPort } = browserStartup;
 const stack = spawn("npm", ["run", "dev"], {
   stdio: ["ignore", "pipe", "pipe"],
   env: {
@@ -314,18 +333,6 @@ const stack = spawn("npm", ["run", "dev"], {
     SEMAFRAME_DISABLE_HMR: "1",
   },
 });
-const browser = spawn(browserExecutable(), [
-  "--headless=new",
-  "--disable-gpu-sandbox",
-  "--enable-webgl",
-  "--enable-unsafe-swiftshader",
-  "--use-gl=angle",
-  "--use-angle=swiftshader",
-  `--remote-debugging-port=${cdpPort}`,
-  `--user-data-dir=${profile}`,
-  "about:blank",
-], { stdio: "ignore" });
-
 const processLogs = [];
 for (const child of [stack]) {
   child.stdout.on("data", (chunk) => processLogs.push(String(chunk)));

@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { launchChromeForSmoke } from "./lib/chrome-smoke-launcher.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const withTimeout = (promise, timeoutMs, label) => new Promise((resolvePromise, rejectPromise) => {
@@ -575,10 +576,28 @@ function assertWorkspaceProject(serialized) {
 
 const gatewayPort = await freePort();
 const vitePort = await freePort();
-const cdpPort = await freePort();
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const appUrl = `http://127.0.0.1:${vitePort}/`;
 const profile = mkdtempSync(join(tmpdir(), "semaframe-workspace-smoke-"));
+let browserStartup;
+try {
+  browserStartup = await launchChromeForSmoke({
+    executable: browserExecutable(),
+    profile,
+    extraArgs: [
+      "--headless=new",
+      "--disable-gpu-sandbox",
+      "--enable-webgl",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+    ],
+  });
+} catch (error) {
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  throw error;
+}
+const { browser, cdpPort } = browserStartup;
 const stack = spawn("npm", ["run", "dev"], {
   stdio: ["ignore", "pipe", "pipe"],
   env: {
@@ -589,18 +608,6 @@ const stack = spawn("npm", ["run", "dev"], {
     SEMAFRAME_DISABLE_HMR: "1",
   },
 });
-const browser = spawn(browserExecutable(), [
-  "--headless=new",
-  "--disable-gpu-sandbox",
-  "--enable-webgl",
-  "--enable-unsafe-swiftshader",
-  "--use-gl=angle",
-  "--use-angle=swiftshader",
-  `--remote-debugging-port=${cdpPort}`,
-  `--user-data-dir=${profile}`,
-  "about:blank",
-], { stdio: "ignore" });
-
 const processLogs = [];
 stack.stdout.on("data", (chunk) => processLogs.push(String(chunk)));
 stack.stderr.on("data", (chunk) => processLogs.push(String(chunk)));
@@ -1186,16 +1193,21 @@ try {
   await poll(cdp, "Boolean(document.querySelector('.workspace-timer.is-running button[aria-label=\"Pause timer\"]'))", "running timer state");
   await poll(
     cdp,
+    "document.querySelector('.workspace-timer__phase')?.textContent?.trim() === 'running' && document.querySelector('.scene-stat')?.textContent?.includes('rev 9')",
+    "durable running timer revision",
+  );
+  await poll(
+    cdp,
     "(() => { const text = document.querySelector('.workspace-timer__readout')?.textContent?.trim() ?? ''; return /^\\d{2}:\\d{2}$/.test(text) && text !== '05:00'; })()",
     "live timer countdown",
-    4_000,
+    5_000,
   );
   const runningUi = await cdp.evaluate(`({
     phase: document.querySelector('.workspace-timer__phase')?.textContent?.trim(),
     readout: document.querySelector('.workspace-timer__readout')?.textContent?.trim(),
     revision: document.querySelector('.scene-stat')?.textContent,
   })`);
-  if (runningUi.phase !== "running" || runningUi.readout === "05:00" || !runningUi.revision?.includes("rev 9")) {
+  if (runningUi.phase !== "running" || !/^\d{2}:\d{2}$/u.test(runningUi.readout ?? "") || !runningUi.revision?.includes("rev 9")) {
     throw new Error(`Timer action did not produce one durable semantic revision and a live projection: ${JSON.stringify(runningUi)}`);
   }
 
@@ -1207,8 +1219,28 @@ try {
   const mixedScreenshot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
   writeFileSync(join(artifacts, "workspace-smoke-mixed.png"), Buffer.from(mixedScreenshot.data, "base64"));
 
+  let projectActionDiagnostics;
+  const projectActionDeadline = Date.now() + 12_000;
+  while (Date.now() < projectActionDeadline) {
+    projectActionDiagnostics = await cdp.evaluate(`({
+      topLevel: window === window.top,
+      href: location.href,
+      readyState: document.readyState,
+      projectBarPresent: Boolean(document.querySelector('.project-bar')),
+      buttonCount: document.querySelectorAll('button').length,
+      controls: [...document.querySelectorAll('button')]
+        .map((button) => button.getAttribute('aria-controls'))
+        .filter(Boolean),
+    })`);
+    if (projectActionDiagnostics.controls.includes('project-actions-menu')) break;
+    await delay(100);
+  }
+  if (!projectActionDiagnostics?.controls.includes('project-actions-menu')) {
+    throw new Error(`Project actions button did not become available after save: ${JSON.stringify(projectActionDiagnostics)}`);
+  }
   if (!await cdp.evaluate(`(() => {
-    const button = document.querySelector('button[aria-label^="More project actions"]');
+    const button = [...document.querySelectorAll('button')]
+      .find((candidate) => candidate.getAttribute('aria-controls') === 'project-actions-menu');
     if (!(button instanceof HTMLButtonElement)) return false;
     button.click();
     return true;

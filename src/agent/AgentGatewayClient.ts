@@ -321,6 +321,10 @@ const CLIENT_INSTANCE_ID_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/;
 const BRIDGE_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CSRF_HEADER = "X-SemaFrame-Agent-CSRF";
 const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
+// The production Gateway deliberately holds an idle browser poll for 25s.
+// Keep that transport wait independent from the shorter UI-request budget so
+// a quiet, healthy Agent session cannot relock the Workspace between commands.
+const BROWSER_POLL_REQUEST_TIMEOUT_MS = 60_000;
 // A transactional Claude update can perform seven bounded official CLI
 // operations when it must verify and roll back a bad replacement. Each command
 // has a 10-second bound plus a 1-second forced-kill grace, so keep the browser
@@ -1695,6 +1699,7 @@ export class AgentGatewayClient {
           this.endpoints.poll,
           { browserConnectionId },
           signal,
+          BROWSER_POLL_REQUEST_TIMEOUT_MS,
         ));
         if (signal.aborted) return;
 

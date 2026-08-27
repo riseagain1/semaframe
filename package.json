@@ -83,7 +83,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src server scripts vite.config.ts vite.xr.config.ts vite.shared.ts eslint.config.js",
-    "test:xr:launcher": "node --test scripts/npm-launcher.test.mjs scripts/root-env.test.mjs",
+    "test:xr:launcher": "node --test scripts/npm-launcher.test.mjs scripts/owned-process-tree.test.mjs scripts/root-env.test.mjs",
     "smoke:xr:launcher": "node scripts/xr-launcher-smoke.mjs",
     "test:cli": "node --test scripts/semaframe-cli.test.mjs",
     "test:cli:package": "node scripts/verify-cli-package.mjs",

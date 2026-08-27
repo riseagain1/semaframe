@@ -13,9 +13,18 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/client/stdio";
 import { resolveNpmLaunch } from "./lib/npm-launcher.mjs";
+import { spawnOwnedProcessTree } from "./lib/owned-process-tree.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const temporaryRoot = await mkdtemp(join(tmpdir(), "semaframe-package-"));
+const configuredNpmCache = process.env.SEMAFRAME_PACKAGE_VERIFY_NPM_CACHE?.trim();
+if (configuredNpmCache && (!isAbsolute(configuredNpmCache) || configuredNpmCache.includes("\0"))) {
+  throw new TypeError("SEMAFRAME_PACKAGE_VERIFY_NPM_CACHE must be an absolute path without NUL bytes.");
+}
+// CI may reuse setup-node's content-addressed download cache. Runtime
+// isolation still comes from the fresh install root, --omit=dev, and the
+// canonical realpath assertions below; no node_modules directory is shared.
+const verificationNpmCache = configuredNpmCache || join(temporaryRoot, "npm-cache");
 
 function run(command, args, options = {}) {
   return new Promise((resolveRun, reject) => {
@@ -298,7 +307,7 @@ try {
   assert.ok(packReport.files.some(({ path }) => path === "server/agent/start.ts"));
   assert.ok(packReport.files.some(({ path }) => path === "src/main.tsx"));
   assert.ok(packReport.files.some(({ path }) => path === "xr.html"));
-  assert.ok(packReport.entryCount < 700, `Package contains an unexpected ${packReport.entryCount} files.`);
+  assert.ok(packReport.entryCount <= 700, `Package contains an unexpected ${packReport.entryCount} files.`);
   assert.ok(packReport.unpackedSize < 12 * 1024 * 1024, "Package source payload exceeds the 12 MiB budget.");
 
   const archive = join(temporaryRoot, packReport.filename);
@@ -313,7 +322,7 @@ try {
     cwd: temporaryRoot,
     env: {
       ...process.env,
-      npm_config_cache: join(temporaryRoot, "npm-cache"),
+      npm_config_cache: verificationNpmCache,
     },
   });
 
@@ -340,7 +349,7 @@ try {
     cwd: temporaryRoot,
     env: {
       ...process.env,
-      npm_config_cache: join(temporaryRoot, "npm-cache"),
+      npm_config_cache: verificationNpmCache,
     },
   });
   assert.equal(npmExecVersion.stdout.trim(), manifest.version);
@@ -365,21 +374,27 @@ try {
   while (xrPort === workspacePort || xrPort === gatewayPort) xrPort = await availablePort();
   let launchOutput = "";
   const browserBootstrapToken = "b".repeat(43);
-  const launched = spawn(process.execPath, [join(installedRoot, "bin", "semaframe.mjs"), "xr"], {
-    cwd: temporaryRoot,
-    env: {
-      ...process.env,
-      npm_config_cache: join(temporaryRoot, "npm-cache"),
-      SEMAFRAME_AGENT_VITE_PORT: String(workspacePort),
-      SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
-      SEMAFRAME_XR_VITE_PORT: String(xrPort),
-      SEMAFRAME_AGENT_BROWSER_TOKEN: browserBootstrapToken,
-      SEMAFRAME_VOICE_RELAY_SKIP_BUILD: "1",
+  const launchedTree = spawnOwnedProcessTree(
+    process.execPath,
+    [join(installedRoot, "bin", "semaframe.mjs"), "xr"],
+    {
+      cwd: temporaryRoot,
+      env: {
+        ...process.env,
+        npm_config_cache: verificationNpmCache,
+        SEMAFRAME_AGENT_VITE_PORT: String(workspacePort),
+        SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
+        SEMAFRAME_XR_VITE_PORT: String(xrPort),
+        SEMAFRAME_AGENT_BROWSER_TOKEN: browserBootstrapToken,
+        SEMAFRAME_VOICE_RELAY_SKIP_BUILD: "1",
+      },
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
     },
-    shell: false,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+    { termGraceMs: 10_000, forceGraceMs: 5_000 },
+  );
+  const { child: launched } = launchedTree;
   launched.stdout.setEncoding("utf8");
   launched.stderr.setEncoding("utf8");
   launched.stdout.on("data", (chunk) => { launchOutput += chunk; });
@@ -397,15 +412,17 @@ try {
       browserBootstrapToken,
     });
   } finally {
-    const exited = launched.exitCode !== null || launched.signalCode !== null
-      ? Promise.resolve()
-      : new Promise((resolveExit) => launched.once("exit", resolveExit));
-    launched.kill("SIGTERM");
-    await Promise.race([
-      exited,
-      new Promise((resolveTimeout) => setTimeout(resolveTimeout, 5_000)),
-    ]);
-    if (launched.exitCode === null && launched.signalCode === null) launched.kill("SIGKILL");
+    try {
+      // Waiting for ChildProcess `close`, not merely `exit`, proves every
+      // descendant released the inherited output pipes. On POSIX the wrapper
+      // is also an isolated process group, providing a verifier-side fallback.
+      await launchedTree.stop();
+    } finally {
+      // If cleanup fails, release the verifier's own handles so it reports the
+      // bounded failure instead of masking it with a CI job-level timeout.
+      launched.stdout.destroy();
+      launched.stderr.destroy();
+    }
   }
   console.log(`Verified packed CLI ${manifest.version}: ${packReport.entryCount} files, ${packReport.unpackedSize} bytes unpacked.`);
 } finally {

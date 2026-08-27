@@ -38,7 +38,7 @@ jobs:
         run: |
           npm run test:xr:launcher
           npm run test:cli
-          npm run test:cli:package
+          SEMAFRAME_PACKAGE_VERIFY_NPM_CACHE="$(npm config get cache)" npm run test:cli:package
       - name: Verify Reality Twin source contracts
         run: |
           npm run demo:test:audio
