@@ -105,11 +105,15 @@ export async function sha256ExtensionBytes(bytes: Uint8Array): Promise<`sha256:$
   if (!ArrayBuffer.isView(bytes) || bytes.BYTES_PER_ELEMENT !== 1) {
     throw new TypeError("SHA-256 input must be a Uint8Array.");
   }
-  // Copy into this realm's owned ArrayBuffer. Browser test environments can
-  // supply Uint8Array views from a distinct realm, and SubtleCrypto must not
-  // be handed a SharedArrayBuffer-backed or cross-realm view.
-  const input = Uint8Array.from(bytes);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", input.buffer);
+  // Vitest/jsdom can expose Node's SubtleCrypto on a DOM realm whose typed
+  // arrays are not accepted by Node 22's WebCrypto binding. A native Buffer is
+  // the unambiguous Node BufferSource; browsers use a copy from their own
+  // realm. Both branches own their bytes and reject SharedArrayBuffer aliasing.
+  const nodeBuffer = (globalThis as typeof globalThis & {
+    Buffer?: { from(value: Uint8Array): Uint8Array };
+  }).Buffer;
+  const input = nodeBuffer ? nodeBuffer.from(bytes) : Uint8Array.from(bytes);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", input as BufferSource);
   return `sha256:${bytesToHex(new Uint8Array(digest))}`;
 }
 

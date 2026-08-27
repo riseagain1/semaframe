@@ -9,9 +9,19 @@ export function bridgeJsonBytes(value: unknown): Uint8Array {
 }
 
 export async function sha256BridgeBytes(bytes: Uint8Array): Promise<`sha256:${string}`> {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", copy.buffer));
+  if (!ArrayBuffer.isView(bytes) || bytes.BYTES_PER_ELEMENT !== 1) {
+    throw new TypeError("SHA-256 input must be a Uint8Array.");
+  }
+  // Node 22 WebCrypto rejects jsdom-realm typed arrays even though they are
+  // valid BufferSources. Use a native Buffer in Node and an owned realm-local
+  // copy in browsers so hashing is portable without retaining caller storage.
+  const nodeBuffer = (globalThis as typeof globalThis & {
+    Buffer?: { from(value: Uint8Array): Uint8Array };
+  }).Buffer;
+  const input = nodeBuffer ? nodeBuffer.from(bytes) : Uint8Array.from(bytes);
+  const digest = new Uint8Array(
+    await globalThis.crypto.subtle.digest("SHA-256", input as BufferSource),
+  );
   return `sha256:${[...digest].map((part) => part.toString(16).padStart(2, "0")).join("")}`;
 }
 
