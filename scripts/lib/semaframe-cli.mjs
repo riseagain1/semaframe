@@ -4,6 +4,8 @@ import { access, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runAgentInstallationAction } from "./agent-installation.mjs";
+import { loadRootEnvironment } from "./root-env.mjs";
 
 export const SEMAFRAME_PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -17,6 +19,18 @@ function parsePort(value, fallback, label) {
   const parsed = Number(value);
   if (parsed < 1 || parsed > 65_535) throw new Error(`${label} must be a port from 1 to 65535.`);
   return parsed;
+}
+
+function parseGatewayHost(value) {
+  const host = value?.trim() || LOOPBACK_HOST;
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+    throw new Error("SEMAFRAME_AGENT_GATEWAY_HOST must be 127.0.0.1, localhost, or ::1.");
+  }
+  return host;
+}
+
+function hostPort(host, port) {
+  return `${host === "::1" ? "[::1]" : host}:${port}`;
 }
 
 export function nodeVersionIsSupported(version = process.versions.node) {
@@ -33,6 +47,36 @@ export function parseSemaFrameCliArguments(argv) {
   if (args.includes("--help") || args.includes("-h")) return Object.freeze({ command: "help" });
   if (args.includes("--version") || args.includes("-v")) return Object.freeze({ command: "version" });
   const first = args.shift() ?? "start";
+  if (first === "agent") {
+    const action = args.shift();
+    if (!action || !["install", "status", "update", "remove"].includes(action)) {
+      throw new Error("Agent command must be install, status, update, or remove.");
+    }
+    let client;
+    const unsupported = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = args[index];
+      if (argument === "--client") {
+        const value = args[index + 1];
+        if (!value || value.startsWith("--")) throw new Error("--client requires codex or claude.");
+        if (client !== undefined) throw new Error("--client may be specified only once.");
+        client = value;
+        index += 1;
+      } else if (argument.startsWith("--client=")) {
+        if (client !== undefined) throw new Error("--client may be specified only once.");
+        client = argument.slice("--client=".length);
+      } else {
+        unsupported.push(argument);
+      }
+    }
+    if (unsupported.length > 0) {
+      throw new Error(`Unknown option “${unsupported[0]}”. Run semaframe --help for supported options.`);
+    }
+    if (client !== "codex" && client !== "claude") {
+      throw new Error("--client requires codex or claude.");
+    }
+    return Object.freeze({ command: "agent", action, client });
+  }
   const command = first === "xr" ? "start" : first;
   if (command !== "start" && command !== "doctor" && command !== "help" && command !== "version") {
     throw new Error(`Unknown command “${first}”. Run semaframe --help for supported commands.`);
@@ -92,6 +136,7 @@ export async function inspectSemaFrameHost({
     gateway: parsePort(environment.SEMAFRAME_AGENT_GATEWAY_PORT, DEFAULT_PORTS.gateway, "SEMAFRAME_AGENT_GATEWAY_PORT"),
     xr: parsePort(environment.SEMAFRAME_XR_VITE_PORT, DEFAULT_PORTS.xr, "SEMAFRAME_XR_VITE_PORT"),
   });
+  const gatewayHost = parseGatewayHost(environment.SEMAFRAME_AGENT_GATEWAY_HOST);
   const requiredFiles = [
     "package.json",
     "index.html",
@@ -101,15 +146,15 @@ export async function inspectSemaFrameHost({
   ];
   const filesPresent = (await Promise.all(requiredFiles.map((path) => readable(resolve(packageRoot, path))))).every(Boolean);
   const portEntries = [
-    ["workspace", "Workspace UI port", ports.workspace],
-    ["gateway", "Agent gateway port", ports.gateway],
-    ...(xr ? [["xr", "XR renderer port", ports.xr]] : []),
+    ["workspace", "Workspace UI port", ports.workspace, LOOPBACK_HOST],
+    ["gateway", "Agent gateway port", ports.gateway, gatewayHost],
+    ...(xr ? [["xr", "XR renderer port", ports.xr, LOOPBACK_HOST]] : []),
   ];
-  const portResults = await Promise.all(portEntries.map(async ([id, label, port]) => {
-    const result = await portProbe({ host: LOOPBACK_HOST, port });
+  const portResults = await Promise.all(portEntries.map(async ([id, label, port, host]) => {
+    const result = await portProbe({ host, port });
     return check(`port-${id}`, label, result.available ? "pass" : "fail", result.available
-      ? `${LOOPBACK_HOST}:${port} is available.`
-      : `${LOOPBACK_HOST}:${port} is already in use. Stop the other process or configure a different port.`);
+      ? `${hostPort(host, port)} is available.`
+      : `${hostPort(host, port)} is already in use. Stop the other process or configure a different port.`);
   }));
   const xrPublicUrl = environment.VITE_XR_PUBLIC_URL?.trim();
   let xrTransportCheck;
@@ -196,6 +241,10 @@ function helpText() {
     "  semaframe start          Start Workspace + local Agent gateway",
     "  semaframe xr             Start Workspace + gateway + XR renderer",
     "  semaframe doctor [--xr]  Check the host without starting services",
+    "  semaframe agent install --client <codex|claude>",
+    "  semaframe agent status  --client <codex|claude>",
+    "  semaframe agent update  --client <codex|claude>",
+    "  semaframe agent remove  --client <codex|claude>",
     "  semaframe --version      Print the installed version",
     "",
     "Voice Relay is optional and off by default. A voice-capable Agent may use",
@@ -210,6 +259,15 @@ function writeDoctor(report, output) {
     output.write(`[${marker}] ${entry.label}: ${entry.detail}\n`);
   }
   output.write(report.ok ? "Ready.\n" : "Required checks failed; SemaFrame was not started.\n");
+}
+
+function writeAgentResult(agentResult, output, errorOutput) {
+  const marker = agentResult.ok ? agentResult.state.toUpperCase() : "ERROR";
+  const destination = agentResult.ok ? output : errorOutput;
+  destination.write(`[${marker}] ${agentResult.detail}\n`);
+  if (agentResult.restartRequired) {
+    destination.write("Restart the Agent client so it reloads the MCP configuration.\n");
+  }
 }
 
 async function installedVersion(packageRoot) {
@@ -235,6 +293,7 @@ export async function runSemaFrameCli(argv, {
   packageRoot = SEMAFRAME_PACKAGE_ROOT,
   inspect = inspectSemaFrameHost,
   spawnProcess = spawn,
+  agentAction = runAgentInstallationAction,
 } = {}) {
   let parsed;
   try {
@@ -250,6 +309,20 @@ export async function runSemaFrameCli(argv, {
   if (parsed.command === "version") {
     output.write(`${await installedVersion(packageRoot)}\n`);
     return 0;
+  }
+  if (parsed.command === "agent") {
+    let agentResult;
+    try {
+      agentResult = await agentAction(parsed.action, parsed.client, {
+        packageRoot,
+        environment,
+      });
+    } catch (cause) {
+      errorOutput.write(`Agent setup failed: ${cause instanceof Error ? cause.message : String(cause)}\n`);
+      return 1;
+    }
+    writeAgentResult(agentResult, output, errorOutput);
+    return agentResult.ok ? 0 : 1;
   }
   let report;
   try {
@@ -290,5 +363,22 @@ export async function runSemaFrameCli(argv, {
       }
       finish(code ?? (signal ? 0 : 1));
     });
+  });
+}
+
+/**
+ * Real executable boundary. Load the optional package-root environment before
+ * taking the environment snapshot used by doctor, onboarding, and launch.
+ * Keeping this separate from runSemaFrameCli preserves a side-effect-free
+ * programmatic API for tests and embedders that supply their own environment.
+ */
+export async function runSemaFrameCliEntrypoint(argv, {
+  loadEnvironment = loadRootEnvironment,
+  ...options
+} = {}) {
+  loadEnvironment();
+  return runSemaFrameCli(argv, {
+    ...options,
+    environment: options.environment ?? process.env,
   });
 }

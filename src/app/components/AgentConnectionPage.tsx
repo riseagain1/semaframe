@@ -5,6 +5,7 @@ import {
   CircleOff,
   Clipboard,
   Clock3,
+  Download,
   KeyRound,
   LoaderCircle,
   MonitorUp,
@@ -12,12 +13,19 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Trash2,
   Unplug,
   UserCheck,
   WifiOff,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { AgentGatewayError } from "../../agent/AgentGatewayClient";
+import {
+  AgentGatewayError,
+  type AgentClientInstallationSnapshot,
+  type AgentClientInstallationView,
+  type AgentInstallationAction,
+  type AgentInstallationClient,
+} from "../../agent/AgentGatewayClient";
 import {
   agentExperienceLegacyStatus,
   type AgentExperienceState,
@@ -73,6 +81,14 @@ export type AgentConnectionPageProps = {
   onRevoke: () => unknown | Promise<unknown>;
   /** Disables Agent control and returns to the connection gate. */
   onDisableAgentControl: () => unknown | Promise<unknown>;
+  agentInstallations?: AgentClientInstallationSnapshot;
+  agentInstallationsLoading?: boolean;
+  agentInstallationsUnavailable?: string;
+  onRefreshAgentInstallations?: () => unknown | Promise<unknown>;
+  onManageAgentInstallation?: (
+    client: AgentInstallationClient,
+    action: AgentInstallationAction,
+  ) => AgentClientInstallationView | Promise<AgentClientInstallationView>;
   /** Present only when this page is temporarily covering an active workspace. */
   onClose?: () => void;
 };
@@ -245,6 +261,11 @@ export function AgentConnectionPage({
   onReject,
   onRevoke,
   onDisableAgentControl,
+  agentInstallations,
+  agentInstallationsLoading = false,
+  agentInstallationsUnavailable,
+  onRefreshAgentInstallations,
+  onManageAgentInstallation,
   onClose,
 }: AgentConnectionPageProps) {
   const status = experience ? agentExperienceLegacyStatus(experience) : (legacyStatus ?? "booting");
@@ -272,7 +293,12 @@ export function AgentConnectionPage({
   const [confirmTakeover, setConfirmTakeover] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const [urlExpired, setUrlExpired] = useState(() => connectionUrlExpired(expiresAt));
-  const blocked = busy || pending !== null;
+  const [pendingInstallation, setPendingInstallation] = useState<Readonly<{
+    client: AgentInstallationClient;
+    action: AgentInstallationAction | "status";
+  }> | null>(null);
+  const [installationNotice, setInstallationNotice] = useState<string>();
+  const blocked = busy || pending !== null || pendingInstallation !== null;
   const copy = STATUS_COPY[status];
 
   useEffect(() => {
@@ -404,6 +430,46 @@ export function AgentConnectionPage({
       void runAction("permission", () => onPermissionChange(next)).then((changed) => {
         if (!changed) setPermission(previous);
       });
+    }
+  };
+
+  const refreshInstallations = async () => {
+    if (!onRefreshAgentInstallations) return;
+    setPendingInstallation({ client: "codex", action: "status" });
+    setLocalError(undefined);
+    setInstallationNotice(undefined);
+    try {
+      await onRefreshAgentInstallations();
+    } catch (error) {
+      setLocalError(safeActionErrorMessage(error));
+    } finally {
+      setPendingInstallation(null);
+    }
+  };
+
+  const manageInstallation = async (
+    client: AgentInstallationClient,
+    action: AgentInstallationAction,
+  ) => {
+    if (!onManageAgentInstallation) return;
+    setPendingInstallation({ client, action });
+    setLocalError(undefined);
+    setInstallationNotice(undefined);
+    try {
+      const result = await onManageAgentInstallation(client, action);
+      const expectedState = action === "remove" ? "not_installed" : "installed";
+      if (result.state !== expectedState) {
+        setLocalError(result.detail);
+        return;
+      }
+      const verb = action === "remove" ? "removed from" : action === "update" ? "updated for" : "installed for";
+      setInstallationNotice(result.restartRequired
+        ? `SemaFrame was ${verb} ${result.displayName}. Restart ${result.displayName} once to ${action === "remove" ? "finish removing it" : "load the stable connection"}.`
+        : `SemaFrame was ${verb} ${result.displayName}.`);
+    } catch (error) {
+      setLocalError(safeActionErrorMessage(error));
+    } finally {
+      setPendingInstallation(null);
     }
   };
 
@@ -635,6 +701,67 @@ export function AgentConnectionPage({
               </div>}
             </>
           )}
+
+          {(agentInstallations || agentInstallationsLoading || agentInstallationsUnavailable || onRefreshAgentInstallations) && <section
+            className="agent-installations"
+            aria-labelledby={`${titleId}-installations`}
+            aria-busy={agentInstallationsLoading || pendingInstallation !== null || undefined}
+          >
+            <div className="agent-installations-heading">
+              <div>
+                <p className="eyebrow">Install once</p>
+                <h2 id={`${titleId}-installations`}>Connect your Agent client automatically</h2>
+                <p>The stable launcher discovers the current local Gateway after restarts. No temporary URL or custom Node script is needed.</p>
+              </div>
+              {onRefreshAgentInstallations && <button
+                type="button"
+                aria-label="Refresh Agent client installation status"
+                onClick={() => void refreshInstallations()}
+                disabled={blocked}
+              >
+                <RefreshCw className={pendingInstallation?.action === "status" ? "spin-slow" : undefined} size={15} aria-hidden="true" />
+              </button>}
+            </div>
+            {agentInstallationsLoading && !agentInstallations ? <p className="agent-installations-loading" role="status">
+              <LoaderCircle className="spin-slow" size={15} aria-hidden="true" />Checking Codex and Claude Code…
+            </p> : agentInstallationsUnavailable && !agentInstallations ? <p className="agent-installations-unavailable" role="status">
+              <CircleOff size={15} aria-hidden="true" />{agentInstallationsUnavailable}
+            </p> : <ul className="agent-installation-list">
+              {agentInstallations?.clients.map((client) => {
+                const operationBusy = pendingInstallation?.client === client.client
+                  && pendingInstallation.action !== "status";
+                return <li key={client.client} data-state={client.state}>
+                  <div className="agent-installation-health" aria-hidden="true">
+                    {client.state === "installed" ? <Check size={14} /> : client.state === "outdated" ? <RefreshCw size={14} /> : <CircleOff size={14} />}
+                  </div>
+                  <div>
+                    <strong>{client.displayName}</strong>
+                    <small>{client.detail}</small>
+                  </div>
+                  <div className="agent-installation-actions">
+                    {client.state === "not_installed" && onManageAgentInstallation && <button
+                      type="button"
+                      onClick={() => void manageInstallation(client.client, "install")}
+                      disabled={blocked}
+                    >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <Download size={14} aria-hidden="true" />}Install</button>}
+                    {client.state === "outdated" && onManageAgentInstallation && <button
+                      type="button"
+                      onClick={() => void manageInstallation(client.client, "update")}
+                      disabled={blocked}
+                    >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}Update</button>}
+                    {(client.state === "installed" || client.state === "outdated") && onManageAgentInstallation && <button
+                      type="button"
+                      className="agent-installation-remove"
+                      aria-label={`Remove SemaFrame from ${client.displayName}`}
+                      onClick={() => void manageInstallation(client.client, "remove")}
+                      disabled={blocked}
+                    ><Trash2 size={14} aria-hidden="true" />Remove</button>}
+                  </div>
+                </li>;
+              })}
+            </ul>}
+            {installationNotice && <p className="agent-installation-notice" role="status">{installationNotice}</p>}
+          </section>}
 
           {status !== "occupied" && showDestructivePolicy && <label className="agent-connection-permission">
             <input

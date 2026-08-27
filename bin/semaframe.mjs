@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { runSemaFrameCli } from "../scripts/lib/semaframe-cli.mjs";
+import { runSemaFrameCliEntrypoint } from "../scripts/lib/semaframe-cli.mjs";
 
-const exitCode = await runSemaFrameCli(process.argv.slice(2));
+const exitCode = await runSemaFrameCliEntrypoint(process.argv.slice(2));
 process.exitCode = exitCode;

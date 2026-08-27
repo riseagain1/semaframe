@@ -56,14 +56,22 @@ The repository now ships a source-distributed CLI:
 npm exec --yes --package=github:riseagain1/semaframe -- semaframe doctor
 npm exec --yes --package=github:riseagain1/semaframe -- semaframe start
 npm exec --yes --package=github:riseagain1/semaframe -- semaframe xr
+npm exec --yes --package=github:riseagain1/semaframe -- semaframe agent install --client codex
 ```
 
 `doctor` is non-mutating. It validates the Node floor, package completeness, and
 required ports; XR and Voice Relay limitations are warnings unless they block
-the requested mode. The packaged-install test creates a tarball, installs only
-production dependencies in a clean temporary directory, invokes the npm bin,
-starts the Workspace, gateway, and XR origins, checks all three over HTTP, and
-tears them down.
+the requested mode. Codex and Claude Code onboarding is also available in the
+Agent connection screen, with status, update, and removal actions. It installs
+one stable loopback-discovery launcher through the client's official CLI, then
+survives Gateway restarts and MCP tool-list changes without rewriting the
+client configuration. Fresh Gateway lifetimes still require fresh human
+approval, and ambiguous failed mutations are never replayed automatically.
+
+The packaged-install test creates a tarball, installs only production
+dependencies in a clean temporary directory, invokes the npm bin, starts the
+installed stdio bridge, starts the Workspace, gateway, and XR origins, checks
+all three over HTTP, and tears them down.
 
 See the [hardware and runtime support matrix](./hardware-support.md) before
 making a physical-device or production claim.

@@ -8,6 +8,10 @@ import {
   type AgentGatewayStatus,
   type AgentBridgeProposalRecord,
   type AgentBridgeSessionAccess,
+  type AgentClientInstallationSnapshot,
+  type AgentClientInstallationView,
+  type AgentInstallationAction,
+  type AgentInstallationClient,
   type PhotoReconstructionCapability,
 } from "../agent/AgentGatewayClient";
 import {
@@ -764,6 +768,9 @@ export default function App() {
   const [approvedAgentClaim, setApprovedAgentClaim] = useState<AgentConnectionClient>();
   const [agentError, setAgentError] = useState<string>();
   const [agentBrowserOccupied, setAgentBrowserOccupied] = useState(false);
+  const [agentInstallations, setAgentInstallations] = useState<AgentClientInstallationSnapshot>();
+  const [agentInstallationsLoading, setAgentInstallationsLoading] = useState(Boolean(AGENT_CONTROL_ENDPOINT));
+  const [agentInstallationsUnavailable, setAgentInstallationsUnavailable] = useState<string>();
   const agentBrowserOccupiedRef = useRef(agentBrowserOccupied);
   agentBrowserOccupiedRef.current = agentBrowserOccupied;
   const agentCommandGenerationRef = useRef(0);
@@ -4723,6 +4730,19 @@ export default function App() {
       },
     });
     agentGatewayRef.current = client;
+    setAgentInstallationsLoading(true);
+    setAgentInstallationsUnavailable(undefined);
+    void client.getAgentClientInstallations().then((snapshot) => {
+      if (cancelled) return;
+      setAgentInstallations(snapshot);
+      setAgentInstallationsUnavailable(undefined);
+    }).catch(() => {
+      if (cancelled) return;
+      setAgentInstallations(undefined);
+      setAgentInstallationsUnavailable("Automatic Agent client setup is unavailable in this Gateway host.");
+    }).finally(() => {
+      if (!cancelled) setAgentInstallationsLoading(false);
+    });
     setPhotoReconstructionCapability("checking");
     void client.getPhotoReconstructionCapability().then((capability) => {
       if (!cancelled) setPhotoReconstructionCapability(capability);
@@ -4939,6 +4959,39 @@ export default function App() {
     setAgentSessionReady(false);
     notice("The connection request was rejected. A fresh link is ready.", "success");
   }, [agentConfig, busy, notice]);
+
+  const refreshAgentInstallations = useCallback(async () => {
+    const client = agentGatewayRef.current;
+    if (!client || busy) throw new Error("The local Agent Gateway is unavailable.");
+    setAgentInstallationsLoading(true);
+    setAgentInstallationsUnavailable(undefined);
+    try {
+      const snapshot = await client.getAgentClientInstallations();
+      setAgentInstallations(snapshot);
+    } catch (error) {
+      setAgentInstallations(undefined);
+      setAgentInstallationsUnavailable("Automatic Agent client setup is unavailable in this Gateway host.");
+      throw error;
+    } finally {
+      setAgentInstallationsLoading(false);
+    }
+  }, [busy]);
+
+  const manageAgentInstallation = useCallback(async (
+    installationClient: AgentInstallationClient,
+    action: AgentInstallationAction,
+  ): Promise<AgentClientInstallationView> => {
+    const client = agentGatewayRef.current;
+    if (!client || busy) throw new Error("The local Agent Gateway is unavailable.");
+    const result = await client.manageAgentClientInstallation(installationClient, action);
+    setAgentInstallations((current) => current ? Object.freeze({
+      version: 1 as const,
+      clients: Object.freeze(current.clients.map((entry) =>
+        entry.client === installationClient ? result : entry)),
+    }) : current);
+    setAgentInstallationsUnavailable(undefined);
+    return result;
+  }, [busy]);
 
   const status = latestStatus(entries);
   const agentIsConnected = agentStatus === "connected" || agentStatus === "applying";
@@ -5373,6 +5426,11 @@ export default function App() {
     onDisableAgentControl: agentBrowserOccupied
       ? () => runAgentAction(leaveOccupiedAgentConnection)
       : () => runAgentAction(disableAgentConnection),
+    agentInstallations,
+    agentInstallationsLoading,
+    agentInstallationsUnavailable,
+    onRefreshAgentInstallations: refreshAgentInstallations,
+    onManageAgentInstallation: manageAgentInstallation,
   } satisfies Omit<AgentConnectionPageProps, "onClose">;
 
   return <Suspense fallback={<main className="agent-connection-gate" aria-label="Loading Workspace">Loading Workspace…</main>}>

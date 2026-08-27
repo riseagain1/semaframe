@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { closeAgentGatewayStack } from "../../../server/agent/shutdown";
+import {
+  DEFAULT_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS,
+  MINIMUM_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS,
+  closeAgentGatewayStack,
+  resolveAgentGatewayShutdownTimeout,
+} from "../../../server/agent/shutdown";
 
 describe("Agent Gateway process shutdown", () => {
   it("stops admission first and waits for slow cleanup before resolving", async () => {
@@ -57,5 +62,17 @@ describe("Agent Gateway process shutdown", () => {
       handler: { close: () => never },
       timeoutMs: 5,
     })).rejects.toThrow("cleanup deadline");
+  });
+
+  it("reserves enough shutdown time for the longest verified installer rollback", () => {
+    expect(resolveAgentGatewayShutdownTimeout(undefined))
+      .toBe(DEFAULT_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS);
+    expect(resolveAgentGatewayShutdownTimeout(String(MINIMUM_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS)))
+      .toBe(MINIMUM_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS);
+    expect(() => resolveAgentGatewayShutdownTimeout(String(
+      MINIMUM_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS - 1,
+    ))).toThrow("at least 95000");
+    expect(() => resolveAgentGatewayShutdownTimeout("not-a-timeout"))
+      .toThrow("at least 95000");
   });
 });

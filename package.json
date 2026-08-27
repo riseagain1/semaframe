@@ -173,6 +173,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "@monogrid/gainmap-js": "^3.1.0",
@@ -196,7 +197,6 @@
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@gltf-transform/core": "^4.4.2",
-    "@modelcontextprotocol/client": "^2.0.0",
     "@remotion/cli": "^4.0.512",
     "@remotion/media": "^4.0.512",
     "@remotion/transitions": "^4.0.512",

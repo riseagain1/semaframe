@@ -102,6 +102,7 @@ function requestBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknow
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -131,6 +132,130 @@ describe("AgentGatewayClient", () => {
     expect(receiverAwareFetch).toHaveBeenCalledOnce();
   });
 
+  it("inspects and manages the two closed Agent client installation targets", async () => {
+    const installed = {
+      client: "codex",
+      displayName: "Codex",
+      state: "installed",
+      changed: false,
+      restartRequired: false,
+      detail: "The stable SemaFrame launcher is installed for this client.",
+    } as const;
+    const missing = {
+      client: "claude",
+      displayName: "Claude Code",
+      state: "not_installed",
+      changed: false,
+      restartRequired: false,
+      detail: "SemaFrame is not installed for this client yet.",
+    } as const;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })))
+      .mockResolvedValueOnce(jsonResponse({ version: 1, clients: [installed, missing] }))
+      .mockResolvedValueOnce(jsonResponse({
+        ...missing,
+        state: "installed",
+        changed: true,
+        restartRequired: true,
+        detail: "The stable SemaFrame launcher is installed for this client.",
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-installs",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.getAgentClientInstallations()).resolves.toEqual({
+      version: 1,
+      clients: [installed, missing],
+    });
+    await expect(client.manageAgentClientInstallation("claude", "install")).resolves.toMatchObject({
+      client: "claude",
+      state: "installed",
+      changed: true,
+      restartRequired: true,
+    });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/browser/installations/status",
+      "/api/agent/browser/installations/install",
+    ]);
+    expect(requestBody(fetchMock, 1)).toEqual({});
+    expect(requestBody(fetchMock, 2)).toEqual({ client: "claude" });
+    expect((fetchMock.mock.calls[2]?.[1] as RequestInit).headers).toMatchObject({
+      "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
+    });
+  });
+
+  it("rejects forged installation targets and malformed health responses", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })))
+      .mockResolvedValueOnce(jsonResponse({
+        version: 1,
+        clients: [{
+          client: "codex",
+          displayName: "Codex",
+          state: "installed",
+          changed: false,
+          restartRequired: false,
+          detail: "/private/path",
+        }],
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-install-invalid",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.getAgentClientInstallations()).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(client.manageAgentClientInstallation("vscode" as "codex", "install"))
+      .rejects.toMatchObject({ code: "invalid_configuration" });
+    await expect(client.manageAgentClientInstallation("codex", "exec" as "install"))
+      .rejects.toMatchObject({ code: "invalid_configuration" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes an expired CSRF token once before an installation mutation", async () => {
+    const installed = {
+      client: "codex",
+      displayName: "Codex",
+      state: "installed",
+      changed: true,
+      restartRequired: true,
+      detail: "The stable SemaFrame launcher is installed for this client.",
+    } as const;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })))
+      .mockResolvedValueOnce(jsonResponse({
+        error: { code: "csrf_invalid", message: "Expired." },
+      }, 403))
+      .mockResolvedValueOnce(jsonResponse(config({
+        gatewayInstanceId: "gateway-instance-restarted",
+        csrfToken: "csrf-after-restart",
+        enabled: false,
+      })))
+      .mockResolvedValueOnce(jsonResponse(installed));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-install-recovery",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.manageAgentClientInstallation("codex", "update")).resolves.toEqual(installed);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/browser/installations/update",
+      "/api/agent/config",
+      "/api/agent/browser/installations/update",
+    ]);
+    expect((fetchMock.mock.calls[3]?.[1] as RequestInit).headers).toMatchObject({
+      "X-SemaFrame-Agent-CSRF": "csrf-after-restart",
+    });
+  });
+
   it("bounds UI requests that do not carry a caller cancellation signal", async () => {
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
@@ -148,6 +273,178 @@ describe("AgentGatewayClient", () => {
       code: "request_failed",
       message: "The local agent gateway request timed out.",
     });
+  });
+
+  it("keeps installation requests alive past the ordinary UI budget but still bounds them", async () => {
+    vi.useFakeTimers();
+    let installationSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (fetchMock.mock.calls.length === 1) {
+        return Promise.resolve(jsonResponse(config({ enabled: false })));
+      }
+      installationSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        installationSignal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-install-timeout",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    const pending = client.manageAgentClientInstallation("codex", "install");
+    const timedOut = expect(pending).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+    await vi.advanceTimersByTimeAsync(12_001);
+    expect(installationSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(82_999);
+    await timedOut;
+    expect(installationSignal?.aborted).toBe(true);
+  });
+
+  it("retains an internal timeout when the caller supplies a cancellation signal", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-signal-timeout",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.fetchConfig(new AbortController().signal)).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+  });
+
+  it("keeps the request deadline active through a delayed successful JSON body", async () => {
+    vi.useFakeTimers();
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) { bodyController = controller; },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-success",
+      requestTimeoutMs: 50,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    let settled = false;
+    const pending = client.fetchConfig().finally(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(settled).toBe(false);
+    expect(requestSignal?.aborted).toBe(false);
+    bodyController.enqueue(new TextEncoder().encode(JSON.stringify(config({ enabled: false }))));
+    bodyController.close();
+    await expect(pending).resolves.toMatchObject({ enabled: false });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
+  it("times out a successful response whose JSON body outlives the request deadline", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-success-timeout",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    const pending = client.fetchConfig();
+    const timedOut = expect(pending).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+    await vi.advanceTimersByTimeAsync(5);
+    await timedOut;
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("bounds a delayed non-success response body before parsing its gateway error", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({}), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-error",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    const pending = client.fetchConfig();
+    const timedOut = expect(pending).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+    await vi.advanceTimersByTimeAsync(5);
+    await timedOut;
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("propagates caller cancellation while a successful response body is still pending", async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-caller-abort",
+      requestTimeoutMs: 5_000,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled delayed body", "AbortError");
+
+    const pending = client.fetchConfig(controller.signal);
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(requestSignal?.reason).toBe(reason);
   });
 
   it("fetches an explicitly approved host feed with the configured CSRF token without enabling Agent control", async () => {
@@ -334,13 +631,13 @@ describe("AgentGatewayClient", () => {
   });
 
   it("rejects an asset stream whose digest-bearing headers drift from its inspected descriptor", async () => {
+    const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2, 3, 4]));
-        controller.close();
       },
+      cancel,
     });
-    const cancel = vi.spyOn(stream, "cancel");
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse(config({ enabled: true })))
       .mockResolvedValueOnce(jsonResponse(assetCandidate()))

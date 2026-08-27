@@ -173,6 +173,30 @@ export type AgentBridgeProposalRecord = Readonly<{
   proposal: SemaFrameBridgeChangeProposal;
 }>;
 
+export type AgentInstallationClient = "codex" | "claude";
+export type AgentInstallationAction = "install" | "update" | "remove";
+export type AgentInstallationState =
+  | "installed"
+  | "not_installed"
+  | "outdated"
+  | "conflict"
+  | "client_unavailable"
+  | "error";
+
+export type AgentClientInstallationView = Readonly<{
+  client: AgentInstallationClient;
+  displayName: "Codex" | "Claude Code";
+  state: AgentInstallationState;
+  changed: boolean;
+  restartRequired: boolean;
+  detail: string;
+}>;
+
+export type AgentClientInstallationSnapshot = Readonly<{
+  version: 1;
+  clients: readonly AgentClientInstallationView[];
+}>;
+
 export type AgentGatewayCommandContext = Readonly<{ signal: AbortSignal }>;
 
 export type AgentGatewayCommandHandler = (
@@ -206,6 +230,10 @@ export type AgentGatewayEndpoints = Readonly<{
   unregister: string;
   poll: string;
   result: string;
+  installationStatus: string;
+  installationInstall: string;
+  installationUpdate: string;
+  installationRemove: string;
   feedApprovalMint: string;
   feedFetch: string;
   assetCandidateInspect: string;
@@ -268,6 +296,10 @@ const DEFAULT_ENDPOINTS: AgentGatewayEndpoints = {
   unregister: "/api/agent/browser/unregister",
   poll: "/api/agent/browser/poll",
   result: "/api/agent/browser/result",
+  installationStatus: "/api/agent/browser/installations/status",
+  installationInstall: "/api/agent/browser/installations/install",
+  installationUpdate: "/api/agent/browser/installations/update",
+  installationRemove: "/api/agent/browser/installations/remove",
   feedApprovalMint: "/api/agent/feeds/approval/mint",
   feedFetch: "/api/agent/feeds/fetch",
   assetCandidateInspect: "/api/agent/assets/candidates/inspect",
@@ -289,9 +321,61 @@ const CLIENT_INSTANCE_ID_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/;
 const BRIDGE_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CSRF_HEADER = "X-SemaFrame-Agent-CSRF";
 const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
+// A transactional Claude update can perform seven bounded official CLI
+// operations when it must verify and roll back a bad replacement. Each command
+// has a 10-second bound plus a 1-second forced-kill grace, so keep the browser
+// alive through the complete rollback while retaining a finite request bound.
+const AGENT_INSTALLATION_REQUEST_TIMEOUT_MS = 95_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const AGENT_INSTALLATION_DETAILS = Object.freeze({
+  installed: "The stable SemaFrame launcher is installed for this client.",
+  not_installed: "SemaFrame is not installed for this client yet.",
+  outdated: "This client has an older SemaFrame launcher configuration.",
+  conflict: "A different SemaFrame configuration already uses the managed client entry.",
+  client_unavailable: "This client is not available on this computer.",
+  error: "The client installation could not be inspected safely.",
+} satisfies Record<AgentInstallationState, string>);
+
+function parseAgentClientInstallationView(value: unknown): AgentClientInstallationView {
+  if (!isRecord(value) || !exactKeys(value, [
+    "client", "displayName", "state", "changed", "restartRequired", "detail",
+  ])) {
+    throw new AgentGatewayError("invalid_response", "The gateway returned invalid Agent client installation data.");
+  }
+  const client = value.client;
+  const state = value.state;
+  const displayName = client === "codex" ? "Codex" : "Claude Code";
+  if ((client !== "codex" && client !== "claude")
+    || value.displayName !== displayName
+    || typeof state !== "string" || !(state in AGENT_INSTALLATION_DETAILS)
+    || typeof value.changed !== "boolean" || typeof value.restartRequired !== "boolean"
+    || value.detail !== AGENT_INSTALLATION_DETAILS[state as AgentInstallationState]) {
+    throw new AgentGatewayError("invalid_response", "The gateway returned invalid Agent client installation data.");
+  }
+  return Object.freeze({
+    client,
+    displayName,
+    state: state as AgentInstallationState,
+    changed: value.changed,
+    restartRequired: value.restartRequired,
+    detail: value.detail,
+  });
+}
+
+function parseAgentClientInstallationSnapshot(value: unknown): AgentClientInstallationSnapshot {
+  if (!isRecord(value) || !exactKeys(value, ["version", "clients"])
+    || value.version !== 1 || !Array.isArray(value.clients) || value.clients.length !== 2) {
+    throw new AgentGatewayError("invalid_response", "The gateway returned invalid Agent client installation health.");
+  }
+  const clients = value.clients.map(parseAgentClientInstallationView);
+  if (clients[0]?.client !== "codex" || clients[1]?.client !== "claude") {
+    throw new AgentGatewayError("invalid_response", "The gateway returned invalid Agent client installation health.");
+  }
+  return Object.freeze({ version: 1, clients: Object.freeze(clients) });
 }
 
 function parseVoiceRelayHostActionGrant(value: unknown): VoiceRelayHostActionGrant {
@@ -694,6 +778,73 @@ function isAbortError(error: unknown): boolean {
     (isRecord(error) && error.name === "AbortError");
 }
 
+function abortSignalReason(signal?: AbortSignal | null): Error | DOMException {
+  const reason = signal?.reason;
+  return reason instanceof Error || isAbortError(reason)
+    ? reason as Error | DOMException
+    : new DOMException("Aborted", "AbortError");
+}
+
+type ResponseDeadline = Readonly<{
+  signal: AbortSignal;
+  release(): void;
+}>;
+
+const responseDeadlines = new WeakMap<Response, ResponseDeadline>();
+
+function releaseResponseDeadline(response: Response): void {
+  const deadline = responseDeadlines.get(response);
+  if (!deadline) return;
+  responseDeadlines.delete(response);
+  deadline.release();
+}
+
+async function runResponseDeadlineOperation<Value>(
+  response: Response,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  const deadline = responseDeadlines.get(response);
+  if (!deadline) return operation();
+  let abortOperation: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortOperation = () => reject(abortSignalReason(deadline.signal));
+    deadline.signal.addEventListener("abort", abortOperation, { once: true });
+    if (deadline.signal.aborted) abortOperation();
+  });
+  try {
+    return await Promise.race([operation(), aborted]);
+  } finally {
+    deadline.signal.removeEventListener("abort", abortOperation);
+  }
+}
+
+async function readResponseJson(response: Response): Promise<unknown> {
+  try {
+    return await runResponseDeadlineOperation(response, async () => await response.json() as unknown);
+  } finally {
+    releaseResponseDeadline(response);
+  }
+}
+
+async function discardResponseBody(response: Response): Promise<void> {
+  try {
+    await runResponseDeadlineOperation(response, async () => { await response.body?.cancel(); });
+  } finally {
+    releaseResponseDeadline(response);
+  }
+}
+
+function rethrowRequestInterruption(
+  cause: unknown,
+  callerSignal?: AbortSignal | null,
+): void {
+  if (cause instanceof AgentGatewayError) throw cause;
+  if (callerSignal?.aborted) {
+    throw abortSignalReason(callerSignal);
+  }
+  if (isAbortError(cause)) throw cause;
+}
+
 function createClientInstanceId(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
@@ -906,6 +1057,43 @@ export class AgentGatewayClient {
     });
   }
 
+  async getAgentClientInstallations(signal?: AbortSignal): Promise<AgentClientInstallationSnapshot> {
+    await this.ensureConfig(signal);
+    return parseAgentClientInstallationSnapshot(await this.postWithCsrfRecovery(
+      this.endpoints.installationStatus,
+      {},
+      signal,
+      AGENT_INSTALLATION_REQUEST_TIMEOUT_MS,
+    ));
+  }
+
+  async manageAgentClientInstallation(
+    client: AgentInstallationClient,
+    action: AgentInstallationAction,
+    signal?: AbortSignal,
+  ): Promise<AgentClientInstallationView> {
+    if (client !== "codex" && client !== "claude") {
+      throw new AgentGatewayError("invalid_configuration", "The Agent client must be Codex or Claude Code.");
+    }
+    const endpoint = action === "install"
+      ? this.endpoints.installationInstall
+      : action === "update"
+        ? this.endpoints.installationUpdate
+        : action === "remove"
+          ? this.endpoints.installationRemove
+          : undefined;
+    if (!endpoint) {
+      throw new AgentGatewayError("invalid_configuration", "The Agent client installation action is invalid.");
+    }
+    await this.ensureConfig(signal);
+    return parseAgentClientInstallationView(await this.postWithCsrfRecovery(
+      endpoint,
+      { client },
+      signal,
+      AGENT_INSTALLATION_REQUEST_TIMEOUT_MS,
+    ));
+  }
+
   async enable(signal?: AbortSignal): Promise<AgentGatewayConfig> {
     const config = await this.ensureConfig(signal);
     if (!config.enabled) {
@@ -1057,9 +1245,9 @@ export class AgentGatewayClient {
       signal: options.signal,
     }, 2 * 60_000);
     try {
-      return parseBridgeSessionAccess(await response.json() as unknown);
+      return parseBridgeSessionAccess(await readResponseJson(response));
     } catch (cause) {
-      if (cause instanceof AgentGatewayError) throw cause;
+      rethrowRequestInterruption(cause, options.signal);
       throw new AgentGatewayError("invalid_response", "The gateway returned invalid Bridge session JSON.", { cause });
     }
   }
@@ -1075,12 +1263,13 @@ export class AgentGatewayClient {
       throw new AgentGatewayError("invalid_configuration", "The agent gateway CSRF token is unavailable.");
     }
     const endpoint = `${this.endpoints.bridgeSessions}/${bridgeSessionId(sessionId)}/publish`;
-    await this.fetchResponse(endpoint, {
+    const response = await this.fetchResponse(endpoint, {
       method: "POST",
       headers: { [CSRF_HEADER]: this.csrfToken },
       body: bridgePublicationForm(exchange, sequence),
       signal,
     }, 2 * 60_000);
+    await discardResponseBody(response);
   }
 
   async readBridgeProposals(
@@ -1219,9 +1408,12 @@ export class AgentGatewayClient {
       response.headers.get("x-semaframe-asset-digest") !== descriptor.sha256 ||
       byteLength !== descriptor.byteLength
     ) {
-      await response.body?.cancel().catch(() => undefined);
+      await discardResponseBody(response).catch(() => undefined);
       throw new AgentGatewayError("invalid_response", "The asset stream headers do not match its inspected descriptor.");
     }
+    // Ownership transfers to the returned stream. Its wrapper retains the
+    // request deadline until the caller consumes or cancels the full body.
+    releaseResponseDeadline(response);
     return Object.freeze({ descriptor, body: response.body });
   }
 
@@ -1312,8 +1504,9 @@ export class AgentGatewayClient {
     }, 10 * 60_000);
     let value: unknown;
     try {
-      value = await response.json() as unknown;
+      value = await readResponseJson(response);
     } catch (cause) {
+      rethrowRequestInterruption(cause, signal);
       throw new AgentGatewayError("invalid_response", "The photo upload returned invalid JSON.", { cause });
     }
     return parsePhotoReconstructionJob(value);
@@ -1633,7 +1826,12 @@ export class AgentGatewayClient {
     }
   }
 
-  private async postJson(endpoint: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
+  private async postJson(
+    endpoint: string,
+    body: unknown,
+    signal?: AbortSignal,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<unknown> {
     if (!this.csrfToken) {
       throw new AgentGatewayError("invalid_configuration", "The agent gateway CSRF token is unavailable.");
     }
@@ -1645,7 +1843,24 @@ export class AgentGatewayClient {
       },
       body: JSON.stringify(body),
       signal,
-    });
+    }, timeoutMs);
+  }
+
+  private async postWithCsrfRecovery(
+    endpoint: string,
+    body: unknown,
+    signal?: AbortSignal,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<unknown> {
+    try {
+      return await this.postJson(endpoint, body, signal, timeoutMs);
+    } catch (error) {
+      if (!(error instanceof AgentGatewayError) || error.gatewayCode !== "csrf_invalid") throw error;
+    }
+    // A CSRF rejection happens before the host action is dispatched, so this
+    // one bounded retry cannot duplicate an installation mutation.
+    await this.fetchConfig(signal);
+    return this.postJson(endpoint, body, signal, timeoutMs);
   }
 
   private async postConfigMutationWithRestartRecovery(
@@ -1684,12 +1899,20 @@ export class AgentGatewayClient {
     return this.postJson(endpoint, body, signal);
   }
 
-  private async fetchJson(endpoint: string, init: RequestInit): Promise<unknown> {
-    const response = await this.fetchResponse(endpoint, init);
-    if (response.status === 204) return undefined;
+  private async fetchJson(
+    endpoint: string,
+    init: RequestInit,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<unknown> {
+    const response = await this.fetchResponse(endpoint, init, timeoutMs);
+    if (response.status === 204) {
+      releaseResponseDeadline(response);
+      return undefined;
+    }
     try {
-      return await response.json() as unknown;
+      return await readResponseJson(response);
     } catch (cause) {
+      rethrowRequestInterruption(cause, init.signal);
       throw new AgentGatewayError(
         "invalid_response",
         "The local agent gateway returned invalid JSON.",
@@ -1705,48 +1928,128 @@ export class AgentGatewayClient {
   ): Promise<Response> {
     let response: Response;
     const callerSignal = init.signal ?? undefined;
-    const timeoutController = callerSignal ? undefined : new AbortController();
-    const timeout = timeoutController
-      ? globalThis.setTimeout(() => timeoutController.abort(), timeoutMs)
-      : undefined;
+    const requestController = new AbortController();
+    let cleanedUp = false;
+    // One hold belongs to the Response consumer. Streaming bodies add a
+    // second hold so ownership can be transferred to an escaping stream while
+    // JSON consumers keep the deadline through parsing, after stream EOF.
+    let lifetimeHolds = 1;
+    const timeoutError = () => new AgentGatewayError(
+      "request_failed",
+      "The local agent gateway request timed out.",
+    );
+    const abortReason = () => abortSignalReason(requestController.signal);
+    const abortFromCaller = () => requestController.abort(abortSignalReason(callerSignal));
+    if (callerSignal?.aborted) abortFromCaller();
+    else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = globalThis.setTimeout(() => {
+      requestController.abort(timeoutError());
+    }, timeoutMs);
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      globalThis.clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
+    };
+    const releaseLifetimeHold = () => {
+      if (lifetimeHolds <= 0) return;
+      lifetimeHolds -= 1;
+      if (lifetimeHolds === 0) cleanup();
+    };
     try {
       response = await this.request(endpoint, {
         ...init,
-        signal: callerSignal ?? timeoutController?.signal,
+        signal: requestController.signal,
         cache: "no-store",
         credentials: "same-origin",
         redirect: "error",
         referrerPolicy: "same-origin",
       });
     } catch (cause) {
-      if (timeoutController?.signal.aborted) {
-        throw new AgentGatewayError(
-          "request_failed",
-          "The local agent gateway request timed out.",
-          { cause },
-        );
-      }
+      cleanup();
+      if (requestController.signal.aborted) throw abortReason();
       if (isAbortError(cause)) throw cause;
       throw new AgentGatewayError(
         "request_failed",
         "The local agent gateway request failed.",
         { cause },
       );
-    } finally {
-      if (timeout !== undefined) globalThis.clearTimeout(timeout);
     }
+
+    if (response.body) {
+      lifetimeHolds += 1;
+      const source = response.body.getReader();
+      let bodyFinished = false;
+      let abortBody = () => undefined;
+      const finishBody = () => {
+        if (bodyFinished) return false;
+        bodyFinished = true;
+        requestController.signal.removeEventListener("abort", abortBody);
+        releaseLifetimeHold();
+        return true;
+      };
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          abortBody = () => {
+            if (!finishBody()) return;
+            const reason = abortReason();
+            void source.cancel(reason).catch(() => undefined);
+            controller.error(reason);
+          };
+          requestController.signal.addEventListener("abort", abortBody, { once: true });
+          if (requestController.signal.aborted) abortBody();
+        },
+        async pull(controller) {
+          if (bodyFinished) return;
+          try {
+            const chunk = await source.read();
+            if (bodyFinished) return;
+            if (chunk.done) {
+              finishBody();
+              source.releaseLock();
+              controller.close();
+              return;
+            }
+            controller.enqueue(chunk.value);
+          } catch (cause) {
+            if (!finishBody()) return;
+            controller.error(requestController.signal.aborted ? abortReason() : cause);
+          }
+        },
+        cancel(reason) {
+          if (!finishBody()) return;
+          void source.cancel(reason).catch(() => undefined);
+        },
+      });
+      response = new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
+    responseDeadlines.set(response, {
+      signal: requestController.signal,
+      release: releaseLifetimeHold,
+    });
+
     if (!response.ok) {
       let gatewayCode: string | undefined;
       try {
-        const payload = await response.clone().json() as unknown;
+        const payload = await runResponseDeadlineOperation(
+          response,
+          async () => await response.clone().json() as unknown,
+        );
         if (
           isRecord(payload) && isRecord(payload.error) &&
           typeof payload.error.code === "string" && /^[a-z][a-z0-9_]{0,99}$/u.test(payload.error.code)
         ) {
           gatewayCode = payload.error.code;
         }
-      } catch {
+      } catch (cause) {
+        if (requestController.signal.aborted) throw abortReason();
         // Error response bodies are optional; status remains authoritative.
+      } finally {
+        await discardResponseBody(response).catch(() => undefined);
       }
       throw new AgentGatewayError(
         "request_failed",

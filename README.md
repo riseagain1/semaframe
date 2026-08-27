@@ -367,7 +367,28 @@ npm run build:voice-relay
 
 ## First Agent connection
 
-Any Streamable HTTP MCP-capable client can connect:
+Codex and Claude Code can be connected once from the **Install once** section on
+the Agent connection screen. The equivalent source-distributed CLI commands are:
+
+```bash
+semaframe agent install --client codex
+semaframe agent install --client claude
+semaframe agent status --client codex
+semaframe agent update --client codex
+semaframe agent remove --client codex
+```
+
+SemaFrame uses each client's official MCP CLI; it does not edit client config
+files directly or run a browser-supplied command. The installed stdio launcher
+stores only a fixed loopback Gateway origin—not an offer, approval token, or
+bearer. Restart the Agent client once after an install, update, or removal.
+After that, the same launcher process discovers fresh offers across Gateway
+restarts, requires a new human approval for the new Gateway lifetime, and
+refreshes added, changed, or removed MCP tools without a config rewrite or
+launcher restart. It never automatically replays a failed tool call whose
+mutation outcome may be ambiguous.
+
+Any other Streamable HTTP MCP-capable client can still use manual pairing:
 
 1. Start SemaFrame with `npm run dev`.
 2. Enable Agent control and copy the short-lived connection URL.
@@ -377,7 +398,7 @@ Any Streamable HTTP MCP-capable client can connect:
 6. Approve the request in the authoritative browser.
 7. The Agent inspects and edits the same open project through revision-bound transactions.
 
-The connection URL contains a random offer identifier, not authority. The first instruction request creates a separate approval claim. Approval, session, and transaction capabilities are never placed in the URL or project file.
+The connection URL contains a random offer identifier, not authority. The first instruction request creates a separate approval claim. Approval, session, and transaction capabilities are never placed in the URL or project file. Stable local launchers discover only from the exact configured loopback origin; discovery cannot redirect a launcher to another local port or remote host.
 
 Incomplete expired or failed offers can be replaced with **Create fresh URL**. **Revoke pairing** invalidates the current offer and live sessions. If the authoritative browser disappears, the engine becomes unavailable rather than creating a second hidden Workspace.
 
@@ -733,7 +754,7 @@ For a remote headset, retain the returned `lifecycle_sequence` and supply it as 
 
 Voice, realtime, and multimodal clients use this same contract. Partial model output stays in client-side preview state; only final intent becomes a Workspace transaction. SemaFrame owns validation, rendering, history, permissions, and persistence. It does not bundle an AI model or cloud speech provider; voice-capable Agents use their own computer-microphone path, while optional Voice Relay uses browser speech support and the local helper described above.
 
-For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. Photo-reconstruction REST calls additionally require the private proof for an active browser-approved `asset:reconstruct` claim; a pairing bearer by itself is insufficient. The generated stdio setup loads the TypeScript bridge in the configured Node process—without an npm or `tsx` CLI wrapper that could orphan the bridge when an MCP host terminates it—and connects to the exact browser-approved Streamable HTTP MCP offer. Signal shutdown and stdin EOF both abort an in-flight upstream request. It is not a second REST authority path, so its five reconstruction tools use the same approved claim and non-default scope as a direct HTTP client. The local setup UI keeps these concerns separate: the stdio config contains only `SEMAFRAME_AGENT_MCP_URL`, while a different explicit copy action reveals the credentialed REST config.
+For non-MCP clients, OpenAPI 3.1 is published at `http://127.0.0.1:8788/openapi.json` with bearer-authenticated `/v1/workspace/*` routes. Photo-reconstruction REST calls additionally require the private proof for an active browser-approved `asset:reconstruct` claim; a pairing bearer by itself is insufficient. The generated stdio setup loads the TypeScript bridge in the configured Node process—without an npm or `tsx` CLI wrapper that could orphan the bridge when an MCP host terminates it—and forwards every call through the browser-approved Streamable HTTP MCP authority. Signal shutdown and stdin EOF both abort an in-flight upstream request. Stable installations contain only `SEMAFRAME_AGENT_GATEWAY_URL` plus a display name and discover a fresh non-authorizing offer at runtime; `SEMAFRAME_AGENT_MCP_URL` remains a legacy one-off compatibility input. The stdio bridge is not a second REST authority path, so reconstruction tools use the same approved claim and non-default scope as a direct HTTP client. The local setup UI keeps this separate from the explicit credentialed REST-config copy action.
 
 ## Protocol and persistence
 

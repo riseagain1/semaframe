@@ -49,6 +49,13 @@ import {
   createBridgeBrowserHttpHandler,
   createBridgeHttpHandler,
 } from "../bridge";
+import {
+  AgentClientInstallationService,
+  AgentClientInstallationServiceError,
+} from "./AgentClientInstallationService";
+import {
+  createAgentBootstrapDiscoveryHandler,
+} from "./AgentBootstrapDiscovery";
 
 const DEFAULT_BODY_LIMIT_BYTES = 512 * 1024;
 const AGENT_PHOTO_RECONSTRUCTION_SCOPE = "asset:reconstruct" as const;
@@ -78,12 +85,15 @@ export type AgentGatewayHttpOptions = Readonly<{
   voiceRelayHostActions?: VoiceRelayHostActionStore;
   /** Injectable volatile native-tool exchange sessions. */
   bridgeSessions?: BridgeSessionService;
+  /** Shell-free, closed-vocabulary manager for supported Agent clients. */
+  clientInstallations?: AgentClientInstallationService;
 }>;
 
 export type NodeRequestLike = AsyncIterable<Uint8Array | string> & {
   method?: string;
   url?: string;
   headers: Record<string, string | string[] | undefined>;
+  socket?: Readonly<{ remoteAddress?: string }>;
   on?(event: "aborted", listener: () => void): void;
   off?(event: "aborted", listener: () => void): void;
 };
@@ -845,6 +855,7 @@ export function createAgentGatewayHttpHandler(
     publicBaseUrl: options.publicBaseUrl,
   });
   const bridgeOwnerId = `gateway:${gateway.getConfig().gatewayInstanceId}`;
+  const clientInstallations = options.clientInstallations;
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -989,7 +1000,36 @@ export function createAgentGatewayHttpHandler(
       try {
         const value = await readJson(request, bodyLimitBytes);
         let result: unknown;
-        if (pathname === "/api/agent/host-actions/voice-relay/mint") {
+        if (pathname === "/api/agent/browser/installations/status") {
+          emptyInput(value);
+          if (!clientInstallations) {
+            return errorResponse(
+              503,
+              "agent_installations_unavailable",
+              "Agent client installation management is unavailable in this host.",
+              undefined,
+              cors,
+            );
+          }
+          result = await clientInstallations.status();
+        } else if (
+          pathname === "/api/agent/browser/installations/install" ||
+          pathname === "/api/agent/browser/installations/update" ||
+          pathname === "/api/agent/browser/installations/remove"
+        ) {
+          const body = exactObject(value, ["client"]);
+          if (!clientInstallations) {
+            return errorResponse(
+              503,
+              "agent_installations_unavailable",
+              "Agent client installation management is unavailable in this host.",
+              undefined,
+              cors,
+            );
+          }
+          const action = pathname.slice(pathname.lastIndexOf("/") + 1);
+          result = await clientInstallations.run(body.client, action);
+        } else if (pathname === "/api/agent/host-actions/voice-relay/mint") {
           const body = exactObject(value, ["action"]);
           result = voiceRelayHostActions.mint(voiceRelayDesktopHostAction(body.action));
         } else if (pathname === "/api/agent/reconstructions/capability") {
@@ -1158,6 +1198,16 @@ export function createAgentGatewayHttpHandler(
         if (error instanceof FeedFetchError) return errorResponse(error.status, error.code, error.message, error.details, cors);
         if (error instanceof PhotoReconstructionServiceError) return photoReconstructionErrorResponse(error, cors);
         if (error instanceof AgentAssetIngressError) return assetErrorResponse(error, cors);
+        if (error instanceof AgentClientInstallationServiceError) {
+          const status = error.code === "invalid_client" || error.code === "invalid_action"
+            ? 400
+            : error.code === "operation_in_progress"
+              ? 409
+            : error.code === "service_closed"
+              ? 503
+              : 500;
+          return errorResponse(status, error.code, error.message, undefined, cors);
+        }
         if (error instanceof AgentGatewayError) return errorResponse(statusFor(error), error.code, error.message, error.details, cors);
         return errorResponse(500, "gateway_error", "The local agent gateway could not complete the browser request.", undefined, cors);
       }
@@ -1376,6 +1426,9 @@ export function createAgentGatewayHttpHandler(
       feedApprovals.clear();
       voiceRelayHostActions.clear();
       const failures: unknown[] = [];
+      // Close installer admission immediately, then let the already-accepted
+      // transaction finish before this handler reports shutdown complete.
+      const clientInstallationsClosing = clientInstallations?.close();
       // Reconstruction teardown may still need to revoke staged candidates,
       // so keep AssetIngress alive until it has settled. A cleanup failure must
       // not skip the remaining MCP/ingress shutdown work.
@@ -1395,6 +1448,7 @@ export function createAgentGatewayHttpHandler(
         mcp.close(),
         assetIngress.close(),
         voiceRelay.close(),
+        ...(clientInstallationsClosing ? [clientInstallationsClosing] : []),
       ]);
       for (const result of trailing) {
         if (result.status === "rejected") failures.push(result.reason);
@@ -1482,6 +1536,10 @@ export function createNodeAgentGatewayHttpHandler(
     assetIngress,
     photoReconstruction,
   });
+  const bootstrapDiscovery = createAgentBootstrapDiscoveryHandler(
+    gateway,
+    gateway.bootstrapBaseUrl,
+  );
   const bodyLimitBytes = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES;
   const handle = async (request: NodeRequestLike, response: NodeResponseLike): Promise<void> => {
     const controller = new AbortController();
@@ -1494,6 +1552,17 @@ export function createNodeAgentGatewayHttpHandler(
     try {
       const method = request.method ?? "GET";
       const target = new URL(request.url ?? "/", `${options.publicBaseUrl}/`);
+      if (bootstrapDiscovery.matches(target.pathname)) {
+        const result = bootstrapDiscovery.fetch(new Request(target, {
+          method,
+          headers: nodeHeaders(request.headers),
+        }), request.socket?.remoteAddress);
+        if (response.destroyed || response.writableEnded) return;
+        response.statusCode = result.status;
+        result.headers.forEach((value, name) => response.setHeader(name, value));
+        response.end(method === "HEAD" ? undefined : await result.text());
+        return;
+      }
       let fetchRequest: Request;
       if (
         assetIngress.matchesUploadPath(target.pathname)

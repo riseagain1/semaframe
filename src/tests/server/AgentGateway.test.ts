@@ -20,6 +20,7 @@ function setup(options: {
   const gateway = new AgentGateway({
     publicBaseUrl: PUBLIC_URL,
     workspaceRoot: "/workspace/SemaFrame",
+    tsxLoaderPath: "/workspace/SemaFrame/node_modules/tsx/dist/loader.mjs",
     commandTimeoutMs: options.commandTimeoutMs ?? 1_000,
     pollTimeoutMs: 1_000,
     browserTtlMs: options.browserTtlMs ?? 5_000,
@@ -217,7 +218,14 @@ describe("Agent Gateway browser boundary", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(payload.restEndpoint).toBe(`${PUBLIC_URL}/v1`);
     const mcpConfig = JSON.parse(String(payload.mcpConfig)) as {
-      mcpServers: { semaframe: { command: string; args: string[]; cwd?: string } };
+      mcpServers: {
+        semaframe: {
+          command: string;
+          args: string[];
+          cwd?: string;
+          env: Record<string, string>;
+        };
+      };
     };
     expect(mcpConfig.mcpServers.semaframe.command).toBe(process.execPath);
     expect(mcpConfig.mcpServers.semaframe.args).toEqual([
@@ -226,7 +234,10 @@ describe("Agent Gateway browser boundary", () => {
       "/workspace/SemaFrame/scripts/agent-mcp.ts",
     ]);
     expect(mcpConfig.mcpServers.semaframe.cwd).toBeUndefined();
-    expect(String(payload.mcpConfig)).toContain(String(payload.connectionUrl));
+    expect(mcpConfig.mcpServers.semaframe.env).toEqual({
+      SEMAFRAME_AGENT_GATEWAY_URL: PUBLIC_URL,
+    });
+    expect(String(payload.mcpConfig)).not.toContain(String(payload.connectionUrl));
     expect(String(payload.mcpConfig)).not.toContain(String(payload.pairingBearer));
     expect(String(payload.restConfig)).toContain(String(payload.restEndpoint));
     expect(String(payload.restConfig)).toContain(String(payload.pairingBearer));

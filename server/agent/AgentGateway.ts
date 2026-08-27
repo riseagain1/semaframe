@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createRequire } from "node:module";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -15,6 +16,12 @@ import {
   isMutationCommand,
 } from "./contracts";
 import { normalizeAgentGatewayPublicBaseUrl } from "./AgentGatewayNetworkConfig";
+import {
+  DEFAULT_AGENT_GATEWAY_URL,
+  normalizeAgentGatewayUrl,
+} from "./AgentBootstrapDiscovery";
+
+const DEFAULT_TSX_LOADER_PATH = createRequire(import.meta.url).resolve("tsx");
 
 export type AgentGatewayErrorCode =
   | "agent_mode_disabled"
@@ -42,6 +49,10 @@ export class AgentGatewayError extends Error {
 
 export type AgentGatewayOptions = Readonly<{
   publicBaseUrl: string;
+  /** Fixed loopback origin used by installed stdio launchers for discovery. */
+  bootstrapBaseUrl?: string;
+  /** Resolved tsx loader entry; injectable for isolated host tests. */
+  tsxLoaderPath?: string;
   workspaceRoot: string;
   commandTimeoutMs?: number;
   pollTimeoutMs?: number;
@@ -247,7 +258,9 @@ function safeInstructionInput(name: AgentCommandName, input: unknown): unknown {
 
 export class AgentGateway {
   readonly #publicBaseUrl: string;
+  readonly #bootstrapBaseUrl: string;
   readonly #workspaceRoot: string;
+  readonly #tsxLoaderPath: string;
   readonly #commandTimeoutMs: number;
   readonly #pollTimeoutMs: number;
   readonly #browserTtlMs: number;
@@ -272,10 +285,26 @@ export class AgentGateway {
 
   constructor(options: AgentGatewayOptions) {
     this.#publicBaseUrl = normalizeAgentGatewayPublicBaseUrl(options.publicBaseUrl);
+    let inferredBootstrapBaseUrl = DEFAULT_AGENT_GATEWAY_URL as string;
+    if (!options.bootstrapBaseUrl) {
+      try {
+        inferredBootstrapBaseUrl = normalizeAgentGatewayUrl(this.#publicBaseUrl);
+      } catch {
+        // A reverse proxy may advertise remote HTTPS while the installed
+        // launcher must still discover through the fixed loopback listener.
+      }
+    }
+    this.#bootstrapBaseUrl = normalizeAgentGatewayUrl(
+      options.bootstrapBaseUrl ?? inferredBootstrapBaseUrl,
+    );
     if (!isAbsolute(options.workspaceRoot) || options.workspaceRoot.includes("\u0000")) {
       throw new Error("Agent gateway workspaceRoot must be an absolute filesystem path.");
     }
     this.#workspaceRoot = options.workspaceRoot;
+    this.#tsxLoaderPath = options.tsxLoaderPath ?? DEFAULT_TSX_LOADER_PATH;
+    if (!isAbsolute(this.#tsxLoaderPath) || this.#tsxLoaderPath.includes("\u0000")) {
+      throw new Error("Agent gateway tsxLoaderPath must be an absolute filesystem path.");
+    }
     this.#commandTimeoutMs = options.commandTimeoutMs ?? 45_000;
     this.#pollTimeoutMs = options.pollTimeoutMs ?? 25_000;
     this.#browserTtlMs = options.browserTtlMs ?? 65_000;
@@ -295,6 +324,10 @@ export class AgentGateway {
 
   get csrfToken(): string {
     return this.#csrfToken;
+  }
+
+  get bootstrapBaseUrl(): string {
+    return this.#bootstrapBaseUrl;
   }
 
   getConfig(): AgentGatewayConfig {
@@ -410,13 +443,14 @@ export class AgentGateway {
             command: process.execPath,
             args: [
               "--import",
-              pathToFileURL(join(this.#workspaceRoot, "node_modules", "tsx", "dist", "loader.mjs")).href,
+              pathToFileURL(this.#tsxLoaderPath).href,
               join(this.#workspaceRoot, "scripts", "agent-mcp.ts"),
             ],
             env: {
-              // The child receives only the non-authorizing offer URL. REST
-              // authority is exposed separately and never enters MCP env.
-              SEMAFRAME_AGENT_MCP_URL: offerView.connectionUrl,
+              // This fixed loopback origin survives offer rotation and gateway
+              // restarts. The child discovers a fresh non-authorizing offer;
+              // pairing/REST authority never enters MCP env.
+              SEMAFRAME_AGENT_GATEWAY_URL: this.#bootstrapBaseUrl,
             },
           },
         },
