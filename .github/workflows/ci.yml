@@ -30,10 +30,15 @@ jobs:
         run: npm ci
       - name: Type-check application
         run: npm run typecheck
+      - name: Lint application and tooling
+        run: npm run lint
       - name: Type-check demo source
         run: npm run demo:typecheck
       - name: Verify cross-platform XR launcher helpers
-        run: npm run test:xr:launcher
+        run: |
+          npm run test:xr:launcher
+          npm run test:cli
+          SEMAFRAME_PACKAGE_VERIFY_NPM_CACHE="$(npm config get cache)" npm run test:cli:package
       - name: Verify Reality Twin source contracts
         run: |
           npm run demo:test:audio
@@ -49,8 +54,48 @@ jobs:
           npm run test:cad:bundle
           npm run test:csg:bundle
           npm run test:reality:runtime
-      - name: Run test suite
-        run: npm test -- --run --maxWorkers=2 --reporter=dot
+      - name: Verify P2 ecosystem and adapter contracts
+        run: npm run test:p2:ecosystem
+      - name: Measure the full Workspace performance baseline
+        run: npm run benchmark:workspace -- --profile full --pretty > workspace-performance.log
+      - name: Preserve Workspace performance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-performance-${{ runner.os }}-node-22
+          path: workspace-performance.log
+          if-no-files-found: error
+      - name: Run test suite with core coverage
+        run: npm run test:coverage -- --maxWorkers=2 --reporter=dot
+
+  browser-smoke:
+    name: Chrome browser smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Resolve installed Chrome
+        shell: bash
+        run: |
+          for candidate in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              echo "BROWSER_EXECUTABLE=$(command -v "$candidate")" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "Chrome or Chromium is required for browser smoke tests." >&2
+          exit 1
+      - name: Run mounted Workspace browser smoke
+        run: npm run smoke:workspace
+      - name: Run Agent protocol browser smoke
+        run: npm run smoke:agent
 
   xr-windows-smoke:
     name: Windows XR smoke

@@ -243,15 +243,32 @@ describe("RealtimeAgentWorkspaceClient", () => {
       ok: false,
       error: { code: "instructions_required" },
     });
+    expect(await client.queryLayoutPlacement({
+      placement: {
+        space: "viewport",
+        anchor: "center",
+        offset: { x: 0, y: 0 },
+        size: { width: 320, height: 220 },
+      },
+    })).toMatchObject({ ok: false, error: { code: "instructions_required" } });
     configureConnect(transport);
     await client.connect();
     transport.handler = async (name, input) => ({ ok: true, data: { name, input } });
 
     await client.inspectComponent("CMP_TARGET_061");
     await client.readResourceSnapshot("RES_traffic_feed");
+    await client.queryLayoutPlacement({
+      component_id: "CMP_TARGET_061",
+      placement: {
+        space: "viewport",
+        anchor: "center",
+        offset: { x: 0, y: 0 },
+        size: { width: 320, height: 220 },
+      },
+    });
     await client.readEvents("cursor-4", 20);
     await client.undo(7);
-    expect(transport.calls.slice(-4)).toEqual([
+    expect(transport.calls.slice(-5)).toEqual([
       {
         name: "inspect_workspace_component",
         input: {
@@ -266,6 +283,22 @@ describe("RealtimeAgentWorkspaceClient", () => {
           session_token: INSTRUCTIONS.session_token,
           instruction_digest: INSTRUCTIONS.guide_digest,
           resource_id: "RES_traffic_feed",
+        },
+      },
+      {
+        name: "query_layout_placement",
+        input: {
+          session_token: INSTRUCTIONS.session_token,
+          instruction_digest: INSTRUCTIONS.guide_digest,
+          candidate: {
+            component_id: "CMP_TARGET_061",
+            placement: {
+              space: "viewport",
+              anchor: "center",
+              offset: { x: 0, y: 0 },
+              size: { width: 320, height: 220 },
+            },
+          },
         },
       },
       {

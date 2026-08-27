@@ -20,6 +20,7 @@ function setup(options: {
   const gateway = new AgentGateway({
     publicBaseUrl: PUBLIC_URL,
     workspaceRoot: "/workspace/SemaFrame",
+    tsxLoaderPath: "/workspace/SemaFrame/node_modules/tsx/dist/loader.mjs",
     commandTimeoutMs: options.commandTimeoutMs ?? 1_000,
     pollTimeoutMs: 1_000,
     browserTtlMs: options.browserTtlMs ?? 5_000,
@@ -148,7 +149,7 @@ describe("Agent Gateway browser boundary", () => {
       enabled: false,
       connected: false,
       engineConnected: false,
-      instructionVersion: "3.0",
+      instructionVersion: "3.2",
       csrfToken: expect.any(String),
     }));
     expect(JSON.stringify(payload)).not.toMatch(/pairing|bearer|mcpServers/u);
@@ -217,7 +218,14 @@ describe("Agent Gateway browser boundary", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(payload.restEndpoint).toBe(`${PUBLIC_URL}/v1`);
     const mcpConfig = JSON.parse(String(payload.mcpConfig)) as {
-      mcpServers: { semaframe: { command: string; args: string[]; cwd?: string } };
+      mcpServers: {
+        semaframe: {
+          command: string;
+          args: string[];
+          cwd?: string;
+          env: Record<string, string>;
+        };
+      };
     };
     expect(mcpConfig.mcpServers.semaframe.command).toBe(process.execPath);
     expect(mcpConfig.mcpServers.semaframe.args).toEqual([
@@ -226,7 +234,10 @@ describe("Agent Gateway browser boundary", () => {
       "/workspace/SemaFrame/scripts/agent-mcp.ts",
     ]);
     expect(mcpConfig.mcpServers.semaframe.cwd).toBeUndefined();
-    expect(String(payload.mcpConfig)).toContain(String(payload.connectionUrl));
+    expect(mcpConfig.mcpServers.semaframe.env).toEqual({
+      SEMAFRAME_AGENT_GATEWAY_URL: PUBLIC_URL,
+    });
+    expect(String(payload.mcpConfig)).not.toContain(String(payload.connectionUrl));
     expect(String(payload.mcpConfig)).not.toContain(String(payload.pairingBearer));
     expect(String(payload.restConfig)).toContain(String(payload.restEndpoint));
     expect(String(payload.restConfig)).toContain(String(payload.pairingBearer));
@@ -373,7 +384,7 @@ describe("Agent Gateway browser boundary", () => {
     expect(await json(external)).toEqual(coreResult);
   });
 
-  it("bridges exact resource snapshot, Reality Asset, and model reads through the public REST surface", async () => {
+  it("bridges exact resource, asset, model, and layout reads through the public REST surface", async () => {
     const { handle } = setup();
     const browser = await browserSetup(handle);
     const cases = [
@@ -404,6 +415,23 @@ describe("Agent Gateway browser boundary", () => {
           version: "1.0.0",
         },
         name: "inspect_workspace_model",
+      },
+      {
+        path: "/v1/workspace/layout/query",
+        body: {
+          session_token: "workspace_session_example",
+          instruction_digest: "workspace_guide_digest",
+          candidate: {
+            component_id: "PANEL_A",
+            placement: {
+              space: "viewport",
+              anchor: "center",
+              offset: { x: 0, y: 0 },
+              size: { width: 320, height: 220 },
+            },
+          },
+        },
+        name: "query_layout_placement",
       },
     ] as const;
 
@@ -707,7 +735,7 @@ describe("Agent Gateway browser boundary", () => {
     expect(payload.openapi).toBe("3.1.0");
     expect(payload.info).toEqual(expect.objectContaining({
       title: "SemaFrame Agent Gateway",
-      version: "1.2.0",
+      version: "1.3.0",
     }));
     const serialized = JSON.stringify(payload);
     expect(serialized).toContain("session_token");
@@ -730,7 +758,9 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("AgentResult");
     expect(serialized).toContain("inspect_workspace_model");
     expect(serialized).toContain("/workspace/models/inspect");
-    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(25);
+    expect(serialized).toContain("query_layout_placement");
+    expect(serialized).toContain("/workspace/layout/query");
+    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(26);
     expect(payload.paths).toEqual(expect.objectContaining({
       "/assets/imports/begin": expect.any(Object),
       "/assets/imports/cancel": expect.any(Object),

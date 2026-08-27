@@ -192,9 +192,19 @@ export type InspectWorkspaceSpaceData = Readonly<{
   workspace_revision: number;
   registry_digest: string;
   spatial_graph: JSONValue;
+  layout_graph: JSONValue;
 }>;
 
 export type QuerySpatialPlacementData = Readonly<{
+  client_id: string;
+  client_name?: string;
+  workspace_id: string;
+  workspace_revision: number;
+  registry_digest: string;
+  placement_check: JSONValue;
+}>;
+
+export type QueryLayoutPlacementData = Readonly<{
   client_id: string;
   client_name?: string;
   workspace_id: string;
@@ -842,6 +852,7 @@ export class WorkspaceAgentController {
         workspace_revision: result.revision,
         registry_digest: result.registryDigest,
         spatial_graph: structuredClone(result.spatialGraph),
+        layout_graph: structuredClone(result.layoutGraph),
       });
     } catch (cause) {
       return fail(this.mapError(cause));
@@ -861,6 +872,31 @@ export class WorkspaceAgentController {
         throw new WorkspaceEngineError("invalid_request", "candidate is required", { retryable: true });
       }
       const result = await this.engine.querySpatialPlacement(body.candidate, principal(session));
+      return ok({
+        ...publicIdentity(session),
+        workspace_id: result.workspaceId,
+        workspace_revision: result.revision,
+        registry_digest: result.registryDigest,
+        placement_check: structuredClone(result.placementCheck),
+      });
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
+  async queryLayoutPlacement(input: unknown): Promise<WorkspaceAgentResult<QueryLayoutPlacementData>> {
+    try {
+      const body = exactRecord(
+        input,
+        ["session_token", "instruction_digest", "candidate"],
+        [],
+      );
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["workspace:read"]);
+      if (!Object.hasOwn(body, "candidate")) {
+        throw new WorkspaceEngineError("invalid_request", "candidate is required", { retryable: true });
+      }
+      const result = await this.engine.queryLayoutPlacement(body.candidate, principal(session));
       return ok({
         ...publicIdentity(session),
         workspace_id: result.workspaceId,
@@ -1301,6 +1337,8 @@ export class WorkspaceAgentController {
         return this.inspectWorkspaceSpace(input);
       case "query_spatial_placement":
         return this.querySpatialPlacement(input);
+      case "query_layout_placement":
+        return this.queryLayoutPlacement(input);
       case "inspect_workspace_physics":
         return this.inspectWorkspacePhysics(input);
       case "query_stable_placement":
@@ -1408,7 +1446,8 @@ export class WorkspaceAgentController {
       transaction.submission = undefined;
       if (error.code === "command_validation_failed"
         || error.code === "invalid_batch"
-        || error.code === "spatial_collision") {
+        || error.code === "spatial_collision"
+        || error.code === "layout_overlap") {
         transaction.state = "prepared";
         transaction.submissionDigest = undefined;
       } else if (error.retryable && error.code === "engine_error") {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS,
   DEFAULT_COMPONENT_VISUAL_EFFECTS,
@@ -33,6 +33,7 @@ import {
 import {
   CAD_PART_DEFINITION_FORMAT_VERSION,
   DEFAULT_CAD_SKETCH_PLANE,
+  applyCadDocumentEdits,
   cadLengthExpression,
   cadPartDefinitionDigest,
   parseCadEvaluationEvidence,
@@ -87,6 +88,37 @@ export type WorkspaceComponentManifestUpgrade = Readonly<{
   toVersion: string;
 }>;
 
+export type WorkspaceInspectorMode = "basic" | "advanced";
+
+export type WorkspaceInspectorSectionId =
+  | "overview"
+  | "manifest"
+  | "size"
+  | "transform"
+  | "geometry"
+  | "cad"
+  | "cad-features"
+  | "assembly"
+  | "assembly-mates"
+  | "reality"
+  | "collision"
+  | "collision-details"
+  | "physics"
+  | "physics-details"
+  | "model"
+  | "hierarchy"
+  | "lifecycle"
+  | "effects"
+  | "source"
+  | "actions"
+  | "raw";
+
+export type WorkspaceInspectorFocusRequest = Readonly<{
+  sectionId: WorkspaceInspectorSectionId;
+  /** Change this token to focus the same section again. */
+  requestId?: string | number;
+}>;
+
 export type WorkspaceInspectorProps = Readonly<{
   component?: WorkspaceRenderComponent;
   onAction?: (request: ComponentActionRequest) => void;
@@ -111,7 +143,34 @@ export type WorkspaceInspectorProps = Readonly<{
   onDeleteComponent?: (componentId: string) => boolean | void;
   /** Test/host seam; normal callers use the bounded CAD Worker. */
   evaluateCadPart?: WorkspaceCadPartEvaluator;
+  /** UI-only preference. It is never serialized into a Workspace project. */
+  defaultMode?: WorkspaceInspectorMode;
+  /** Optional host seam for Validation/Checks deep links. */
+  focusRequest?: WorkspaceInspectorFocusRequest;
 }>;
+
+const ADVANCED_INSPECTOR_SECTIONS: ReadonlySet<WorkspaceInspectorSectionId> = new Set([
+  "manifest",
+  "cad-features",
+  "assembly-mates",
+  "collision-details",
+  "physics-details",
+  "raw",
+]);
+
+function InspectorSectionAnchor({
+  sectionId,
+  children,
+}: Readonly<{
+  sectionId: WorkspaceInspectorSectionId;
+  children: ReactNode;
+}>) {
+  return <div
+    className="workspace-inspector__section-anchor"
+    data-workspace-inspector-section={sectionId}
+    tabIndex={-1}
+  >{children}</div>;
+}
 
 export function WorkspaceInspector({
   component,
@@ -136,10 +195,36 @@ export function WorkspaceInspector({
   descendantCount = 0,
   onDeleteComponent,
   evaluateCadPart,
+  defaultMode = "basic",
+  focusRequest,
 }: WorkspaceInspectorProps) {
+  const inspectorRef = useRef<HTMLElement>(null);
+  const [inspectorMode, setInspectorMode] = useState<WorkspaceInspectorMode>(defaultMode);
+  const componentId = component?.id;
+  const focusSectionId = focusRequest?.sectionId;
+  const focusRequestId = focusRequest?.requestId;
+
+  useEffect(() => {
+    if (focusSectionId && ADVANCED_INSPECTOR_SECTIONS.has(focusSectionId)) {
+      setInspectorMode("advanced");
+    }
+  }, [focusRequestId, focusSectionId]);
+
+  useEffect(() => {
+    if (!componentId || !focusSectionId) return;
+    const frame = requestAnimationFrame(() => {
+      const target = inspectorRef.current?.querySelector<HTMLElement>(
+        `[data-workspace-inspector-section="${focusSectionId}"]`,
+      );
+      target?.scrollIntoView?.({ block: "nearest" });
+      target?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [componentId, focusRequestId, focusSectionId, inspectorMode]);
+
   if (!component) {
     return (
-      <aside className="workspace-side-panel workspace-inspector" aria-label="Inspector">
+      <aside ref={inspectorRef} className="workspace-side-panel workspace-inspector" aria-label="Inspector">
         <header><span>Inspector</span></header>
         <p className="workspace-empty-copy">Select a component to inspect it.</p>
       </aside>
@@ -149,19 +234,36 @@ export function WorkspaceInspector({
     ? ["start", "pause", "resume", "reset"]
     : [];
   return (
-    <aside className="workspace-side-panel workspace-inspector" aria-label={`Inspector for ${component.label}`}>
+    <aside ref={inspectorRef} className="workspace-side-panel workspace-inspector" aria-label={`Inspector for ${component.label}`}>
       <header>
         <span>Inspector</span>
         <strong>{component.label}</strong>
       </header>
-      <dl>
+      <div className="workspace-inspector__mode" role="group" aria-label="Inspector detail level">
+        <button
+          type="button"
+          aria-pressed={inspectorMode === "basic"}
+          onClick={() => setInspectorMode("basic")}
+        >Basic</button>
+        <button
+          type="button"
+          aria-pressed={inspectorMode === "advanced"}
+          onClick={() => setInspectorMode("advanced")}
+        >Advanced</button>
+      </div>
+      <dl
+        className="workspace-inspector__overview"
+        data-workspace-inspector-section="overview"
+        tabIndex={-1}
+      >
         <div><dt>Type</dt><dd>{component.type.typeId}</dd></div>
         <div><dt>Placement</dt><dd>{component.placement.space}</dd></div>
         <div><dt>Version</dt><dd>{component.type.version}</dd></div>
         <div><dt>Visibility</dt><dd>{component.visibility}</dd></div>
+        {inspectorMode === "advanced" && <div><dt>Manifest digest</dt><dd>{component.type.digest}</dd></div>}
       </dl>
-      {manifestUpgrade && (
-        <section className="workspace-inspector__upgrade" aria-label="Component interaction upgrade">
+      {inspectorMode === "advanced" && manifestUpgrade && (
+        <InspectorSectionAnchor sectionId="manifest"><section className="workspace-inspector__upgrade" aria-label="Component interaction upgrade">
           <h3>Interaction upgrade available</h3>
           <p>
             This component is pinned to {manifestUpgrade.fromVersion}. Upgrade explicitly to
@@ -177,57 +279,59 @@ export function WorkspaceInspector({
           {(component.locks.props || component.locks.actions) && (
             <p className="workspace-inspector__hint">Unlock properties and actions before upgrading.</p>
           )}
-        </section>
+        </section></InspectorSectionAnchor>
       )}
       {resizePolicy && resizePolicy.kind !== "none" && (
-        <ResizeInspectorEditor component={component} policy={resizePolicy} onResize={onResize} />
+        <InspectorSectionAnchor sectionId="size"><ResizeInspectorEditor component={component} policy={resizePolicy} onResize={onResize} /></InspectorSectionAnchor>
       )}
       {component.placement.space === "world3d" && component.type.typeId !== "stage-3d" && (
-        <WorldTransformInspectorEditor
+        <InspectorSectionAnchor sectionId="transform"><WorldTransformInspectorEditor
           component={component}
           worldPlacement={worldPlacement ?? component.placement}
           onTransform={onTransform}
-        />
+        /></InspectorSectionAnchor>
       )}
       {component.type.typeId === "spatial-primitive" && (
-        <ParametricPrimitiveInspectorEditor component={component} onUpdate={onUpdate} />
+        <InspectorSectionAnchor sectionId="geometry"><ParametricPrimitiveInspectorEditor component={component} onUpdate={onUpdate} /></InspectorSectionAnchor>
       )}
       {component.type.typeId === "cad-part" && (
-        <CadPartInspectorEditor
+        <InspectorSectionAnchor sectionId="cad"><CadPartInspectorEditor
           component={component}
           onUpdate={onUpdate}
           evaluateCadPart={evaluateCadPart}
-        />
+          advanced={inspectorMode === "advanced"}
+        /></InspectorSectionAnchor>
       )}
       {component.type.typeId === "model-assembly" && (
-        <ModelAssemblyInspectorEditor component={component} onUpdate={onUpdate} />
+        <InspectorSectionAnchor sectionId="assembly"><ModelAssemblyInspectorEditor component={component} onUpdate={onUpdate} advanced={inspectorMode === "advanced"} /></InspectorSectionAnchor>
       )}
       {component.type.typeId === "gaussian-splat" && (
-        <RealitySplatInspectorEditor
+        <InspectorSectionAnchor sectionId="reality"><RealitySplatInspectorEditor
           component={component}
           proxyOptions={realityProxyOptions}
           measurement={realityMeasurement}
           onStartMeasurement={onStartRealityMeasurement}
           onCancelMeasurement={onCancelRealityMeasurement}
           onUpdate={onUpdate}
-        />
+          advanced={inspectorMode === "advanced"}
+        /></InspectorSectionAnchor>
       )}
       {(component.type.typeId === "spatial-entity"
         || component.type.typeId === "spatial-primitive"
         || component.type.typeId === "cad-part")
         && Boolean(component.props.collision) && (
-        <CollisionInspectorEditor component={component} onUpdate={onUpdate} />
+        <InspectorSectionAnchor sectionId="collision"><CollisionInspectorEditor component={component} onUpdate={onUpdate} advanced={inspectorMode === "advanced"} /></InspectorSectionAnchor>
       )}
       {(component.type.typeId === "spatial-entity"
         || component.type.typeId === "spatial-primitive"
         || component.type.typeId === "cad-part")
         && Boolean(component.props.physics) && (
-        <PhysicsInspectorEditor component={component} onUpdate={onUpdate} report={physicsReport} />
+        <InspectorSectionAnchor sectionId="physics"><PhysicsInspectorEditor component={component} onUpdate={onUpdate} report={physicsReport} advanced={inspectorMode === "advanced"} /></InspectorSectionAnchor>
       )}
       {(component.type.typeId === "spatial-primitive"
         || component.type.typeId === "spatial-entity"
         || component.type.typeId === "cad-part") && (
-        <section className="workspace-inspector__model-actions" aria-label="Model assembly actions">
+        <InspectorSectionAnchor sectionId="model"><section className="workspace-inspector__model-actions" aria-label="Model assembly actions">
           <h3>Model</h3>
           <p className="workspace-inspector__hint">
             Wrap this object in a transform-only assembly without changing its world position.
@@ -239,36 +343,36 @@ export function WorkspaceInspector({
           >
             Create model assembly
           </button>
-        </section>
+        </section></InspectorSectionAnchor>
       )}
       {component.placement.space === "world3d" && component.type.typeId !== "stage-3d" && (
-        <ComponentHierarchyInspectorEditor
+        <InspectorSectionAnchor sectionId="hierarchy"><ComponentHierarchyInspectorEditor
           component={component}
           assemblyOptions={assemblyOptions}
           onReparent={onReparent}
           onSelectComponent={onSelectComponent}
-        />
+        /></InspectorSectionAnchor>
       )}
       {(component.type.typeId === "spatial-primitive"
         || component.type.typeId === "spatial-entity"
         || component.type.typeId === "cad-part"
         || component.type.typeId === "model-assembly"
         || component.type.typeId === "gaussian-splat") && (
-        <ComponentLifecycleEditor
+        <InspectorSectionAnchor sectionId="lifecycle"><ComponentLifecycleEditor
           component={component}
           descendantCount={descendantCount}
           onDelete={onDeleteComponent}
-        />
+        /></InspectorSectionAnchor>
       )}
-      <VisualEffectsInspectorEditor component={component} onApply={onVisualEffects} />
+      <InspectorSectionAnchor sectionId="effects"><VisualEffectsInspectorEditor component={component} onApply={onVisualEffects} /></InspectorSectionAnchor>
       {component.type.typeId === "video-player" && (
-        <VideoPlayerInspectorEditor component={component} onUpdate={onUpdate} />
+        <InspectorSectionAnchor sectionId="source"><VideoPlayerInspectorEditor component={component} onUpdate={onUpdate} /></InspectorSectionAnchor>
       )}
       {component.type.typeId === "web-panel" && (
-        <WebPanelInspectorEditor component={component} onUpdate={onUpdate} />
+        <InspectorSectionAnchor sectionId="source"><WebPanelInspectorEditor component={component} onUpdate={onUpdate} /></InspectorSectionAnchor>
       )}
       {timerActions.length > 0 && (
-        <section>
+        <InspectorSectionAnchor sectionId="actions"><section>
           <h3>Actions</h3>
           <div className="workspace-inspector__actions">
             {timerActions.map((action) => (
@@ -282,16 +386,18 @@ export function WorkspaceInspector({
               </button>
             ))}
           </div>
-        </section>
+        </section></InspectorSectionAnchor>
       )}
-      <details>
-        <summary>Properties</summary>
-        <pre>{JSON.stringify(component.props, null, 2)}</pre>
-      </details>
-      <details>
-        <summary>Durable state</summary>
-        <pre>{JSON.stringify(component.durableState, null, 2)}</pre>
-      </details>
+      {inspectorMode === "advanced" && <InspectorSectionAnchor sectionId="raw"><div className="workspace-inspector__raw">
+        <details>
+          <summary>Raw properties</summary>
+          <pre>{JSON.stringify(component.props, null, 2)}</pre>
+        </details>
+        <details>
+          <summary>Raw durable state</summary>
+          <pre>{JSON.stringify(component.durableState, null, 2)}</pre>
+        </details>
+      </div></InspectorSectionAnchor>}
     </aside>
   );
 }
@@ -696,6 +802,18 @@ function cadParameterLength(
     : fallback;
 }
 
+function editableCadLengthParameter(
+  definition: CadPartDefinitionV1,
+  parameterId: string,
+) {
+  const parameter = definition.parameters.find((candidate) => candidate.id === parameterId);
+  return parameter?.dimension === "length"
+    && parameter.expression.kind === "constant"
+    && parameter.expression.dimension === "length"
+    ? parameter
+    : undefined;
+}
+
 /**
  * A fully constrained, editable starter part for the human CAD surface. The
  * dimensions remain named parameters, while an optional through-hole remains
@@ -794,6 +912,71 @@ export function createRectangularCadPlateDefinition(input: Readonly<{
   });
 }
 
+function isRectangularCadPlateDefinition(
+  definition: CadPartDefinitionV1,
+  evidence: CadEvaluationEvidenceV1 | undefined,
+): boolean {
+  if (definition.history.length === 0 && definition.parameters.length === 0) return true;
+  try {
+    const existingHole = definition.history.find((feature) => feature.kind === "hole");
+    const reconstructed = createRectangularCadPlateDefinition({
+      partId: definition.partId,
+      displayName: definition.displayName,
+      widthM: cadParameterLength(definition, "width", evidence?.overallBounds.size.x ?? 0.6),
+      depthM: cadParameterLength(definition, "depth", evidence?.overallBounds.size.y ?? 0.4),
+      thicknessM: cadParameterLength(definition, "thickness", evidence?.overallBounds.size.z ?? 0.08),
+      holeDiameterM: existingHole ? cadParameterLength(definition, "hole_diameter", 0.08) : 0,
+    });
+    return cadPartDefinitionDigest(reconstructed) === cadPartDefinitionDigest(definition);
+  } catch {
+    return false;
+  }
+}
+
+function updateBasicCadDefinition(
+  definition: CadPartDefinitionV1,
+  input: Readonly<{
+    displayName: string;
+    widthM: number;
+    depthM: number;
+    thicknessM: number;
+    holeDiameterM: number;
+  }>,
+): CadPartDefinitionV1 {
+  const displayName = input.displayName.trim();
+  if (!displayName) throw new Error("Part name is required.");
+  let next = applyCadDocumentEdits(definition, [{ kind: "rename_part", displayName }]);
+  const candidates = [
+    ["width", input.widthM],
+    ["depth", input.depthM],
+    ["thickness", input.thicknessM],
+  ] as const;
+  for (const [parameterId, value] of candidates) {
+    const parameter = editableCadLengthParameter(next, parameterId);
+    if (!parameter) continue;
+    if (!Number.isFinite(value) || value < 1e-6 || value > 1_000) {
+      throw new Error("Editable CAD dimensions must be between 0.000001 and 1000 metres.");
+    }
+    next = applyCadDocumentEdits(next, [{
+      kind: "set_parameter",
+      parameter: { ...parameter, expression: cadLengthExpression(value) },
+    }]);
+  }
+  const holeParameter = editableCadLengthParameter(next, "hole_diameter");
+  if (holeParameter) {
+    if (!Number.isFinite(input.holeDiameterM)
+      || input.holeDiameterM < 1e-6
+      || input.holeDiameterM >= Math.min(input.widthM, input.depthM)) {
+      throw new Error("A custom part's existing hole must stay positive and smaller than its editable width and depth.");
+    }
+    next = applyCadDocumentEdits(next, [{
+      kind: "set_parameter",
+      parameter: { ...holeParameter, expression: cadLengthExpression(input.holeDiameterM) },
+    }]);
+  }
+  return next;
+}
+
 async function evaluateCadPartInWorker(
   definition: CadPartDefinitionV1,
 ): Promise<CadEvaluationEvidenceV1> {
@@ -814,10 +997,12 @@ function CadPartInspectorEditor({
   component,
   onUpdate,
   evaluateCadPart,
+  advanced,
 }: Readonly<{
   component: WorkspaceRenderComponent;
   onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
   evaluateCadPart?: WorkspaceCadPartEvaluator;
+  advanced: boolean;
 }>) {
   const formId = useId();
   const definition = parseCadPartDefinition(component.props.definition);
@@ -831,6 +1016,10 @@ function CadPartInspectorEditor({
     evidence,
   });
   const existingHole = definition.history.find((feature) => feature.kind === "hole");
+  const rectangularStarter = isRectangularCadPlateDefinition(definition, evidence);
+  const basicDimensionsEditable = rectangularStarter || ["width", "depth", "thickness"]
+    .every((parameterId) => editableCadLengthParameter(definition, parameterId));
+  const basicHoleEditable = rectangularStarter || Boolean(editableCadLengthParameter(definition, "hole_diameter"));
   const [displayName, setDisplayName] = useState(definition.displayName);
   const [width, setWidth] = useState(String(cadParameterLength(definition, "width", evidence?.overallBounds.size.x ?? 0.6)));
   const [depth, setDepth] = useState(String(cadParameterLength(definition, "depth", evidence?.overallBounds.size.y ?? 0.4)));
@@ -893,14 +1082,16 @@ function CadPartInspectorEditor({
   const applyStarter = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
-      const next = createRectangularCadPlateDefinition({
-        partId: definition.partId,
+      const input = {
         displayName: displayName.trim() || definition.displayName,
         widthM: Number(width),
         depthM: Number(depth),
         thicknessM: Number(thickness),
         holeDiameterM: Number(holeDiameter),
-      });
+      };
+      const next = advanced || rectangularStarter
+        ? createRectangularCadPlateDefinition({ partId: definition.partId, ...input })
+        : updateBasicCadDefinition(definition, input);
       void evaluateAndCommit(next);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The starter part dimensions are invalid.");
@@ -920,6 +1111,9 @@ function CadPartInspectorEditor({
     <p className="workspace-inspector__hint">
       Named SI parameters and ordered features are evaluated as exact OCCT B-rep. A failed feature never replaces the last valid part.
     </p>
+    {!advanced && !rectangularStarter && <p className="workspace-inspector__hint">
+      Basic mode preserves this custom feature history. It can rename the part and edit existing constant width, depth, thickness, and hole parameters; use Advanced for topology changes.
+    </p>}
     {evidence ? <dl className="workspace-inspector__cad-evidence" aria-label="CAD evaluation evidence">
       <div><dt>Status</dt><dd>Valid B-rep</dd></div>
       <div><dt>Bodies</dt><dd>{evidence.bodies.length}</dd></div>
@@ -929,26 +1123,30 @@ function CadPartInspectorEditor({
     <form onSubmit={applyStarter} noValidate>
       <label htmlFor={`${formId}-cad-name`}><span>Part name</span><input id={`${formId}-cad-name`} type="text" maxLength={256} value={displayName} disabled={locked || pending} onChange={(event) => setDisplayName(event.target.value)} /></label>
       <fieldset><legend>Starter plate · exact metres</legend>
-        <label htmlFor={`${formId}-cad-width`}><span>Width</span><input id={`${formId}-cad-width`} aria-label="CAD plate width (m)" type="number" min="0.000001" max="1000" step="0.001" value={width} disabled={locked || pending} onChange={(event) => setWidth(event.target.value)} /></label>
-        <label htmlFor={`${formId}-cad-depth`}><span>Depth</span><input id={`${formId}-cad-depth`} aria-label="CAD plate depth (m)" type="number" min="0.000001" max="1000" step="0.001" value={depth} disabled={locked || pending} onChange={(event) => setDepth(event.target.value)} /></label>
-        <label htmlFor={`${formId}-cad-thickness`}><span>Thickness</span><input id={`${formId}-cad-thickness`} aria-label="CAD plate thickness (m)" type="number" min="0.000001" max="1000" step="0.001" value={thickness} disabled={locked || pending} onChange={(event) => setThickness(event.target.value)} /></label>
-        <label htmlFor={`${formId}-cad-hole`}><span>Center hole · 0 off</span><input id={`${formId}-cad-hole`} aria-label="CAD plate hole diameter (m)" type="number" min="0" max="1000" step="0.001" value={holeDiameter} disabled={locked || pending} onChange={(event) => setHoleDiameter(event.target.value)} /></label>
+        <label htmlFor={`${formId}-cad-width`}><span>Width</span><input id={`${formId}-cad-width`} aria-label="CAD plate width (m)" type="number" min="0.000001" max="1000" step="0.001" value={width} disabled={locked || pending || (!advanced && !basicDimensionsEditable)} onChange={(event) => setWidth(event.target.value)} /></label>
+        <label htmlFor={`${formId}-cad-depth`}><span>Depth</span><input id={`${formId}-cad-depth`} aria-label="CAD plate depth (m)" type="number" min="0.000001" max="1000" step="0.001" value={depth} disabled={locked || pending || (!advanced && !basicDimensionsEditable)} onChange={(event) => setDepth(event.target.value)} /></label>
+        <label htmlFor={`${formId}-cad-thickness`}><span>Thickness</span><input id={`${formId}-cad-thickness`} aria-label="CAD plate thickness (m)" type="number" min="0.000001" max="1000" step="0.001" value={thickness} disabled={locked || pending || (!advanced && !basicDimensionsEditable)} onChange={(event) => setThickness(event.target.value)} /></label>
+        <label htmlFor={`${formId}-cad-hole`}><span>Center hole · 0 off</span><input id={`${formId}-cad-hole`} aria-label="CAD plate hole diameter (m)" type="number" min="0" max="1000" step="0.001" value={holeDiameter} disabled={locked || pending || (!advanced && !basicHoleEditable)} onChange={(event) => setHoleDiameter(event.target.value)} /></label>
       </fieldset>
       <label htmlFor={`${formId}-cad-part-number`}><span>Part number</span><input id={`${formId}-cad-part-number`} type="text" maxLength={128} value={partNumber} disabled={locked || pending} onChange={(event) => setPartNumber(event.target.value)} /></label>
       <label htmlFor={`${formId}-cad-material-name`}><span>Material name</span><input id={`${formId}-cad-material-name`} type="text" maxLength={256} value={materialName} disabled={locked || pending} onChange={(event) => setMaterialName(event.target.value)} /></label>
-      <button type="submit" disabled={locked || pending}>{pending ? "Evaluating exact B-rep…" : "Build and apply starter part"}</button>
+      <button type="submit" disabled={locked || pending}>{pending
+        ? "Evaluating exact B-rep…"
+        : !advanced && !rectangularStarter ? "Apply safe CAD parameters" : "Build and apply starter part"}</button>
     </form>
-    <ol className="workspace-inspector__feature-tree" aria-label="CAD feature history">
-      {definition.history.map((feature, index) => <li key={feature.id} className={feature.suppressed ? "is-suppressed" : undefined}>
-        <span>{index + 1}</span><strong>{feature.name}</strong><small>{feature.kind.replaceAll("_", " ")}{feature.suppressed ? " · suppressed" : ""}</small>
-      </li>)}
-    </ol>
-    <details className="workspace-inspector__cad-advanced">
-      <summary>Advanced feature document</summary>
-      <p className="workspace-inspector__hint">Edit the versioned definition directly for revolve, boolean, hole, all-edge fillet, or all-edge chamfer. Unsupported features fail explicitly.</p>
-      <textarea aria-label="CAD feature document JSON" rows={16} value={rawDefinition} disabled={locked || pending} spellCheck={false} onChange={(event) => setRawDefinition(event.target.value)} />
-      <button type="button" disabled={locked || pending} onClick={applyRawDefinition}>Evaluate JSON and apply</button>
-    </details>
+    {advanced && <InspectorSectionAnchor sectionId="cad-features"><div className="workspace-inspector__advanced-fields">
+      <ol className="workspace-inspector__feature-tree" aria-label="CAD feature history">
+        {definition.history.map((feature, index) => <li key={feature.id} className={feature.suppressed ? "is-suppressed" : undefined}>
+          <span>{index + 1}</span><strong>{feature.name}</strong><small>{feature.kind.replaceAll("_", " ")}{feature.suppressed ? " · suppressed" : ""}</small>
+        </li>)}
+      </ol>
+      <details className="workspace-inspector__cad-advanced">
+        <summary>Advanced feature document</summary>
+        <p className="workspace-inspector__hint">Edit the versioned definition directly for revolve, boolean, hole, all-edge fillet, or all-edge chamfer. Unsupported features fail explicitly.</p>
+        <textarea aria-label="CAD feature document JSON" rows={16} value={rawDefinition} disabled={locked || pending} spellCheck={false} onChange={(event) => setRawDefinition(event.target.value)} />
+        <button type="button" disabled={locked || pending} onClick={applyRawDefinition}>Evaluate JSON and apply</button>
+      </details>
+    </div></InspectorSectionAnchor>}
     {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
   </section>;
 }
@@ -956,9 +1154,11 @@ function CadPartInspectorEditor({
 function ModelAssemblyInspectorEditor({
   component,
   onUpdate,
+  advanced,
 }: Readonly<{
   component: WorkspaceRenderComponent;
   onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
+  advanced: boolean;
 }>) {
   const formId = useId();
   const [displayName, setDisplayName] = useState(component.label);
@@ -1029,13 +1229,19 @@ function ModelAssemblyInspectorEditor({
       {supportsCadAssembly && <>
         <label htmlFor={`${formId}-assembly-part-number`}><span>Assembly number</span><input id={`${formId}-assembly-part-number`} type="text" maxLength={128} value={partNumber} disabled={locked} onChange={(event) => setPartNumber(event.target.value)} /></label>
         <label htmlFor={`${formId}-assembly-material`}><span>Material / specification</span><input id={`${formId}-assembly-material`} type="text" maxLength={256} value={materialName} disabled={locked} onChange={(event) => setMaterialName(event.target.value)} /></label>
-        <label htmlFor={`${formId}-assembly-mates`}><span>Semantic mates</span><textarea id={`${formId}-assembly-mates`} aria-label="Assembly mates JSON" rows={8} value={mates} disabled={locked} spellCheck={false} onChange={(event) => setMates(event.target.value)} /></label>
-        <p className="workspace-inspector__hint">Fixed, revolute, slider, and planar mates reference child component IDs plus optional CAD datum/topology roles.</p>
+        {advanced && <div
+          className="workspace-inspector__advanced-fields"
+          data-workspace-inspector-section="assembly-mates"
+          tabIndex={-1}
+        >
+          <label htmlFor={`${formId}-assembly-mates`}><span>Semantic mates</span><textarea id={`${formId}-assembly-mates`} aria-label="Assembly mates JSON" rows={8} value={mates} disabled={locked} spellCheck={false} onChange={(event) => setMates(event.target.value)} /></label>
+          <p className="workspace-inspector__hint">Fixed, revolute, slider, and planar mates reference child component IDs plus optional CAD datum/topology roles.</p>
+        </div>}
       </>}
       {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
       <button type="submit" disabled={locked || !displayName.trim()}>Apply model settings</button>
     </form>
-    {modelRef && <dl className="workspace-inspector__model-ref" aria-label="Published model reference"><div><dt>Model</dt><dd>{stringValue(modelRef.modelId)}</dd></div><div><dt>Version</dt><dd>{stringValue(modelRef.version)}</dd></div><div><dt>Digest</dt><dd>{stringValue(modelRef.digest)}</dd></div></dl>}
+    {modelRef && <dl className="workspace-inspector__model-ref" aria-label="Published model reference"><div><dt>Model</dt><dd>{stringValue(modelRef.modelId)}</dd></div><div><dt>Version</dt><dd>{stringValue(modelRef.version)}</dd></div>{advanced && <div><dt>Digest</dt><dd>{stringValue(modelRef.digest)}</dd></div>}</dl>}
   </section>;
 }
 
@@ -1072,6 +1278,7 @@ function RealitySplatInspectorEditor({
   onStartMeasurement,
   onCancelMeasurement,
   onUpdate,
+  advanced,
 }: Readonly<{
   component: WorkspaceRenderComponent;
   proxyOptions: readonly WorkspaceAssemblyOption[];
@@ -1079,6 +1286,7 @@ function RealitySplatInspectorEditor({
   onStartMeasurement?: (componentId: string) => boolean;
   onCancelMeasurement?: () => void;
   onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
+  advanced: boolean;
 }>) {
   const formId = useId();
   const calibration = safeRealityCalibration(component.props.calibration);
@@ -1313,7 +1521,7 @@ function RealitySplatInspectorEditor({
     </p>
     {assetRef ? <dl className="workspace-inspector__model-ref" aria-label="Reality asset reference">
       <div><dt>Asset</dt><dd>{stringValue(assetRef.assetId)}</dd></div>
-      <div><dt>Digest</dt><dd>{stringValue(assetRef.digest)}</dd></div>
+      {advanced && <div><dt>Digest</dt><dd>{stringValue(assetRef.digest)}</dd></div>}
     </dl> : <p className="workspace-inspector__privacy">No asset is linked. The renderer will keep a placeholder.</p>}
     <form onSubmit={submit} noValidate>
       <fieldset className="workspace-inspector__reality-measurement">
@@ -1376,9 +1584,11 @@ function formatMeasuredDistance(value: number): string {
 function CollisionInspectorEditor({
   component,
   onUpdate,
+  advanced,
 }: Readonly<{
   component: WorkspaceRenderComponent;
   onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
+  advanced: boolean;
 }>) {
   const formId = useId();
   const raw = component.props.collision;
@@ -1460,26 +1670,28 @@ function CollisionInspectorEditor({
   const locked = component.locks.props || !onUpdate;
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!inRange(parsedMargin, 0, 10)) {
+    if (advanced && !inRange(parsedMargin, 0, 10)) {
       setError("Collision margin must be between 0 and 10 meters.");
       return;
     }
     let rawParts: unknown;
-    if (shape === "compound") {
+    if (advanced && shape === "compound") {
       try { rawParts = JSON.parse(parts) as unknown; } catch {
         setError("Compound parts must be valid JSON.");
         return;
       }
     }
-    const candidate = shape === "asset_bounds"
-      ? { enabled, role, shape, margin: parsedMargin }
-      : shape === "box"
-        ? {
-          enabled, role, shape, margin: parsedMargin,
-          center: { x: Number(center[0]), y: Number(center[1]), z: Number(center[2]) },
-          size: { x: Number(size[0]), y: Number(size[1]), z: Number(size[2]) },
-        }
-        : { enabled, role, shape, margin: parsedMargin, parts: rawParts };
+    const candidate = !advanced
+      ? { ...structuredClone(initial), enabled }
+      : shape === "asset_bounds"
+        ? { enabled, role, shape, margin: parsedMargin }
+        : shape === "box"
+          ? {
+            enabled, role, shape, margin: parsedMargin,
+            center: { x: Number(center[0]), y: Number(center[1]), z: Number(center[2]) },
+            size: { x: Number(size[0]), y: Number(size[1]), z: Number(size[2]) },
+          }
+          : { enabled, role, shape, margin: parsedMargin, parts: rawParts };
     const parsed = parseSpatialCollisionConfig(candidate);
     if (!parsed) {
       setError("Collision shape is invalid. Sizes must be positive and compound parts are limited to 16.");
@@ -1496,9 +1708,16 @@ function CollisionInspectorEditor({
   return (
     <section className="workspace-inspector__collision" aria-labelledby={`${formId}-heading`}>
       <h3 id={`${formId}-heading`}>Collision volume</h3>
-      <p className="workspace-inspector__hint">
+      {advanced && <p className="workspace-inspector__hint">
         Use asset bounds, one explicit oriented box, or up to 16 compound box parts.
-      </p>
+      </p>}
+      <dl className="workspace-inspector__collision-size" aria-label="Collision configuration summary">
+        <div><dt>Status</dt><dd>{enabled ? "Enabled" : "Disabled"}</dd></div>
+        <div><dt>Role</dt><dd>{role === "solid" ? "Solid" : role === "trigger" ? "Trigger" : "Ignored"}</dd></div>
+        <div><dt>Volume</dt><dd>{shape === "asset_bounds"
+          ? component.type.typeId === "cad-part" ? "CAD bounds" : component.type.typeId === "spatial-primitive" ? "Geometry bounds" : "Asset bounds"
+          : shape === "box" ? "Explicit box" : `Compound · ${Array.isArray(initial.parts) ? initial.parts.length : 0}`}</dd></div>
+      </dl>
       {effectiveSize && (
         <dl className="workspace-inspector__collision-size" aria-label="Effective collision dimensions">
           <div><dt>Width</dt><dd>{effectiveSize.x.toFixed(2)} m</dd></div>
@@ -1509,37 +1728,43 @@ function CollisionInspectorEditor({
       <form onSubmit={submit} noValidate>
         <label className="workspace-inspector__check" htmlFor={`${formId}-enabled`}>
           <input id={`${formId}-enabled`} type="checkbox" checked={enabled} disabled={locked} onChange={(event) => setEnabled(event.target.checked)} />
-          <span>Enabled</span>
+          <span>Collision enabled</span>
         </label>
-        <label htmlFor={`${formId}-role`}><span>Role</span>
-          <select id={`${formId}-role`} value={role} disabled={locked} onChange={(event) => setRole(event.target.value as typeof role)}>
-            <option value="solid">Solid · blocks overlap</option>
-            <option value="trigger">Trigger · detects only</option>
-            <option value="none">None · ignored</option>
-          </select>
-        </label>
-        <label htmlFor={`${formId}-shape`}><span>Shape</span>
-          <select id={`${formId}-shape`} value={shape} disabled={locked} onChange={(event) => setShape(event.target.value as typeof shape)}>
-            <option value="asset_bounds">{component.type.typeId === "cad-part"
-              ? "Exact CAD bounds"
-              : component.type.typeId === "spatial-primitive"
-                ? "Geometry bounds"
-                : "Asset bounds"}</option>
-            <option value="box">Explicit box</option>
-            <option value="compound">Compound boxes</option>
-          </select>
-        </label>
-        {shape === "box" && <>
-          <fieldset><legend>Local center (m)</legend>{(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis}><span>{axis}</span><input type="number" step="0.01" value={center[index]} disabled={locked} onChange={(event) => setCenter((current) => current.map((value, item) => item === index ? event.target.value : value))} /></label>)}</fieldset>
-          <fieldset><legend>Box size (m)</legend>{(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis}><span>{axis}</span><input type="number" min="0.001" max="1000" step="0.01" value={size[index]} disabled={locked} onChange={(event) => setSize((current) => current.map((value, item) => item === index ? event.target.value : value))} /></label>)}</fieldset>
-        </>}
-        {shape === "compound" && <label htmlFor={`${formId}-parts`}><span>Parts JSON</span>
-          <textarea id={`${formId}-parts`} rows={8} value={parts} disabled={locked} onChange={(event) => setParts(event.target.value)} />
-        </label>}
-        <label htmlFor={`${formId}-margin`}><span>Margin (m)</span>
-          <input id={`${formId}-margin`} type="number" min="0" max="10" step="0.01" value={margin} disabled={locked} onChange={(event) => setMargin(event.target.value)} />
-        </label>
-        <p className="workspace-inspector__hint">Solid overlaps reject the entire Workspace update. Touching faces are allowed.</p>
+        {advanced && <div
+          className="workspace-inspector__advanced-fields"
+          data-workspace-inspector-section="collision-details"
+          tabIndex={-1}
+        >
+          <label htmlFor={`${formId}-role`}><span>Role</span>
+            <select id={`${formId}-role`} value={role} disabled={locked} onChange={(event) => setRole(event.target.value as typeof role)}>
+              <option value="solid">Solid · blocks overlap</option>
+              <option value="trigger">Trigger · detects only</option>
+              <option value="none">None · ignored</option>
+            </select>
+          </label>
+          <label htmlFor={`${formId}-shape`}><span>Shape</span>
+            <select id={`${formId}-shape`} value={shape} disabled={locked} onChange={(event) => setShape(event.target.value as typeof shape)}>
+              <option value="asset_bounds">{component.type.typeId === "cad-part"
+                ? "Exact CAD bounds"
+                : component.type.typeId === "spatial-primitive"
+                  ? "Geometry bounds"
+                  : "Asset bounds"}</option>
+              <option value="box">Explicit box</option>
+              <option value="compound">Compound boxes</option>
+            </select>
+          </label>
+          {shape === "box" && <>
+            <fieldset><legend>Local center (m)</legend>{(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis}><span>{axis}</span><input type="number" step="0.01" value={center[index]} disabled={locked} onChange={(event) => setCenter((current) => current.map((value, item) => item === index ? event.target.value : value))} /></label>)}</fieldset>
+            <fieldset><legend>Box size (m)</legend>{(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis}><span>{axis}</span><input type="number" min="0.001" max="1000" step="0.01" value={size[index]} disabled={locked} onChange={(event) => setSize((current) => current.map((value, item) => item === index ? event.target.value : value))} /></label>)}</fieldset>
+          </>}
+          {shape === "compound" && <label htmlFor={`${formId}-parts`}><span>Parts JSON</span>
+            <textarea id={`${formId}-parts`} rows={8} value={parts} disabled={locked} onChange={(event) => setParts(event.target.value)} />
+          </label>}
+          <label htmlFor={`${formId}-margin`}><span>Margin (m)</span>
+            <input id={`${formId}-margin`} type="number" min="0" max="10" step="0.01" value={margin} disabled={locked} onChange={(event) => setMargin(event.target.value)} />
+          </label>
+          <p className="workspace-inspector__hint">Solid overlaps reject the entire Workspace update. Touching faces are allowed.</p>
+        </div>}
         {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
         <button type="submit" disabled={locked}>Apply collision</button>
       </form>
@@ -1552,10 +1777,12 @@ function PhysicsInspectorEditor({
   component,
   onUpdate,
   report,
+  advanced,
 }: Readonly<{
   component: WorkspaceRenderComponent;
   onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
   report?: PhysicsBodyReport;
+  advanced: boolean;
 }>) {
   const formId = useId();
   const parsed = parseSpatialPhysicsConfig(component.props.physics) ?? DEFAULT_SPATIAL_PHYSICS;
@@ -1590,6 +1817,22 @@ function PhysicsInspectorEditor({
   const locked = component.locks.props || !onUpdate;
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!advanced) {
+      const next = parseSpatialPhysicsConfig({ ...structuredClone(parsed), enabled });
+      if (!next) {
+        setError("The existing physics configuration is invalid and cannot be toggled safely.");
+        return;
+      }
+      setError(undefined);
+      const persisted = supportsMasterSwitch
+        ? structuredClone(next)
+        : (() => {
+          const { enabled: _enabled, ...legacy } = structuredClone(next);
+          return legacy;
+        })();
+      onUpdate?.({ componentId: component.id, props: { physics: persisted as unknown as JSONObject } });
+      return;
+    }
     let parsedConstraints: unknown;
     try { parsedConstraints = JSON.parse(constraints) as unknown; } catch {
       setError("Constraints must be valid JSON.");
@@ -1626,22 +1869,33 @@ function PhysicsInspectorEditor({
       <div><dt>Load path</dt><dd>{report.grounded ? "Grounded" : "Not grounded"}</dd></div>
       <div><dt>Margin</dt><dd>{report.stabilityMarginM === null ? "—" : `${report.stabilityMarginM.toFixed(3)} m`}</dd></div>
       <div><dt>Supports</dt><dd>{report.supports.length}</dd></div>
-    </dl> : <p className="workspace-inspector__hint">Support and COM feasibility updates from the authoritative Workspace state.</p>}
+    </dl> : <dl className="workspace-inspector__collision-size" aria-label="Physics configuration summary">
+      <div><dt>Status</dt><dd>{enabled ? "Enabled" : "Disabled"}</dd></div>
+      <div><dt>Body</dt><dd>{bodyType[0]?.toUpperCase()}{bodyType.slice(1)}</dd></div>
+      <div><dt>Mass</dt><dd>{Number(massKg).toLocaleString()} kg</dd></div>
+      <div><dt>Constraints</dt><dd>{parsed.constraints.length}</dd></div>
+    </dl>}
     <form onSubmit={submit} noValidate>
       <label className="workspace-inspector__check" htmlFor={`${formId}-enabled`}>
         <input id={`${formId}-enabled`} type="checkbox" checked={enabled} disabled={locked || !supportsMasterSwitch} onChange={(event) => setEnabled(event.target.checked)} />
         <span>Physics enabled</span>
       </label>
       {!supportsMasterSwitch && <p className="workspace-inspector__hint">Upgrade this component to 1.5 to use the physics master switch.</p>}
-      <label htmlFor={`${formId}-body`}><span>Body type</span><select id={`${formId}-body`} value={bodyType} disabled={locked || !enabled} onChange={(event) => setBodyType(event.target.value as typeof bodyType)}><option value="static">Static</option><option value="dynamic">Dynamic</option><option value="kinematic">Kinematic</option></select></label>
-      <label htmlFor={`${formId}-mass`}><span>Mass (kg)</span><input id={`${formId}-mass`} type="number" min="0.001" max="1000000" step="0.1" value={massKg} disabled={locked || !enabled} onChange={(event) => setMassKg(event.target.value)} /></label>
-      <fieldset disabled={locked || !enabled}><legend>COM offset (m)</legend>{(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis}><span>{axis}</span><input type="number" step="0.01" value={centerOfMass[index]} onChange={(event) => setCenterOfMass((current) => current.map((value, item) => item === index ? event.target.value : value))} /></label>)}</fieldset>
-      <label htmlFor={`${formId}-friction`}><span>Friction</span><input id={`${formId}-friction`} type="number" min="0" max="2" step="0.05" value={friction} disabled={locked || !enabled} onChange={(event) => setFriction(event.target.value)} /></label>
-      <label htmlFor={`${formId}-restitution`}><span>Restitution</span><input id={`${formId}-restitution`} type="number" min="0" max="1" step="0.05" value={restitution} disabled={locked || !enabled} onChange={(event) => setRestitution(event.target.value)} /></label>
-      <label htmlFor={`${formId}-gravity`}><span>Gravity scale</span><input id={`${formId}-gravity`} type="number" min="0" max="10" step="0.1" value={gravityScale} disabled={locked || !enabled} onChange={(event) => setGravityScale(event.target.value)} /></label>
-      <label htmlFor={`${formId}-stability`}><span>Stability</span><select id={`${formId}-stability`} value={stabilityMode} disabled={locked || !enabled} onChange={(event) => setStabilityMode(event.target.value as typeof stabilityMode)}><option value="report">Report only</option><option value="enforce">Enforce atomically</option></select></label>
-      <label htmlFor={`${formId}-constraints`}><span>Constraints JSON</span><textarea id={`${formId}-constraints`} rows={8} value={constraints} disabled={locked || !enabled} onChange={(event) => setConstraints(event.target.value)} /></label>
-      <p className="workspace-inspector__hint">Fixed, hinge, slider, and ball constraints use local anchors. Hinge/slider axes must be normalized.</p>
+      {advanced && <div
+        className="workspace-inspector__advanced-fields"
+        data-workspace-inspector-section="physics-details"
+        tabIndex={-1}
+      >
+        <label htmlFor={`${formId}-body`}><span>Body type</span><select id={`${formId}-body`} value={bodyType} disabled={locked || !enabled} onChange={(event) => setBodyType(event.target.value as typeof bodyType)}><option value="static">Static</option><option value="dynamic">Dynamic</option><option value="kinematic">Kinematic</option></select></label>
+        <label htmlFor={`${formId}-mass`}><span>Mass (kg)</span><input id={`${formId}-mass`} type="number" min="0.001" max="1000000" step="0.1" value={massKg} disabled={locked || !enabled} onChange={(event) => setMassKg(event.target.value)} /></label>
+        <fieldset disabled={locked || !enabled}><legend>COM offset (m)</legend>{(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis}><span>{axis}</span><input type="number" step="0.01" value={centerOfMass[index]} onChange={(event) => setCenterOfMass((current) => current.map((value, item) => item === index ? event.target.value : value))} /></label>)}</fieldset>
+        <label htmlFor={`${formId}-friction`}><span>Friction</span><input id={`${formId}-friction`} type="number" min="0" max="2" step="0.05" value={friction} disabled={locked || !enabled} onChange={(event) => setFriction(event.target.value)} /></label>
+        <label htmlFor={`${formId}-restitution`}><span>Restitution</span><input id={`${formId}-restitution`} type="number" min="0" max="1" step="0.05" value={restitution} disabled={locked || !enabled} onChange={(event) => setRestitution(event.target.value)} /></label>
+        <label htmlFor={`${formId}-gravity`}><span>Gravity scale</span><input id={`${formId}-gravity`} type="number" min="0" max="10" step="0.1" value={gravityScale} disabled={locked || !enabled} onChange={(event) => setGravityScale(event.target.value)} /></label>
+        <label htmlFor={`${formId}-stability`}><span>Stability</span><select id={`${formId}-stability`} value={stabilityMode} disabled={locked || !enabled} onChange={(event) => setStabilityMode(event.target.value as typeof stabilityMode)}><option value="report">Report only</option><option value="enforce">Enforce atomically</option></select></label>
+        <label htmlFor={`${formId}-constraints`}><span>Constraints JSON</span><textarea id={`${formId}-constraints`} rows={8} value={constraints} disabled={locked || !enabled} onChange={(event) => setConstraints(event.target.value)} /></label>
+        <p className="workspace-inspector__hint">Fixed, hinge, slider, and ball constraints use local anchors. Hinge/slider axes must be normalized.</p>
+      </div>}
       {!enabled && <p className="workspace-inspector__hint">Physics validation and settling are off. Collision remains independently controlled above.</p>}
       {error && <p className="workspace-inspector__error" role="alert">{error}</p>}
       <button type="submit" disabled={locked}>Apply physics</button>

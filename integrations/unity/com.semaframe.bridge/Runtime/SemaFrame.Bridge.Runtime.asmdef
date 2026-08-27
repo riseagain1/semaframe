@@ -1,0 +1,6 @@
+{
+  "name": "SemaFrame.Bridge.Runtime",
+  "rootNamespace": "SemaFrame.Bridge",
+  "allowUnsafeCode": false,
+  "autoReferenced": true
+}

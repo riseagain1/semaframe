@@ -1,10 +1,16 @@
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { resolveNpmLaunch } from "./lib/npm-launcher.mjs";
+import {
+  createOwnedProcessSupervisor,
+  spawnOwnedProcessTree,
+  stopOwnedProcessTrees,
+} from "./lib/owned-process-tree.mjs";
 import { loadRootEnvironment } from "./lib/root-env.mjs";
 import { buildVoiceRelayNativeHelper } from "./build-voice-relay.mjs";
 
 loadRootEnvironment();
+const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 if (process.env.SEMAFRAME_VOICE_RELAY_SKIP_BUILD !== "1") {
   buildVoiceRelayNativeHelper({ optional: true });
 }
@@ -42,47 +48,68 @@ const viteEnvironment = {
   SEMAFRAME_AGENT_BROWSER_TOKEN: browserBootstrapToken,
 };
 
-function spawnNpm(args, environment) {
+function spawnNpm(args, environment, termGraceMs = 5_000) {
   const launch = resolveNpmLaunch(args);
-  return spawn(launch.command, launch.args, {
+  return spawnOwnedProcessTree(launch.command, launch.args, {
+    cwd: packageRoot,
     stdio: "inherit",
     env: environment,
     shell: false,
     windowsHide: true,
+  }, {
+    termGraceMs,
+    forceGraceMs: 5_000,
   });
 }
 
-const children = [
+const processTrees = [];
+try {
   // Keep the browser UI and gateway on the same source revision during local
   // development. The one-shot agent:gateway script remains available for
-  // production-style and manual launches.
-  spawnNpm(["run", "agent:gateway:watch"], gatewayEnvironment),
-  spawnNpm(viteArguments, viteEnvironment),
-  ...(startXrRenderer
-    ? [spawnNpm(["run", "dev:xr:client"], viteEnvironment)]
-    : []),
-];
-
-let exiting = false;
-function stop(exitCode = 0) {
-  if (exiting) return;
-  exiting = true;
-  for (const child of children) child.kill("SIGTERM");
-  setTimeout(() => process.exit(exitCode), 100).unref();
+  // production-style and manual launches. The Gateway may need its documented
+  // shutdown window to finish or roll back an accepted configuration update.
+  processTrees.push(spawnNpm(["run", "agent:gateway:watch"], gatewayEnvironment, 110_000));
+  processTrees.push(spawnNpm(viteArguments, viteEnvironment));
+  if (startXrRenderer) {
+    processTrees.push(spawnNpm(["run", "dev:xr:client"], viteEnvironment));
+  }
+} catch (startupCause) {
+  try {
+    await stopOwnedProcessTrees(processTrees);
+  } catch (cleanupCause) {
+    throw new AggregateError(
+      [startupCause, cleanupCause],
+      "SemaFrame startup and owned-process cleanup both failed.",
+    );
+  }
+  throw startupCause;
 }
 
-for (const child of children) {
+const supervisor = createOwnedProcessSupervisor(processTrees, {
+  reportFailure: () => {
+    // Avoid printing commands, paths, environment, or child output here.
+    console.error("SemaFrame could not stop every owned development process.");
+  },
+});
+
+for (const { child } of processTrees) {
   child.on("exit", (code, signal) => {
-    if (!exiting) {
+    if (!supervisor.stopping) {
       console.error(`SemaFrame development process stopped (${signal ?? code ?? "unknown"}).`);
-      stop(code ?? 1);
+      void supervisor.stop(code ?? 1);
     }
   });
   child.on("error", (error) => {
     console.error(error.message);
-    stop(1);
+    void supervisor.stop(1);
   });
 }
 
-process.on("SIGINT", () => stop(0));
-process.on("SIGTERM", () => stop(0));
+const alreadyExited = processTrees.find((tree) => tree.exited);
+if (alreadyExited && !supervisor.stopping) {
+  console.error("SemaFrame development process stopped during startup.");
+  void supervisor.stop(alreadyExited.child.exitCode ?? 1);
+}
+
+process.on("SIGINT", () => { void supervisor.stop(0); });
+process.on("SIGTERM", () => { void supervisor.stop(0); });

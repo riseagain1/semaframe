@@ -1,4 +1,8 @@
-import { McpServer, type ServerContext } from "@modelcontextprotocol/server";
+import {
+  McpServer,
+  type RegisteredTool,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import type {
   BeginWorkspacePhotoReconstructionInput,
@@ -30,6 +34,7 @@ export const AGENT_REST_PATHS = Object.freeze({
   inspect_workspace_model: "/v1/workspace/models/inspect",
   inspect_workspace_space: "/v1/workspace/space/inspect",
   query_spatial_placement: "/v1/workspace/space/query",
+  query_layout_placement: "/v1/workspace/layout/query",
   inspect_workspace_physics: "/v1/workspace/physics/inspect",
   query_stable_placement: "/v1/workspace/physics/placement/query",
   simulate_workspace_physics: "/v1/workspace/physics/simulate",
@@ -94,6 +99,8 @@ export type AgentMcpBackend = Readonly<{
 
 export type CreateAgentMcpServerOptions = Readonly<{
   protocolEra?: "legacy" | "modern";
+  /** Observes initial registrations so a long-lived proxy can adopt them. */
+  onToolRegistered?: (name: string, registration: RegisteredTool) => void;
 }>;
 
 /**
@@ -107,43 +114,56 @@ export function createAgentMcpServer(
 ): McpServer {
   const protocolEra = options.protocolEra ?? "legacy";
   const server = new McpServer(AGENT_MCP_SERVER_INFO, {
-    instructions: "SemaFrame is a universal 2D/3D component workspace. Call get_workspace_instructions first and set instruction_digest in every later call to the returned data.guide_digest value. Before spatial work, inspect the SemaFrame Spatial Graph and use collision plus physics placement preflights; inspect_workspace_physics and simulate_workspace_physics expose deterministic support, center-of-mass, constraints, and short settle proposals without mutating the Workspace. To create a component: inspect_workspace, begin_workspace_update, copy its exact envelope and one reserved component ID, copy an exact typeId/version/digest from its capability manifest, then submit one schema-valid batch. In immersive XR, one get_live_xr_context call exposes fresh HMD, body, per-input pose/ray/hit/action, active-source, selection, tracking, and optional Spatial Pin state through its dedicated output schema. Require a matching Workspace revision and acceptable age/tracking quality; Pin coordinates are rendered placement hints, not CAD or survey evidence. Host-control tools only prepare user-visible Voice Relay or XR actions; they never grant OS permissions, arm a target, or synthesize the trusted user gesture required to enter immersive WebXR. A remote HTTP connection requires explicit approval in the open app; the URL itself grants no authority.",
+    instructions: "SemaFrame is a universal 2D/3D component workspace. Call get_workspace_instructions first and set instruction_digest in every later call to the returned data.guide_digest value. Before spatial work, inspect both graphs returned by inspect_workspace_space: spatial_graph is the world3d collision domain and layout_graph is the separate ui2d overlap domain. Use query_spatial_placement for world3d, query_layout_placement for explicit-size canvas2d or viewport panels, and collision plus physics placement preflights for physical structures. 2D panels may visually overlap 3D content; 2D-to-2D and solid 3D-to-3D conflicts remain independently blocked. inspect_workspace_physics and simulate_workspace_physics expose deterministic support, center-of-mass, constraints, and short settle proposals without mutating the Workspace. To create a component: inspect_workspace, begin_workspace_update, copy its exact envelope and one reserved component ID, copy an exact typeId/version/digest from its capability manifest, then submit one schema-valid batch. In immersive XR, one get_live_xr_context call exposes fresh HMD, body, per-input pose/ray/hit/action, active-source, selection, tracking, and optional Spatial Pin state through its dedicated output schema. Require a matching Workspace revision and acceptable age/tracking quality; Pin coordinates are rendered placement hints, not CAD or survey evidence. Host-control tools only prepare user-visible Voice Relay or XR actions; they never grant OS permissions, arm a target, or synthesize the trusted user gesture required to enter immersive WebXR. A remote HTTP connection requires explicit approval in the open app; the URL itself grants no authority.",
   });
 
-  registerWorkspaceTools(server, {
-    dispatch: (name: WorkspaceAgentToolName, input, client) => backend.dispatch(name, input, client),
-    ...(backend.beginAssetImport ? {
-      beginAssetImport: (input: unknown, client: AgentMcpClientContext) => backend.beginAssetImport!(input, client),
-    } : {}),
-    ...(backend.cancelAssetImport ? {
-      cancelAssetImport: (input: unknown, client: AgentMcpClientContext) => backend.cancelAssetImport!(input, client),
-    } : {}),
-    ...(backend.beginPhotoReconstruction ? {
-      beginPhotoReconstruction: (input: BeginWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
-        backend.beginPhotoReconstruction!(input, client),
-    } : {}),
-    ...(backend.startPhotoReconstruction ? {
-      startPhotoReconstruction: (input: StartWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
-        backend.startPhotoReconstruction!(input, client),
-    } : {}),
-    ...(backend.inspectPhotoReconstruction ? {
-      inspectPhotoReconstruction: (input: InspectWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
-        backend.inspectPhotoReconstruction!(input, client),
-    } : {}),
-    ...(backend.cancelPhotoReconstruction ? {
-      cancelPhotoReconstruction: (input: CancelWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
-        backend.cancelPhotoReconstruction!(input, client),
-    } : {}),
-    ...(backend.finalizePhotoReconstruction ? {
-      finalizePhotoReconstruction: (input: FinalizeWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
-        backend.finalizePhotoReconstruction!(input, client),
-    } : {}),
-  }, {
-    protocolEra,
-    registerGuideResource: true,
-  });
+  const originalRegisterTool = server.registerTool.bind(server);
+  if (options.onToolRegistered) {
+    server.registerTool = ((...args: Parameters<McpServer["registerTool"]>) => {
+      const registration = originalRegisterTool(...args);
+      options.onToolRegistered!(args[0], registration);
+      return registration;
+    }) as McpServer["registerTool"];
+  }
 
-  if (backend.hostControl) registerHostControlTools(server, backend.hostControl, protocolEra);
+  try {
+    registerWorkspaceTools(server, {
+      dispatch: (name: WorkspaceAgentToolName, input, client) => backend.dispatch(name, input, client),
+      ...(backend.beginAssetImport ? {
+        beginAssetImport: (input: unknown, client: AgentMcpClientContext) => backend.beginAssetImport!(input, client),
+      } : {}),
+      ...(backend.cancelAssetImport ? {
+        cancelAssetImport: (input: unknown, client: AgentMcpClientContext) => backend.cancelAssetImport!(input, client),
+      } : {}),
+      ...(backend.beginPhotoReconstruction ? {
+        beginPhotoReconstruction: (input: BeginWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+          backend.beginPhotoReconstruction!(input, client),
+      } : {}),
+      ...(backend.startPhotoReconstruction ? {
+        startPhotoReconstruction: (input: StartWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+          backend.startPhotoReconstruction!(input, client),
+      } : {}),
+      ...(backend.inspectPhotoReconstruction ? {
+        inspectPhotoReconstruction: (input: InspectWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+          backend.inspectPhotoReconstruction!(input, client),
+      } : {}),
+      ...(backend.cancelPhotoReconstruction ? {
+        cancelPhotoReconstruction: (input: CancelWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+          backend.cancelPhotoReconstruction!(input, client),
+      } : {}),
+      ...(backend.finalizePhotoReconstruction ? {
+        finalizePhotoReconstruction: (input: FinalizeWorkspacePhotoReconstructionInput, client: AgentMcpClientContext) =>
+          backend.finalizePhotoReconstruction!(input, client),
+      } : {}),
+    }, {
+      protocolEra,
+      registerGuideResource: true,
+    });
+
+    if (backend.hostControl) registerHostControlTools(server, backend.hostControl, protocolEra);
+  } finally {
+    if (options.onToolRegistered) server.registerTool = originalRegisterTool;
+  }
 
   return server;
 }

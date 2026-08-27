@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semaframe.local/schemas/anonymous-performance-diagnostic-v1.json",
+  "title": "SemaFrame anonymous performance diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "category", "environment", "metrics"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "category": { "const": "performance" },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseChannel", "runtime", "renderer", "hardwareTier"],
+      "properties": {
+        "releaseChannel": { "enum": ["stable", "preview", "development"] },
+        "runtime": { "enum": ["browser", "desktop", "xr_viewer"] },
+        "renderer": { "enum": ["webgl", "webgpu", "unknown"] },
+        "hardwareTier": { "enum": ["low", "medium", "high", "unknown"] }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "startup_ms": { "type": "number", "minimum": 0, "maximum": 600000 },
+        "workspace_open_ms": { "type": "number", "minimum": 0, "maximum": 600000 },
+        "command_apply_p95_ms": { "type": "number", "minimum": 0, "maximum": 60000 },
+        "frame_p95_ms": { "type": "number", "minimum": 0, "maximum": 10000 },
+        "dropped_frame_ratio": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

@@ -10,6 +10,20 @@ export type ShutdownHandler = Readonly<{
   close(): Promise<void>;
 }>;
 
+export const MINIMUM_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS = 95_000;
+export const DEFAULT_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS = 105_000;
+
+export function resolveAgentGatewayShutdownTimeout(value: string | undefined): number {
+  if (!value?.trim()) return DEFAULT_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS;
+  const timeoutMs = Number(value);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < MINIMUM_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS) {
+    throw new TypeError(
+      `SEMAFRAME_AGENT_SHUTDOWN_TIMEOUT_MS must be an integer of at least ${MINIMUM_AGENT_GATEWAY_SHUTDOWN_TIMEOUT_MS}.`,
+    );
+  }
+  return timeoutMs;
+}
+
 /** Stops admission first, revokes live authority, then waits for durable cleanup. */
 export async function closeAgentGatewayStack(options: Readonly<{
   server: ShutdownServer;

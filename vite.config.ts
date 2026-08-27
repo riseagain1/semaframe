@@ -1,4 +1,5 @@
-import { defineConfig } from "vitest/config";
+/// <reference types="vitest/config" />
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { externalizeReplicadOpenCascadeWasm } from "./vite.shared";
 
@@ -37,6 +38,44 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/tests/**/*.test.ts", "src/tests/**/*.test.tsx"],
-    setupFiles: ["src/tests/setup.ts"]
+    setupFiles: ["src/tests/setup.ts"],
+    coverage: {
+      provider: "v8",
+      reportsDirectory: "coverage",
+      reporter: ["text-summary", "json-summary", "lcov"],
+      thresholds: {
+        // Ratchet from the first complete core report (85.71 / 79.49 /
+        // 95.05 / 85.71). Keep a small runner/version margin while making
+        // any material coverage regression fail CI.
+        statements: 84,
+        branches: 78,
+        functions: 94,
+        lines: 84,
+      },
+      include: [
+        "src/app/agentExperience.ts",
+        "src/app/lifecycle/**/*.ts",
+        "src/app/recovery/**/*.ts",
+        "src/app/validation/**/*.ts",
+        "src/app/workspaceSourceAtomicCreate.ts",
+        "src/app/components/workspace/workspaceSourceWizard.ts",
+        "src/workspace/agents/**/*.ts",
+        "src/workspace/persistence/**/*.ts",
+        "src/workspace/protocol/**/*.ts",
+        "src/workspace/security/**/*.ts",
+        "src/workspace/state/**/*.ts",
+        "src/xr/authority/**/*.ts",
+        "src/xr/network/**/*.ts",
+        "server/agent/**/*.ts",
+        "server/feed/**/*.ts",
+        "server/xr/**/*.ts",
+      ],
+      exclude: [
+        "**/*.d.ts",
+        "**/*.test.{ts,tsx}",
+        "**/fixtures/**",
+        "src/tests/**",
+      ],
+    },
   }
 });

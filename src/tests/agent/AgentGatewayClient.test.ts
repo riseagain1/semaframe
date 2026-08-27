@@ -5,6 +5,13 @@ import {
   AgentGatewayCommandError,
   AgentGatewayError,
 } from "../../agent/AgentGatewayClient";
+import {
+  SEMAFRAME_CHANGE_PROPOSAL_FORMAT,
+  SEMAFRAME_CHANGE_PROPOSAL_VERSION,
+  SEMAFRAME_EXCHANGE_FORMAT,
+  SEMAFRAME_EXCHANGE_VERSION,
+  type SemaFrameExchangePackage,
+} from "../../bridge";
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(value), {
@@ -95,16 +102,18 @@ function requestBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknow
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("AgentGatewayClient", () => {
-  it("accepts all 34 public commands plus the reconstruction-only internal completion command", () => {
-    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(35);
+  it("accepts all 35 public commands plus the reconstruction-only internal completion command", () => {
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(36);
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("read_workspace_resource_snapshot");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("begin_workspace_photo_reconstruction");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("finalize_workspace_photo_reconstruction");
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("query_layout_placement");
   });
 
   it("binds the browser-owned Fetch implementation before storing it", async () => {
@@ -121,6 +130,130 @@ describe("AgentGatewayClient", () => {
 
     await expect(client.fetchConfig()).resolves.toMatchObject({ enabled: false });
     expect(receiverAwareFetch).toHaveBeenCalledOnce();
+  });
+
+  it("inspects and manages the two closed Agent client installation targets", async () => {
+    const installed = {
+      client: "codex",
+      displayName: "Codex",
+      state: "installed",
+      changed: false,
+      restartRequired: false,
+      detail: "The stable SemaFrame launcher is installed for this client.",
+    } as const;
+    const missing = {
+      client: "claude",
+      displayName: "Claude Code",
+      state: "not_installed",
+      changed: false,
+      restartRequired: false,
+      detail: "SemaFrame is not installed for this client yet.",
+    } as const;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })))
+      .mockResolvedValueOnce(jsonResponse({ version: 1, clients: [installed, missing] }))
+      .mockResolvedValueOnce(jsonResponse({
+        ...missing,
+        state: "installed",
+        changed: true,
+        restartRequired: true,
+        detail: "The stable SemaFrame launcher is installed for this client.",
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-installs",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.getAgentClientInstallations()).resolves.toEqual({
+      version: 1,
+      clients: [installed, missing],
+    });
+    await expect(client.manageAgentClientInstallation("claude", "install")).resolves.toMatchObject({
+      client: "claude",
+      state: "installed",
+      changed: true,
+      restartRequired: true,
+    });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/browser/installations/status",
+      "/api/agent/browser/installations/install",
+    ]);
+    expect(requestBody(fetchMock, 1)).toEqual({});
+    expect(requestBody(fetchMock, 2)).toEqual({ client: "claude" });
+    expect((fetchMock.mock.calls[2]?.[1] as RequestInit).headers).toMatchObject({
+      "X-SemaFrame-Agent-CSRF": "csrf-memory-only",
+    });
+  });
+
+  it("rejects forged installation targets and malformed health responses", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })))
+      .mockResolvedValueOnce(jsonResponse({
+        version: 1,
+        clients: [{
+          client: "codex",
+          displayName: "Codex",
+          state: "installed",
+          changed: false,
+          restartRequired: false,
+          detail: "/private/path",
+        }],
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-install-invalid",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.getAgentClientInstallations()).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(client.manageAgentClientInstallation("vscode" as "codex", "install"))
+      .rejects.toMatchObject({ code: "invalid_configuration" });
+    await expect(client.manageAgentClientInstallation("codex", "exec" as "install"))
+      .rejects.toMatchObject({ code: "invalid_configuration" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes an expired CSRF token once before an installation mutation", async () => {
+    const installed = {
+      client: "codex",
+      displayName: "Codex",
+      state: "installed",
+      changed: true,
+      restartRequired: true,
+      detail: "The stable SemaFrame launcher is installed for this client.",
+    } as const;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })))
+      .mockResolvedValueOnce(jsonResponse({
+        error: { code: "csrf_invalid", message: "Expired." },
+      }, 403))
+      .mockResolvedValueOnce(jsonResponse(config({
+        gatewayInstanceId: "gateway-instance-restarted",
+        csrfToken: "csrf-after-restart",
+        enabled: false,
+      })))
+      .mockResolvedValueOnce(jsonResponse(installed));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-install-recovery",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.manageAgentClientInstallation("codex", "update")).resolves.toEqual(installed);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/browser/installations/update",
+      "/api/agent/config",
+      "/api/agent/browser/installations/update",
+    ]);
+    expect((fetchMock.mock.calls[3]?.[1] as RequestInit).headers).toMatchObject({
+      "X-SemaFrame-Agent-CSRF": "csrf-after-restart",
+    });
   });
 
   it("bounds UI requests that do not carry a caller cancellation signal", async () => {
@@ -140,6 +273,178 @@ describe("AgentGatewayClient", () => {
       code: "request_failed",
       message: "The local agent gateway request timed out.",
     });
+  });
+
+  it("keeps installation requests alive past the ordinary UI budget but still bounds them", async () => {
+    vi.useFakeTimers();
+    let installationSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (fetchMock.mock.calls.length === 1) {
+        return Promise.resolve(jsonResponse(config({ enabled: false })));
+      }
+      installationSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        installationSignal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-install-timeout",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    const pending = client.manageAgentClientInstallation("codex", "install");
+    const timedOut = expect(pending).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+    await vi.advanceTimersByTimeAsync(12_001);
+    expect(installationSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(82_999);
+    await timedOut;
+    expect(installationSignal?.aborted).toBe(true);
+  });
+
+  it("retains an internal timeout when the caller supplies a cancellation signal", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-signal-timeout",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.fetchConfig(new AbortController().signal)).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+  });
+
+  it("keeps the request deadline active through a delayed successful JSON body", async () => {
+    vi.useFakeTimers();
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) { bodyController = controller; },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-success",
+      requestTimeoutMs: 50,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    let settled = false;
+    const pending = client.fetchConfig().finally(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(settled).toBe(false);
+    expect(requestSignal?.aborted).toBe(false);
+    bodyController.enqueue(new TextEncoder().encode(JSON.stringify(config({ enabled: false }))));
+    bodyController.close();
+    await expect(pending).resolves.toMatchObject({ enabled: false });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
+  it("times out a successful response whose JSON body outlives the request deadline", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-success-timeout",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    const pending = client.fetchConfig();
+    const timedOut = expect(pending).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+    await vi.advanceTimersByTimeAsync(5);
+    await timedOut;
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("bounds a delayed non-success response body before parsing its gateway error", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({}), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-error",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    const pending = client.fetchConfig();
+    const timedOut = expect(pending).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request timed out.",
+    });
+    await vi.advanceTimersByTimeAsync(5);
+    await timedOut;
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("propagates caller cancellation while a successful response body is still pending", async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined;
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-delayed-caller-abort",
+      requestTimeoutMs: 5_000,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+    const controller = new AbortController();
+    const reason = new DOMException("cancelled delayed body", "AbortError");
+
+    const pending = client.fetchConfig(controller.signal);
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(requestSignal?.reason).toBe(reason);
   });
 
   it("fetches an explicitly approved host feed with the configured CSRF token without enabling Agent control", async () => {
@@ -326,13 +631,13 @@ describe("AgentGatewayClient", () => {
   });
 
   it("rejects an asset stream whose digest-bearing headers drift from its inspected descriptor", async () => {
+    const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array([1, 2, 3, 4]));
-        controller.close();
       },
+      cancel,
     });
-    const cancel = vi.spyOn(stream, "cancel");
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse(config({ enabled: true })))
       .mockResolvedValueOnce(jsonResponse(assetCandidate()))
@@ -523,6 +828,58 @@ describe("AgentGatewayClient", () => {
     expect(handler).not.toHaveBeenCalled();
     expect(client.status).toBe("disabled");
     expect(client.running).toBe(false);
+  });
+
+  it("keeps an idle browser poll alive beyond the ordinary UI request deadline", async () => {
+    vi.useFakeTimers();
+    let resolvePollStarted!: () => void;
+    const pollStarted = new Promise<void>((resolve) => { resolvePollStarted = resolve; });
+    let pollSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (input === "/api/agent/config") return Promise.resolve(jsonResponse(config()));
+      if (input === "/api/agent/browser/register") {
+        return Promise.resolve(jsonResponse({ browserConnectionId: "browser-connection-idle" }));
+      }
+      if (input === "/api/agent/browser/poll") {
+        pollSignal = init?.signal ?? undefined;
+        resolvePollStarted();
+        return new Promise<Response>((_resolve, reject) => {
+          pollSignal?.addEventListener(
+            "abort",
+            () => reject(pollSignal?.reason ?? new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      if (input === "/api/agent/browser/unregister") return Promise.resolve(new Response(null, { status: 204 }));
+      throw new Error(`Unexpected Agent Gateway request: ${String(input)}`);
+    });
+    const statuses: string[] = [];
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-idle-poll",
+      requestTimeoutMs: 5,
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+      onStatus: (status) => statuses.push(status),
+    });
+    let outcome: unknown;
+    const running = client.start().then(
+      () => { outcome = "resolved"; },
+      (error: unknown) => { outcome = error; },
+    );
+
+    await pollStarted;
+    await vi.advanceTimersByTimeAsync(12_001);
+    expect(pollSignal?.aborted).toBe(false);
+    expect(outcome).toBeUndefined();
+    expect(statuses).toEqual(["waiting"]);
+
+    client.stop();
+    await running;
+    expect(outcome).toBe("resolved");
+    expect(pollSignal?.aborted).toBe(true);
+    expect(statuses).toEqual(["waiting", "disconnected"]);
   });
 
   it("registers, dispatches exact command input, and returns a structured result", async () => {
@@ -1070,5 +1427,127 @@ describe("AgentGatewayClient", () => {
     expect(requestBody(fetchMock, 1)).toEqual({ action: "voice_relay_accessibility" });
     await expect(client.mintVoiceRelayHostAction("forged" as "voice_relay_arm"))
       .rejects.toMatchObject({ code: "invalid_configuration" });
+  });
+
+  it("creates a scoped Scene Bridge, republishes, and reads review-only proposals", async () => {
+    const exchangeDigest = `sha256:${"a".repeat(64)}` as const;
+    const exchange = {
+      format: "semaframe-exchange-package",
+      version: SEMAFRAME_EXCHANGE_VERSION,
+      archive: {
+        path: "workspace.semaframe-exchange",
+        mediaType: "application/vnd.semaframe.exchange+zip",
+        byteLength: 4,
+        sha256: exchangeDigest,
+        bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+      },
+      files: [],
+      manifest: {
+        format: SEMAFRAME_EXCHANGE_FORMAT,
+        version: SEMAFRAME_EXCHANGE_VERSION,
+        generator: { name: "SemaFrame", version: "test" },
+        source: {
+          workspaceId: "WORKSPACE",
+          revision: 3,
+          workspaceDigest: `sha256:${"0".repeat(64)}`,
+          registryDigest: "fnv1a32:11111111",
+        },
+        coordinateSystem: { units: "metre", handedness: "right", upAxis: "Y", angles: "radian" },
+        nodes: [],
+        resources: [],
+        connections: [],
+        files: [],
+        roundTrip: { stableIds: true, directMutation: false, editsReturnAs: "reviewable_change_proposal" },
+      },
+      report: {
+        format: "semaframe-fidelity-report",
+        version: SEMAFRAME_EXCHANGE_VERSION,
+        outcome: "passed_with_limitations",
+        source: {
+          workspaceId: "WORKSPACE",
+          revision: 3,
+          workspaceDigest: `sha256:${"0".repeat(64)}`,
+          registryDigest: "fnv1a32:11111111",
+        },
+        items: [],
+        summary: { exact: 0, parametric: 0, visual: 0, semantic: 0 },
+        limitations: ["test"],
+      },
+    } satisfies SemaFrameExchangePackage;
+    const access = {
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      bearer: "b".repeat(43),
+      target: "blender",
+      expiresAt: "2026-08-15T04:00:00.000Z",
+      pullUrl: "https://scene.test/v1/bridge/sessions/11111111-1111-4111-8111-111111111111",
+      exchangeUrl: "https://scene.test/v1/bridge/sessions/11111111-1111-4111-8111-111111111111/exchange",
+    };
+    const proposal = {
+      format: SEMAFRAME_CHANGE_PROPOSAL_FORMAT,
+      version: SEMAFRAME_CHANGE_PROPOSAL_VERSION,
+      proposalId: "blender-1",
+      target: "blender",
+      source: { workspaceId: "WORKSPACE", baseRevision: 3, exchangeDigest },
+      changes: [{
+        changeId: "move-1",
+        kind: "transform",
+        componentId: "CUBE",
+        placement: {
+          space: "world3d",
+          position: { x: 1, y: 2, z: 3 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      }],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config()))
+      .mockResolvedValueOnce(jsonResponse(access, 201))
+      .mockResolvedValueOnce(jsonResponse({ publication: { sequence: 2 } }))
+      .mockResolvedValueOnce(jsonResponse({ proposals: [{
+        cursor: 1,
+        receivedAt: "2026-08-15T03:05:00.000Z",
+        proposal,
+      }] }))
+      .mockResolvedValueOnce(jsonResponse({ discardedThroughCursor: 1 }))
+      .mockResolvedValueOnce(jsonResponse({ closed: true }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-scene-bridge",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.createBridgeSession("blender", exchange)).resolves.toEqual(access);
+    const createInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(createInit.headers).toMatchObject({ "X-SemaFrame-Agent-CSRF": "csrf-memory-only" });
+    expect(createInit.body).toBeInstanceOf(FormData);
+    expect(JSON.parse(String((createInit.body as FormData).get("metadata")))).toMatchObject({
+      target: "blender",
+      sequence: 1,
+      exchangeDigest,
+    });
+    expect(String(createInit.headers)).not.toContain(access.bearer);
+
+    await expect(client.publishBridgeSession(access.sessionId, 2, exchange)).resolves.toBeUndefined();
+    await expect(client.readBridgeProposals(access.sessionId)).resolves.toMatchObject([{
+      cursor: 1,
+      proposal: { proposalId: "blender-1" },
+    }]);
+    await expect(client.discardBridgeProposals(access.sessionId, 1)).resolves.toBeUndefined();
+    await expect(client.closeBridgeSession(access.sessionId)).resolves.toBeUndefined();
+    client.releaseBridgeSession(access.sessionId);
+    const releaseInit = fetchMock.mock.calls[6]?.[1] as RequestInit;
+    expect(releaseInit).toMatchObject({ method: "POST", keepalive: true, body: "{}" });
+    expect(releaseInit.headers).toMatchObject({ "X-SemaFrame-Agent-CSRF": "csrf-memory-only" });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/bridge/sessions",
+      `/api/agent/bridge/sessions/${access.sessionId}/publish`,
+      `/api/agent/bridge/sessions/${access.sessionId}/proposals/read`,
+      `/api/agent/bridge/sessions/${access.sessionId}/proposals/discard`,
+      `/api/agent/bridge/sessions/${access.sessionId}/close`,
+      `/api/agent/bridge/sessions/${access.sessionId}/close`,
+    ]);
   });
 });

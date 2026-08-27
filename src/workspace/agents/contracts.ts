@@ -6,7 +6,7 @@
  */
 
 export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "3.0" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "3.2" as const;
 /** Final JSON cap for one public inspect_workspace_component result. */
 export const WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES = 1_048_576;
 /**
@@ -105,6 +105,7 @@ export const WORKSPACE_AGENT_TOOL_NAMES = [
   "inspect_workspace_model",
   "inspect_workspace_space",
   "query_spatial_placement",
+  "query_layout_placement",
   "inspect_workspace_physics",
   "query_stable_placement",
   "simulate_workspace_physics",
@@ -303,9 +304,17 @@ export type WorkspaceSpatialStateView = Readonly<{
   revision: number;
   registryDigest: string;
   spatialGraph: JSONValue;
+  layoutGraph: JSONValue;
 }>;
 
 export type WorkspaceSpatialPlacementView = Readonly<{
+  workspaceId: string;
+  revision: number;
+  registryDigest: string;
+  placementCheck: JSONValue;
+}>;
+
+export type WorkspaceLayoutPlacementView = Readonly<{
   workspaceId: string;
   revision: number;
   registryDigest: string;
@@ -405,6 +414,10 @@ export interface WorkspaceEnginePort {
     candidate: unknown,
     principal: WorkspaceAgentPrincipal,
   ): WorkspaceSpatialPlacementView | Promise<WorkspaceSpatialPlacementView>;
+  queryLayoutPlacement(
+    candidate: unknown,
+    principal: WorkspaceAgentPrincipal,
+  ): WorkspaceLayoutPlacementView | Promise<WorkspaceLayoutPlacementView>;
   inspectPhysics(
     componentIds: readonly string[] | undefined,
     principal: WorkspaceAgentPrincipal,

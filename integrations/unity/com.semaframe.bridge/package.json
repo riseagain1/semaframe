@@ -1,0 +1,19 @@
+{
+  "name": "com.semaframe.bridge",
+  "version": "1.0.0",
+  "displayName": "SemaFrame Bridge",
+  "description": "Pull immutable SemaFrame Scene Exchanges and submit reviewable transform proposals.",
+  "unity": "6000.0",
+  "author": {
+    "name": "SemaFrame Contributors"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  },
+  "keywords": [
+    "semaframe",
+    "openusd",
+    "scene-exchange"
+  ]
+}

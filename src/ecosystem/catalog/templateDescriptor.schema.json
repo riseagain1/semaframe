@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semaframe.local/schemas/template-descriptor-v1.json",
+  "title": "SemaFrame project or model template descriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "id", "version", "title", "summary", "license", "minimumAppVersion", "requiredPermissions", "operations"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "kind": { "enum": ["project", "model"] },
+    "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "license": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "minimumAppVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+    "requiredPermissions": { "type": "array", "uniqueItems": true, "maxItems": 17, "items": { "type": "string" } },
+    "operations": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
+    "newProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suggestedTitle"],
+      "properties": { "suggestedTitle": { "type": "string", "minLength": 1, "maxLength": 240 } }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "project" } }, "required": ["kind"] },
+      "then": { "properties": { "newProject": true }, "required": ["newProject"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "model" } }, "required": ["kind"] },
+      "then": { "not": { "required": ["newProject"] } }
+    }
+  ]
+}

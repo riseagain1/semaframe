@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceSourcePanel } from "../../app/components/workspace";
@@ -69,13 +69,19 @@ describe("WorkspaceSourcePanel", () => {
       onSaveInlineSource={onSave}
     />);
 
+    await user.click(screen.getByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: /Local JSON \/ CSV/u }));
     await user.clear(screen.getByRole("textbox", { name: "Source label" }));
     await user.type(screen.getByRole("textbox", { name: "Source label" }), "ACME intraday");
     await user.selectOptions(screen.getByRole("combobox", { name: "Format" }), "csv");
     fireEvent.change(screen.getByRole("textbox", { name: "Snapshot data" }), {
       target: { value: "time,Close\n09:30,188.4\n09:31,189.1" },
     });
-    await user.selectOptions(screen.getByRole("combobox", { name: "Bind to component (optional)" }), "CMP_chart");
+    await user.click(screen.getByRole("button", { name: "Preview snapshot" }));
+    expect(screen.getByRole("region", { name: "Snapshot preview" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Choose destination" }));
+    await user.click(screen.getByRole("radio", { name: /Use an existing component/u }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Existing component" }), "CMP_chart");
     expect(screen.getByText(/automatically binds \$\.labels and \$\.series/u)).toBeVisible();
     expect(screen.getByText(/no URL is fetched/u)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save snapshot" }));
@@ -121,6 +127,8 @@ describe("WorkspaceSourcePanel", () => {
       onSaveHostFeed={onSaveHostFeed}
     />);
 
+    await user.click(screen.getByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: /Public HTTPS feed/u }));
     await user.type(screen.getByRole("textbox", { name: "HTTPS feed URL" }), "https://feeds.example.test/news.xml");
     await user.selectOptions(screen.getByRole("combobox", { name: "Feed format" }), "rss");
     await user.selectOptions(screen.getByRole("combobox", { name: "Refresh policy" }), "interval");
@@ -139,7 +147,9 @@ describe("WorkspaceSourcePanel", () => {
     });
     expect(await screen.findByText(/RSS from https:\/\/cdn\.example\.test/u)).toBeVisible();
     expect(screen.getByText(/Publisher: Example News/u)).toBeVisible();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Bind feed to component (optional)" }), "CMP_data");
+    await user.click(screen.getByRole("button", { name: "Choose destination" }));
+    await user.click(screen.getByRole("radio", { name: /Use an existing component/u }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Existing component" }), "CMP_data");
     expect(screen.getByText(/complete feed automatically binds/u)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save feed" }));
 
@@ -239,13 +249,17 @@ describe("WorkspaceSourcePanel", () => {
       onSaveHostFeed={onSaveHostFeed}
     />);
 
+    await user.click(screen.getByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: /Public HTTPS feed/u }));
     await user.type(screen.getByRole("textbox", { name: "HTTPS feed URL" }), feed.requestedUrl);
     await user.selectOptions(screen.getByRole("combobox", { name: "Refresh policy" }), "interval");
     await user.clear(screen.getByRole("spinbutton", { name: "Refresh interval (seconds)" }));
     await user.type(screen.getByRole("spinbutton", { name: "Refresh interval (seconds)" }), "45");
     await user.click(screen.getByRole("button", { name: "Preview feed" }));
     await screen.findByText(/JSON from https:\/\/cdn\.example\.test/u);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Bind feed to component (optional)" }), "CMP_data");
+    await user.click(screen.getByRole("button", { name: "Choose destination" }));
+    await user.click(screen.getByRole("radio", { name: /Use an existing component/u }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Existing component" }), "CMP_data");
     await user.click(screen.getByRole("button", { name: "Save feed" }));
 
     expect(onSaveHostFeed).toHaveBeenCalledWith(expect.objectContaining({
@@ -354,11 +368,14 @@ describe("WorkspaceSourcePanel", () => {
     expect(screen.getByRole("combobox", { name: "Refresh policy" })).toHaveValue("on_open");
     await user.click(screen.getByRole("button", { name: "Preview feed" }));
     expect(await screen.findByRole("region", { name: "Feed preview" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back to edit" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Refresh policy" }), "manual");
     expect(screen.queryByRole("region", { name: "Feed preview" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Update feed" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Preview feed" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Bind feed to component (optional)" }), "CMP_second");
+    await user.click(screen.getByRole("button", { name: "Choose destination" }));
+    await user.click(screen.getByRole("radio", { name: /Use an existing component/u }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Existing component" }), "CMP_second");
     await user.click(screen.getByRole("button", { name: "Update feed" }));
     expect(onSaveHostFeed).toHaveBeenCalledWith(expect.objectContaining({
       resourceId: "RES_feed",
@@ -376,5 +393,84 @@ describe("WorkspaceSourcePanel", () => {
     expect(onDeleteSource).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Confirm delete" }));
     expect(onDeleteSource).toHaveBeenCalledWith("RES_feed");
+  });
+
+  it("requests one atomic create-and-bind command for a new destination", async () => {
+    const user = userEvent.setup();
+    const onSaveInlineSource = vi.fn(() => true);
+    const onCommitSourceWithNewTarget = vi.fn(async () => true);
+    render(<WorkspaceSourcePanel
+      sources={[]}
+      onSaveInlineSource={onSaveInlineSource}
+      onCommitSourceWithNewTarget={onCommitSourceWithNewTarget}
+    />);
+
+    await user.click(screen.getByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: /Local JSON \/ CSV/u }));
+    await user.click(screen.getByRole("button", { name: "Preview snapshot" }));
+    await user.click(screen.getByRole("button", { name: "Choose destination" }));
+    await user.click(screen.getByRole("radio", { name: /Create a new component/u }));
+    await user.click(screen.getByRole("button", { name: "Save snapshot" }));
+
+    expect(onSaveInlineSource).not.toHaveBeenCalled();
+    expect(onCommitSourceWithNewTarget).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "local",
+      source: expect.objectContaining({ label: "Market snapshot", format: "json" }),
+      destination: expect.objectContaining({
+        mode: "create",
+        componentType: "data-panel",
+        mapping: expect.objectContaining({
+          targetType: "data-panel",
+          bindings: [{ targetProp: "data", sourcePath: "$", transform: { kind: "identity" } }],
+        }),
+      }),
+    }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Source connected");
+  });
+
+  it("ignores a host preview that resolves after close or a project generation change", async () => {
+    const user = userEvent.setup();
+    const retrievedAt = "2026-08-15T03:04:05.000Z";
+    const result = {
+      version: 1 as const,
+      requestedUrl: "https://feeds.example.test/data.json",
+      finalUrl: "https://feeds.example.test/data.json",
+      format: "json" as const,
+      contentType: "application/json",
+      retrievedAt,
+      outputSchema: { type: "object" },
+      snapshot: {
+        data: { value: 4 },
+        contentHash: "sha256:test",
+        retrievedAt,
+        stale: false,
+        provenance: [{ publisher: "Example", retrievedAt }],
+      },
+    };
+    let resolvePreview: ((value: typeof result) => void) | undefined;
+    const onPreviewHostFeed = vi.fn(() => new Promise<typeof result>((resolve) => { resolvePreview = resolve; }));
+    const props = {
+      sources: [],
+      onPreviewHostFeed,
+      onSaveHostFeed: vi.fn(async () => true),
+    } as const;
+    const { rerender } = render(<WorkspaceSourcePanel {...props} scopeKey="project-a" />);
+
+    await user.click(screen.getByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: /Public HTTPS feed/u }));
+    await user.type(screen.getByRole("textbox", { name: "HTTPS feed URL" }), result.requestedUrl);
+    await user.click(screen.getByRole("button", { name: "Preview feed" }));
+    rerender(<WorkspaceSourcePanel {...props} scopeKey="project-b" />);
+    await act(async () => { resolvePreview?.(result); });
+    expect(screen.queryByRole("region", { name: "Feed preview" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Source setup" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: /Public HTTPS feed/u }));
+    await user.type(screen.getByRole("textbox", { name: "HTTPS feed URL" }), result.requestedUrl);
+    await user.click(screen.getByRole("button", { name: "Preview feed" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await act(async () => { resolvePreview?.(result); });
+    expect(screen.queryByRole("region", { name: "Feed preview" })).not.toBeInTheDocument();
   });
 });

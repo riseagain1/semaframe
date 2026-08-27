@@ -3,10 +3,15 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { hostHeaderValidation } from "@modelcontextprotocol/node";
 import { loadRootEnvironment } from "../../scripts/lib/root-env.mjs";
+import { createAgentInstallationService } from "../../scripts/lib/agent-installation.mjs";
 import { AgentGateway } from "./AgentGateway";
+import { AgentClientInstallationService } from "./AgentClientInstallationService";
 import { createNodeAgentGatewayHttpHandler } from "./AgentGatewayHttpHandler";
 import { resolveAgentGatewayNetworkConfig } from "./AgentGatewayNetworkConfig";
-import { closeAgentGatewayStack } from "./shutdown";
+import {
+  closeAgentGatewayStack,
+  resolveAgentGatewayShutdownTimeout,
+} from "./shutdown";
 import { createWindowsUltraEvidenceProvider } from "../xr";
 import {
   VoiceRelayService,
@@ -44,6 +49,10 @@ function allowedOrigins(
 
 const network = resolveAgentGatewayNetworkConfig(process.env);
 const { bindHost: host, port, publicBaseUrl } = network;
+// Installed launchers always use the listener's fixed loopback entrance, never
+// an advertised reverse-proxy/LAN origin.
+const bootstrapHost = host === "::1" ? "[::1]" : host;
+const bootstrapBaseUrl = `http://${bootstrapHost}:${port}`;
 const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/u, "");
 const browserOrigins = [
   ...new Set([
@@ -57,7 +66,9 @@ const xrRendererOrigins = allowedOrigins(
   "http://127.0.0.1:4174,http://localhost:4174",
 );
 const bodyLimitBytes = positiveInteger("SEMAFRAME_AGENT_BODY_LIMIT_BYTES", 512 * 1024);
-const shutdownTimeoutMs = positiveInteger("SEMAFRAME_AGENT_SHUTDOWN_TIMEOUT_MS", 15_000);
+const shutdownTimeoutMs = resolveAgentGatewayShutdownTimeout(
+  process.env.SEMAFRAME_AGENT_SHUTDOWN_TIMEOUT_MS,
+);
 const browserBootstrapToken = process.env.SEMAFRAME_AGENT_BROWSER_TOKEN?.trim()
   || randomBytes(32).toString("base64url");
 if (!/^[A-Za-z0-9_-]{43}$/u.test(browserBootstrapToken)) {
@@ -76,9 +87,15 @@ const voiceRelayNative = await createVoiceRelayNativeClient({
   requestTimeoutMs: positiveInteger("SEMAFRAME_VOICE_RELAY_REQUEST_TIMEOUT_MS", 15_000),
 }).catch(() => undefined);
 const voiceRelayService = voiceRelayNative ? new VoiceRelayService(voiceRelayNative) : undefined;
+const clientInstallations = new AgentClientInstallationService(createAgentInstallationService({
+  packageRoot: workspaceRoot,
+  environment: process.env,
+  gatewayUrl: bootstrapBaseUrl,
+}));
 
 const gateway = new AgentGateway({
   publicBaseUrl,
+  bootstrapBaseUrl,
   workspaceRoot,
   commandTimeoutMs: positiveInteger("SEMAFRAME_AGENT_COMMAND_TIMEOUT_MS", 45_000),
   pollTimeoutMs: positiveInteger("SEMAFRAME_AGENT_POLL_TIMEOUT_MS", 25_000),
@@ -91,6 +108,7 @@ const handle = createNodeAgentGatewayHttpHandler(gateway, {
   publicBaseUrl,
   bodyLimitBytes,
   browserBootstrapToken,
+  clientInstallations,
   xrRendererOrigins,
   ...(xrUltraEvidence ? { xrUltraEvidence } : {}),
   ...(voiceRelayService ? { voiceRelayService } : {}),

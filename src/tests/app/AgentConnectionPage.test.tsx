@@ -16,7 +16,7 @@ import {
   restoreAgentBrowserBridge,
   shouldClearRealityMeasurementForWorkspaceGate,
   stopXrSessionsForProjectReplacement,
-} from "../../app/App";
+} from "../../app/lifecycle";
 
 afterEach(() => {
   cleanup();
@@ -556,6 +556,129 @@ describe("AgentConnectionPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Release this tab" }));
     expect(onDisableAgentControl).toHaveBeenCalledOnce();
+  });
+
+  it("shows install health without offering actions for an unavailable client", () => {
+    const onManageAgentInstallation = vi.fn();
+    render(<AgentConnectionPage {...connectionProps({
+      status: "disabled",
+      agentInstallations: {
+        version: 1,
+        clients: [{
+          client: "codex",
+          displayName: "Codex",
+          state: "installed",
+          changed: false,
+          restartRequired: false,
+          detail: "The stable SemaFrame launcher is installed for this client.",
+        }, {
+          client: "claude",
+          displayName: "Claude Code",
+          state: "client_unavailable",
+          changed: false,
+          restartRequired: false,
+          detail: "This client is not available on this computer.",
+        }],
+      },
+      onManageAgentInstallation,
+    })} />);
+
+    expect(screen.getByRole("heading", { name: "Connect your Agent client automatically" })).toBeVisible();
+    expect(screen.getByText("The stable SemaFrame launcher is installed for this client.")).toBeVisible();
+    expect(screen.getByText("This client is not available on this computer.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Remove SemaFrame from Codex" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Claude Code/i })).not.toBeInTheDocument();
+  });
+
+  it("installs a missing client and explains its one-time restart", async () => {
+    const user = userEvent.setup();
+    const onManageAgentInstallation = vi.fn(async () => ({
+      client: "claude" as const,
+      displayName: "Claude Code" as const,
+      state: "installed" as const,
+      changed: true,
+      restartRequired: true,
+      detail: "The stable SemaFrame launcher is installed for this client.",
+    }));
+    render(<AgentConnectionPage {...connectionProps({
+      status: "disabled",
+      agentInstallations: {
+        version: 1,
+        clients: [{
+          client: "codex",
+          displayName: "Codex",
+          state: "client_unavailable",
+          changed: false,
+          restartRequired: false,
+          detail: "This client is not available on this computer.",
+        }, {
+          client: "claude",
+          displayName: "Claude Code",
+          state: "not_installed",
+          changed: false,
+          restartRequired: false,
+          detail: "SemaFrame is not installed for this client yet.",
+        }],
+      },
+      onManageAgentInstallation,
+    })} />);
+
+    await user.click(screen.getByRole("button", { name: "Install" }));
+    expect(onManageAgentInstallation).toHaveBeenCalledWith("claude", "install");
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Restart Claude Code once to load the stable connection",
+    );
+  });
+
+  it("does not report success when a managed client entry conflicts", async () => {
+    const user = userEvent.setup();
+    render(<AgentConnectionPage {...connectionProps({
+      status: "disabled",
+      agentInstallations: {
+        version: 1,
+        clients: [{
+          client: "codex",
+          displayName: "Codex",
+          state: "outdated",
+          changed: false,
+          restartRequired: false,
+          detail: "This client has an older SemaFrame launcher configuration.",
+        }, {
+          client: "claude",
+          displayName: "Claude Code",
+          state: "client_unavailable",
+          changed: false,
+          restartRequired: false,
+          detail: "This client is not available on this computer.",
+        }],
+      },
+      onManageAgentInstallation: vi.fn(async () => ({
+        client: "codex" as const,
+        displayName: "Codex" as const,
+        state: "conflict" as const,
+        changed: false,
+        restartRequired: false,
+        detail: "A different SemaFrame configuration already uses the managed client entry.",
+      })),
+    })} />);
+
+    await user.click(screen.getByRole("button", { name: "Update" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("A different SemaFrame configuration");
+    expect(screen.queryByText(/SemaFrame was updated/i)).not.toBeInTheDocument();
+  });
+
+  it("renders explicit host unavailability and keeps refresh available", async () => {
+    const user = userEvent.setup();
+    const onRefreshAgentInstallations = vi.fn().mockResolvedValue(undefined);
+    render(<AgentConnectionPage {...connectionProps({
+      status: "disabled",
+      agentInstallationsUnavailable: "Automatic Agent client setup is unavailable in this Gateway host.",
+      onRefreshAgentInstallations,
+    })} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Automatic Agent client setup is unavailable");
+    await user.click(screen.getByRole("button", { name: "Refresh Agent client installation status" }));
+    expect(onRefreshAgentInstallations).toHaveBeenCalledOnce();
   });
 });
 

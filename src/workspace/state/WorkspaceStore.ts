@@ -57,6 +57,10 @@ import {
   type SpatialCollisionConflict,
 } from "../spatial";
 import {
+  findWorsenedLayoutOverlaps,
+  type LayoutOverlapConflict,
+} from "../layout";
+import {
   enforcedPhysicsIssues,
   spatialPhysicsConfigFromProps,
   type PhysicsIssue,
@@ -142,6 +146,22 @@ export class SpatialCollisionStoreError extends WorkspaceStoreError {
       "spatial_collision",
     );
     this.name = "SpatialCollisionStoreError";
+  }
+}
+
+/**
+ * A 2D authoring-layout failure. This is deliberately separate from physical
+ * 3D collision: UI rectangles and world solids never share an occupancy
+ * domain, even when their projections happen to cover the same pixels.
+ */
+export class LayoutOverlapStoreError extends WorkspaceStoreError {
+  constructor(readonly conflicts: readonly LayoutOverlapConflict[]) {
+    const first = conflicts[0]!;
+    super(
+      `2D layout overlap: ${first.componentId} intersects ${first.conflictsWith}`,
+      "layout_overlap",
+    );
+    this.name = "LayoutOverlapStoreError";
   }
 }
 
@@ -1644,6 +1664,14 @@ export class WorkspaceStore {
       );
     }
 
+    // Existing projects may contain legacy 2D overlaps. Keep them openable and
+    // repairable, but reject any transaction that introduces a new pair or
+    // increases an existing overlap. Historical replay/undo restores recorded
+    // fact and therefore bypasses this forward-authoring gate.
+    if (!replayingResolvedOperations) {
+      const worsenedLayout = findWorsenedLayoutOverlaps(before, draft);
+      if (worsenedLayout.length) throw new LayoutOverlapStoreError(worsenedLayout.slice(0, 20));
+    }
     this.validateState(draft);
     draft.revision = resultingRevision;
     const durableOperations = structuredClone(resolvedOperations);

@@ -36,7 +36,10 @@ npm test -- --run --maxWorkers=2
 npm run test:cad:bundle
 npm run test:csg:bundle
 npm run test:reality:runtime
+npm run test:p2:ecosystem
 ```
+
+`test:p2:ecosystem` covers extension and provider contracts, portable projects, Scene Exchange, and host-independent adapter checks. It executes the pure Python setup/archive behavior for Blender, FreeCAD, and Unreal, but cannot launch those applications or compile Unity C#; changes to a first-party adapter still require the physical-host matrix in [`docs/bridges/compatibility.md`](docs/bridges/compatibility.md) before a supported-host release claim.
 
 Changes to connection, rendering, persistence, or browser security should also run the relevant smoke flow when the environment provides Chrome:
 
@@ -55,6 +58,19 @@ npm run smoke:agent
 - Physics and spatial claims must state modeled and unmodeled properties honestly.
 
 When a public contract changes, update its JSON Schema, TypeScript type, controller or adapter, Agent guide, focused regression, and at least one cross-layer test together.
+
+## Community templates
+
+Project and model templates are declarative Workspace Protocol transactions, not installer scripts. A contribution must:
+
+- conform to `src/ecosystem/catalog/templateDescriptor.schema.json` and the stricter runtime parser;
+- use exact, digest-pinned component references and declare every permission required by its operations;
+- contain no executable installer hook, credential, remote script, or implicit authorization;
+- keep component IDs and placements deterministic, with no blocking 2D or 3D overlap;
+- state its SPDX license and include attribution for any bundled asset;
+- add a conformance test under `src/tests/ecosystem/`.
+
+Catalog entries are merged only after the descriptor bytes are assigned a SHA-256 digest. Release maintainers publish the signed catalog sequence; contributors never submit or reuse a release signing key. See [Template catalog and contributions](docs/extensions/template-catalog.md).
 
 ## Pull requests
 

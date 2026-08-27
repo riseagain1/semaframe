@@ -544,8 +544,11 @@ function adaptModelDefinition(definition: ModelDefinition): ModelAdapterResult {
 async function sha256(bytes: Uint8Array): Promise<CadHandoffSha256> {
   const subtle = globalThis.crypto?.subtle;
   if (subtle === undefined) fail("hash_unavailable", "Web Crypto SHA-256 is unavailable");
-  const copy = Uint8Array.from(bytes);
-  const digest = new Uint8Array(await subtle.digest("SHA-256", copy.buffer));
+  const nodeBuffer = (globalThis as typeof globalThis & {
+    Buffer?: { from(value: Uint8Array): Uint8Array };
+  }).Buffer;
+  const input = nodeBuffer ? nodeBuffer.from(bytes) : Uint8Array.from(bytes);
+  const digest = new Uint8Array(await subtle.digest("SHA-256", input as BufferSource));
   return `sha256:${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 

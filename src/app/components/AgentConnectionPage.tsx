@@ -5,6 +5,7 @@ import {
   CircleOff,
   Clipboard,
   Clock3,
+  Download,
   KeyRound,
   LoaderCircle,
   MonitorUp,
@@ -12,15 +13,37 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  Trash2,
   Unplug,
   UserCheck,
   WifiOff,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { AgentGatewayError } from "../../agent/AgentGatewayClient";
+import {
+  AgentGatewayError,
+  type AgentClientInstallationSnapshot,
+  type AgentClientInstallationView,
+  type AgentInstallationAction,
+  type AgentInstallationClient,
+} from "../../agent/AgentGatewayClient";
+import {
+  agentExperienceLegacyStatus,
+  type AgentExperienceState,
+} from "../agentExperience";
 import { SemaFrameMark } from "./SemaFrameMark";
+import "./AgentConnectionPage.experience.css";
 
-export type AgentConnectionStatus = "disabled" | "waiting" | "approval" | "connected" | "disconnected" | "occupied";
+export type AgentConnectionStatus =
+  | "booting"
+  | "unavailable"
+  | "disabled"
+  | "waiting"
+  | "approval"
+  | "approved"
+  | "connected"
+  | "disconnected"
+  | "invalid"
+  | "occupied";
 
 export type AgentConnectionClient = Readonly<{
   name: string;
@@ -34,7 +57,9 @@ export type AgentRestConnectionSetup = string | Readonly<{ restConfig: string }>
 
 export type AgentConnectionPageProps = {
   id?: string;
-  status: AgentConnectionStatus;
+  /** Legacy incremental API. `experience` takes precedence when provided. */
+  status?: AgentConnectionStatus;
+  experience?: AgentExperienceState;
   busy?: boolean;
   error?: string;
   pairedClient?: AgentConnectionClient | null;
@@ -56,6 +81,14 @@ export type AgentConnectionPageProps = {
   onRevoke: () => unknown | Promise<unknown>;
   /** Disables Agent control and returns to the connection gate. */
   onDisableAgentControl: () => unknown | Promise<unknown>;
+  agentInstallations?: AgentClientInstallationSnapshot;
+  agentInstallationsLoading?: boolean;
+  agentInstallationsUnavailable?: string;
+  onRefreshAgentInstallations?: () => unknown | Promise<unknown>;
+  onManageAgentInstallation?: (
+    client: AgentInstallationClient,
+    action: AgentInstallationAction,
+  ) => AgentClientInstallationView | Promise<AgentClientInstallationView>;
   /** Present only when this page is temporarily covering an active workspace. */
   onClose?: () => void;
 };
@@ -101,6 +134,16 @@ function safeActionErrorMessage(error: unknown): string {
 }
 
 const STATUS_COPY: Record<AgentConnectionStatus, { eyebrow: string; title: string; detail: string }> = {
+  booting: {
+    eyebrow: "Starting Agent control",
+    title: "Preparing the local connection.",
+    detail: "SemaFrame is checking the local Agent Gateway before offering any connection or workspace action.",
+  },
+  unavailable: {
+    eyebrow: "Agent Gateway unavailable",
+    title: "The local connection could not start.",
+    detail: "Start or restart the local Agent Gateway, then try again. The existing project remains preserved.",
+  },
   disabled: {
     eyebrow: "Agent control is off",
     title: "Let an agent build through this workspace.",
@@ -116,6 +159,11 @@ const STATUS_COPY: Record<AgentConnectionStatus, { eyebrow: string; title: strin
     title: "A client is asking to control this workspace.",
     detail: "Check the client and requested access before allowing it to inspect or change the project.",
   },
+  approved: {
+    eyebrow: "Client approved",
+    title: "Waiting for the instruction handshake.",
+    detail: "Access is approved, but the Workspace remains locked until this client finishes reading the current SemaFrame instructions.",
+  },
   connected: {
     eyebrow: "Agent control is active",
     title: "This workspace is under external control.",
@@ -126,6 +174,11 @@ const STATUS_COPY: Record<AgentConnectionStatus, { eyebrow: string; title: strin
     title: "Your workspace is safe.",
     detail: "Reconnect the last client, create a fresh pairing, or disable Agent control. No uncommitted agent change is applied.",
   },
+  invalid: {
+    eyebrow: "Connection no longer valid",
+    title: "Create a fresh connection.",
+    detail: "The previous offer expired or was rejected. It cannot be reused, and the existing project remains preserved.",
+  },
   occupied: {
     eyebrow: "Agent control is active in another tab",
     title: "Another tab owns Agent control.",
@@ -134,12 +187,38 @@ const STATUS_COPY: Record<AgentConnectionStatus, { eyebrow: string; title: strin
 };
 
 function ConnectionStatusIcon({ status }: { status: AgentConnectionStatus }) {
+  if (status === "booting") return <LoaderCircle className="spin-slow" size={21} aria-hidden="true" />;
   if (status === "waiting") return <Bot size={21} aria-hidden="true" />;
   if (status === "approval") return <UserCheck size={21} aria-hidden="true" />;
+  if (status === "approved") return <UserCheck size={21} aria-hidden="true" />;
   if (status === "connected") return <PlugZap size={21} aria-hidden="true" />;
   if (status === "occupied") return <MonitorUp size={21} aria-hidden="true" />;
-  if (status === "disconnected") return <WifiOff size={21} aria-hidden="true" />;
+  if (status === "disconnected" || status === "unavailable") return <WifiOff size={21} aria-hidden="true" />;
+  if (status === "invalid") return <Clock3 size={21} aria-hidden="true" />;
   return <CircleOff size={21} aria-hidden="true" />;
+}
+
+function experienceClient(experience: AgentExperienceState | undefined): AgentConnectionClient | undefined {
+  if (!experience) return undefined;
+  if (experience.kind === "approval_pending" || experience.kind === "approval_granted"
+    || experience.kind === "workspace_ready" || experience.kind === "reconnecting") {
+    return experience.client;
+  }
+  return undefined;
+}
+
+function scopeLabel(scope: string): string {
+  if (scope === "workspace:read") return "Inspect the open workspace";
+  if (scope === "workspace:write") return "Make reversible workspace changes";
+  if (scope === "workspace:history") return "Use undo, redo, and project history";
+  if (scope === "component:create") return "Create components";
+  if (scope === "component:update") return "Edit components";
+  if (scope === "component:invoke") return "Run component actions";
+  if (scope === "component:recipe_define") return "Define bounded component recipes";
+  if (scope === "component:delete") return "Delete components";
+  if (scope === "connector:delete") return "Delete data connections";
+  if (scope === "workspace:clear") return "Clear the workspace";
+  return "Use additional scoped access";
 }
 
 function setupText(payload: AgentConnectionSetup): string {
@@ -163,13 +242,14 @@ function connectionUrlExpired(expiresAt: string | undefined, now = Date.now()): 
 
 export function AgentConnectionPage({
   id,
-  status,
+  status: legacyStatus,
+  experience,
   busy = false,
   error,
-  pairedClient,
+  pairedClient: legacyPairedClient,
   allowDeleteAndClear = false,
-  connectionUrl,
-  expiresAt,
+  connectionUrl: legacyConnectionUrl,
+  expiresAt: legacyExpiresAt,
   onEnable,
   onCopySetup,
   onCopyRestSetup,
@@ -181,8 +261,20 @@ export function AgentConnectionPage({
   onReject,
   onRevoke,
   onDisableAgentControl,
+  agentInstallations,
+  agentInstallationsLoading = false,
+  agentInstallationsUnavailable,
+  onRefreshAgentInstallations,
+  onManageAgentInstallation,
   onClose,
 }: AgentConnectionPageProps) {
+  const status = experience ? agentExperienceLegacyStatus(experience) : (legacyStatus ?? "booting");
+  const pairedClient = experienceClient(experience) ?? legacyPairedClient;
+  const connectionUrl = experience?.kind === "offer_ready" ? experience.url : legacyConnectionUrl;
+  const expiresAt = experience?.kind === "offer_ready" ? experience.expiresAt : legacyExpiresAt;
+  const experienceError = experience?.kind === "gateway_unavailable" && experience.message
+    ? displayableLocalError(experience.message) ?? GATEWAY_UNAVAILABLE_ERROR
+    : undefined;
   const titleId = useId();
   const detailId = useId();
   const permissionHintId = useId();
@@ -201,7 +293,12 @@ export function AgentConnectionPage({
   const [confirmTakeover, setConfirmTakeover] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const [urlExpired, setUrlExpired] = useState(() => connectionUrlExpired(expiresAt));
-  const blocked = busy || pending !== null;
+  const [pendingInstallation, setPendingInstallation] = useState<Readonly<{
+    client: AgentInstallationClient;
+    action: AgentInstallationAction | "status";
+  }> | null>(null);
+  const [installationNotice, setInstallationNotice] = useState<string>();
+  const blocked = busy || pending !== null || pendingInstallation !== null;
   const copy = STATUS_COPY[status];
 
   useEffect(() => {
@@ -336,11 +433,51 @@ export function AgentConnectionPage({
     }
   };
 
+  const refreshInstallations = async () => {
+    if (!onRefreshAgentInstallations) return;
+    setPendingInstallation({ client: "codex", action: "status" });
+    setLocalError(undefined);
+    setInstallationNotice(undefined);
+    try {
+      await onRefreshAgentInstallations();
+    } catch (error) {
+      setLocalError(safeActionErrorMessage(error));
+    } finally {
+      setPendingInstallation(null);
+    }
+  };
+
+  const manageInstallation = async (
+    client: AgentInstallationClient,
+    action: AgentInstallationAction,
+  ) => {
+    if (!onManageAgentInstallation) return;
+    setPendingInstallation({ client, action });
+    setLocalError(undefined);
+    setInstallationNotice(undefined);
+    try {
+      const result = await onManageAgentInstallation(client, action);
+      const expectedState = action === "remove" ? "not_installed" : "installed";
+      if (result.state !== expectedState) {
+        setLocalError(result.detail);
+        return;
+      }
+      const verb = action === "remove" ? "removed from" : action === "update" ? "updated for" : "installed for";
+      setInstallationNotice(result.restartRequired
+        ? `SemaFrame was ${verb} ${result.displayName}. Restart ${result.displayName} once to ${action === "remove" ? "finish removing it" : "load the stable connection"}.`
+        : `SemaFrame was ${verb} ${result.displayName}.`);
+    } catch (error) {
+      setLocalError(safeActionErrorMessage(error));
+    } finally {
+      setPendingInstallation(null);
+    }
+  };
+
   const canCopy = Boolean((connectionUrl && !urlExpired) || (!connectionUrl && onCopySetup));
   const clientRequestedDestructiveAccess = pairedClient?.scopes.some((scope) => DESTRUCTIVE_SCOPES.has(scope)) ?? false;
   const showDestructivePolicy = status === "disabled" ||
     ((status === "waiting" || status === "disconnected") && !pairedClient) ||
-    clientRequestedDestructiveAccess;
+    ((status === "approval" || status === "connected") && clientRequestedDestructiveAccess);
   const dismissRevoke = () => {
     setConfirmRevoke(false);
     requestAnimationFrame(() => revokeTriggerRef.current?.focus());
@@ -359,6 +496,9 @@ export function AgentConnectionPage({
       aria-describedby={detailId}
       aria-busy={blocked || undefined}
     >
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {copy.eyebrow}. {copy.title}
+      </p>
       {!onClose && <div className="agent-page-brand" aria-label="SemaFrame">
         <SemaFrameMark className="agent-page-brand-mark" />
         <span>SEMAFRAME</span>
@@ -379,7 +519,53 @@ export function AgentConnectionPage({
         </div>
 
         <div className="agent-connection-actions">
-          {status === "occupied" ? (
+          {status === "booting" ? (
+            <section className="agent-experience-card" role="status" aria-label="Starting Agent Gateway">
+              <LoaderCircle className="spin-slow" size={20} aria-hidden="true" />
+              <div><h2>Checking the local Agent Gateway</h2><p>No connection or Workspace action is available until this check finishes.</p></div>
+            </section>
+          ) : status === "unavailable" ? (
+            <section className="agent-experience-card is-error" role="status">
+              <WifiOff size={20} aria-hidden="true" />
+              <div>
+                <h2>Start the Gateway, then retry</h2>
+                <p>This page does not discard or replace the project while the local service is unavailable.</p>
+                {onRetry && <button type="button" className="agent-primary-action" onClick={() => void runAction("retry", onRetry)} disabled={blocked}>
+                  <RefreshCw className={pending === "retry" ? "spin-slow" : undefined} size={15} aria-hidden="true" />
+                  {pending === "retry" ? "Checking again…" : "Try again"}
+                </button>}
+              </div>
+            </section>
+          ) : status === "invalid" ? (
+            <section className="agent-experience-card is-warning" role="status">
+              <Clock3 size={20} aria-hidden="true" />
+              <div>
+                <h2>{experience?.kind === "offer_invalid" && experience.reason === "denied" ? "The request was rejected" : "The connection offer expired"}</h2>
+                <p>The old address cannot authorize another client. Create a fresh single-use offer when you are ready.</p>
+                {onRefreshOffer && <button type="button" className="agent-primary-action" onClick={() => void runAction("refresh", onRefreshOffer)} disabled={blocked}>
+                  <RefreshCw className={pending === "refresh" ? "spin-slow" : undefined} size={15} aria-hidden="true" />
+                  {pending === "refresh" ? "Creating fresh URL…" : "Create fresh URL"}
+                </button>}
+              </div>
+            </section>
+          ) : status === "approved" ? (
+            <section className="agent-approved-card" aria-labelledby={`${titleId}-approved`} role="status" aria-live="polite">
+              <div className="agent-approval-heading">
+                <UserCheck size={18} aria-hidden="true" />
+                <div><p className="eyebrow">Approved client</p><h2 id={`${titleId}-approved`}>{pairedClient?.name ?? "Unnamed agent"}</h2></div>
+              </div>
+              <ol className="agent-handshake-progress" aria-label="Agent connection progress">
+                <li data-complete="true"><span aria-hidden="true">✓</span><div><strong>Connection received</strong><small>The client reached this browser-owned session.</small></div></li>
+                <li data-complete="true"><span aria-hidden="true">✓</span><div><strong>Access approved</strong><small>You reviewed the client and its requested scopes.</small></div></li>
+                <li aria-current="step"><LoaderCircle className="spin-slow" size={14} aria-hidden="true" /><div><strong>Reading Workspace instructions</strong><small>Keep this browser and the approved client open.</small></div></li>
+              </ol>
+              <p className="agent-approved-note">The Workspace will unlock automatically after the client completes this final handshake. No repeated approval is needed.</p>
+              <div className="agent-recovery-actions">
+                {onRetry && <button type="button" onClick={() => void runAction("retry", onRetry)} disabled={blocked}><RefreshCw className={pending === "retry" ? "spin-slow" : undefined} size={15} aria-hidden="true" />Check status</button>}
+                {onRefreshOffer && <button type="button" onClick={() => void runAction("refresh", onRefreshOffer)} disabled={blocked}>{pending === "refresh" ? "Starting over…" : "Start over with a fresh URL"}</button>}
+              </div>
+            </section>
+          ) : status === "occupied" ? (
             <section className="agent-occupied-card" aria-labelledby={`${titleId}-occupied`} role="status">
               <div className="agent-occupied-heading">
                 <MonitorUp size={18} aria-hidden="true" />
@@ -437,8 +623,8 @@ export function AgentConnectionPage({
               </div>
               {pairedClient?.clientId && <code>{pairedClient.clientId}</code>}
               <p className="agent-approval-caution">Client names are self-reported. Approve only if you just asked this agent to connect.</p>
-              {pairedClient?.scopes.length ? <ul aria-label="Requested access">
-                {pairedClient.scopes.map((scope) => <li key={scope}>{scope}</li>)}
+              {pairedClient?.scopes.length ? <ul className="agent-scope-list" aria-label="Requested access">
+                {pairedClient.scopes.map((scope) => <li key={scope}><span>{scopeLabel(scope)}</span><code>{scope}</code></li>)}
               </ul> : null}
               <div className="agent-approval-actions">
                 {onReject && <button type="button" onClick={() => void runAction("reject", onReject)} disabled={blocked}>Reject</button>}
@@ -516,6 +702,67 @@ export function AgentConnectionPage({
             </>
           )}
 
+          {(agentInstallations || agentInstallationsLoading || agentInstallationsUnavailable || onRefreshAgentInstallations) && <section
+            className="agent-installations"
+            aria-labelledby={`${titleId}-installations`}
+            aria-busy={agentInstallationsLoading || pendingInstallation !== null || undefined}
+          >
+            <div className="agent-installations-heading">
+              <div>
+                <p className="eyebrow">Install once</p>
+                <h2 id={`${titleId}-installations`}>Connect your Agent client automatically</h2>
+                <p>The stable launcher discovers the current local Gateway after restarts. No temporary URL or custom Node script is needed.</p>
+              </div>
+              {onRefreshAgentInstallations && <button
+                type="button"
+                aria-label="Refresh Agent client installation status"
+                onClick={() => void refreshInstallations()}
+                disabled={blocked}
+              >
+                <RefreshCw className={pendingInstallation?.action === "status" ? "spin-slow" : undefined} size={15} aria-hidden="true" />
+              </button>}
+            </div>
+            {agentInstallationsLoading && !agentInstallations ? <p className="agent-installations-loading" role="status">
+              <LoaderCircle className="spin-slow" size={15} aria-hidden="true" />Checking Codex and Claude Code…
+            </p> : agentInstallationsUnavailable && !agentInstallations ? <p className="agent-installations-unavailable" role="status">
+              <CircleOff size={15} aria-hidden="true" />{agentInstallationsUnavailable}
+            </p> : <ul className="agent-installation-list">
+              {agentInstallations?.clients.map((client) => {
+                const operationBusy = pendingInstallation?.client === client.client
+                  && pendingInstallation.action !== "status";
+                return <li key={client.client} data-state={client.state}>
+                  <div className="agent-installation-health" aria-hidden="true">
+                    {client.state === "installed" ? <Check size={14} /> : client.state === "outdated" ? <RefreshCw size={14} /> : <CircleOff size={14} />}
+                  </div>
+                  <div>
+                    <strong>{client.displayName}</strong>
+                    <small>{client.detail}</small>
+                  </div>
+                  <div className="agent-installation-actions">
+                    {client.state === "not_installed" && onManageAgentInstallation && <button
+                      type="button"
+                      onClick={() => void manageInstallation(client.client, "install")}
+                      disabled={blocked}
+                    >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <Download size={14} aria-hidden="true" />}Install</button>}
+                    {client.state === "outdated" && onManageAgentInstallation && <button
+                      type="button"
+                      onClick={() => void manageInstallation(client.client, "update")}
+                      disabled={blocked}
+                    >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}Update</button>}
+                    {(client.state === "installed" || client.state === "outdated") && onManageAgentInstallation && <button
+                      type="button"
+                      className="agent-installation-remove"
+                      aria-label={`Remove SemaFrame from ${client.displayName}`}
+                      onClick={() => void manageInstallation(client.client, "remove")}
+                      disabled={blocked}
+                    ><Trash2 size={14} aria-hidden="true" />Remove</button>}
+                  </div>
+                </li>;
+              })}
+            </ul>}
+            {installationNotice && <p className="agent-installation-notice" role="status">{installationNotice}</p>}
+          </section>}
+
           {status !== "occupied" && showDestructivePolicy && <label className="agent-connection-permission">
             <input
               type="checkbox"
@@ -532,7 +779,7 @@ export function AgentConnectionPage({
             </span>
           </label>}
 
-          {(localError || error) && <p className="agent-connection-error" role="alert">{localError ?? error}</p>}
+          {(localError || error || experienceError) && <p className="agent-connection-error" role="alert">{localError ?? error ?? experienceError}</p>}
 
           {confirmRevoke && <div className="agent-page-confirmation" role="alert" aria-live="assertive">
             <Unplug size={18} aria-hidden="true" />
@@ -544,7 +791,7 @@ export function AgentConnectionPage({
           </div>}
 
           <div className="agent-page-footer">
-            {status !== "disabled" && <button type="button" onClick={() => void runAction("disable", onDisableAgentControl)} disabled={blocked}>
+            {!["booting", "unavailable", "disabled"].includes(status) && <button type="button" onClick={() => void runAction("disable", onDisableAgentControl)} disabled={blocked}>
               {pending === "disable" ? <LoaderCircle className="spin-slow" size={15} aria-hidden="true" /> : null}
               {status === "occupied" ? "Release this tab" : "Disable agent control"}
             </button>}

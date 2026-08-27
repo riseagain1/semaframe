@@ -11,6 +11,7 @@ describe("Workspace spatial component classification", () => {
     expect(spatialComponentKind("stage-3d")).toBe("stage");
     expect(spatialComponentKind("spatial-entity")).toBe("asset");
     expect(spatialComponentKind("spatial-primitive")).toBe("primitive");
+    expect(spatialComponentKind("cad-part")).toBe("cad");
     expect(spatialComponentKind("model-assembly")).toBe("assembly");
     expect(spatialComponentKind("gaussian-splat")).toBe("reality");
     expect(spatialComponentKind("recipe.gaussian-splat")).toBeUndefined();

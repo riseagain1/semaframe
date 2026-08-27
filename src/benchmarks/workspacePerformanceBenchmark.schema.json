@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semaframe.dev/schemas/workspace-performance-benchmark-1.0.0.json",
+  "title": "SemaFrame Workspace Core Performance Benchmark",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmark",
+    "generatedAt",
+    "profile",
+    "runtime",
+    "configuration",
+    "results"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "benchmark": { "const": "semaframe.workspace-core" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "profile": { "enum": ["smoke", "ci", "full", "custom"] },
+    "runtime": { "$ref": "#/$defs/runtime" },
+    "configuration": { "$ref": "#/$defs/configuration" },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/tierResult" }
+    }
+  },
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "platform", "arch"],
+      "properties": {
+        "node": { "type": "string", "minLength": 1 },
+        "platform": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tiers",
+        "samplesPerMeasurement",
+        "warmupSamples",
+        "collisionStride",
+        "connectionStride"
+      ],
+      "properties": {
+        "tiers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 5, "maximum": 2000 }
+        },
+        "samplesPerMeasurement": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "warmupSamples": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "collisionStride": { "type": "integer", "minimum": 1 },
+        "connectionStride": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["samples", "durationsMs", "minMs", "medianMs", "p95Ms", "maxMs"],
+      "properties": {
+        "samples": { "type": "integer", "minimum": 1 },
+        "durationsMs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": 0 }
+        },
+        "minMs": { "type": "number", "minimum": 0 },
+        "medianMs": { "type": "number", "minimum": 0 },
+        "p95Ms": { "type": "number", "minimum": 0 },
+        "maxMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "measurements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "getStateClone",
+        "projectSerialize",
+        "projectDeserialize",
+        "projectOpenStore",
+        "toRenderSnapshot",
+        "workspaceToSceneState"
+      ],
+      "properties": {
+        "commit": { "$ref": "#/$defs/timing" },
+        "getStateClone": { "$ref": "#/$defs/timing" },
+        "projectSerialize": { "$ref": "#/$defs/timing" },
+        "projectDeserialize": { "$ref": "#/$defs/timing" },
+        "projectOpenStore": { "$ref": "#/$defs/timing" },
+        "toRenderSnapshot": { "$ref": "#/$defs/timing" },
+        "workspaceToSceneState": { "$ref": "#/$defs/timing" }
+      }
+    },
+    "tierResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "fixture", "measurements", "verification"],
+      "properties": {
+        "tier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requestedComponents"],
+          "properties": {
+            "requestedComponents": { "type": "integer", "minimum": 5, "maximum": 2000 }
+          }
+        },
+        "fixture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workspaceId",
+            "revision",
+            "components",
+            "spatialComponents",
+            "connections",
+            "collisionEnabledComponents",
+            "projectBytes"
+          ],
+          "properties": {
+            "workspaceId": { "type": "string", "minLength": 1 },
+            "revision": { "type": "integer", "minimum": 1 },
+            "components": { "type": "integer", "minimum": 5, "maximum": 2000 },
+            "spatialComponents": { "type": "integer", "minimum": 1, "maximum": 2000 },
+            "connections": { "type": "integer", "minimum": 1, "maximum": 5000 },
+            "collisionEnabledComponents": { "type": "integer", "minimum": 1, "maximum": 2000 },
+            "projectBytes": { "type": "integer", "minimum": 1, "maximum": 26214400 }
+          }
+        },
+        "measurements": { "$ref": "#/$defs/measurements" },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "workspaceDigest",
+            "reopenedWorkspaceDigest",
+            "sceneRevision",
+            "sceneEntities",
+            "commitResultingRevision",
+            "semanticRoundTripVerified"
+          ],
+          "properties": {
+            "workspaceDigest": { "type": "string", "minLength": 1 },
+            "reopenedWorkspaceDigest": { "type": "string", "minLength": 1 },
+            "sceneRevision": { "type": "integer", "minimum": 1 },
+            "sceneEntities": { "type": "integer", "minimum": 1, "maximum": 2000 },
+            "commitResultingRevision": { "type": "integer", "minimum": 2 },
+            "semanticRoundTripVerified": { "const": true }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ComponentPlacement } from "../../../workspace/components/componentTypes";
-import type { WorkspaceCommandBatch, WorkspaceOperation } from "../../../workspace/protocol/workspaceTypes";
+import type {
+  CreateComponentOperation,
+  WorkspaceCommandBatch,
+  WorkspaceOperation,
+} from "../../../workspace/protocol/workspaceTypes";
 import { prepareComponentRecipe } from "../../../workspace/protocol/validateWorkspaceBatch";
 import { WorkspaceStore } from "../../../workspace/state/WorkspaceStore";
 import type { WorkspaceState } from "../../../workspace/state/workspaceState";
@@ -118,7 +122,7 @@ function timerCreate(
   store: WorkspaceStore,
   id: string,
   opId = "create_timer",
-): WorkspaceOperation {
+): CreateComponentOperation {
   const manifest = store.getComponentManifest("timer");
   if (!manifest) throw new Error("timer manifest missing");
   return {
@@ -421,6 +425,7 @@ describe("WorkspaceStoreEngineAdapter", () => {
           digest: manifest.digest,
         },
         placement: defaultCreatePlacement(manifest, index + 1),
+        ...(manifest.allowedPlacements.includes("viewport") ? { visibility: "hidden" as const } : {}),
       };
     });
     await adapter.submit(remainingPreparation, batchFor(remainingPreparation, operations), actor);
@@ -621,8 +626,14 @@ describe("WorkspaceStoreEngineAdapter", () => {
     const creation = await adapter.prepare("Create two focus timers", 2, actor);
     const [firstId, targetId] = creation.reserved_component_ids;
     await adapter.submit(creation, batchFor(creation, [
-      timerCreate(store, firstId!, "create_first_timer"),
-      timerCreate(store, targetId!, "create_target_timer"),
+      {
+        ...timerCreate(store, firstId!, "create_first_timer"),
+        placement: { space: "viewport", anchor: "top_left", offset: { x: 20, y: 20 } },
+      },
+      {
+        ...timerCreate(store, targetId!, "create_target_timer"),
+        placement: { space: "viewport", anchor: "top_right", offset: { x: -20, y: 20 } },
+      },
     ]), actor);
 
     expect(adapter.getState().summary).toMatchObject({

@@ -1,12 +1,22 @@
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { launchChromeForSmoke } from "./lib/chrome-smoke-launcher.mjs";
+import { spawnOwnedProcessTree, stopOwnedProcessTrees } from "./lib/owned-process-tree.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
+const withTimeout = (promise, timeoutMs, label) => new Promise((resolvePromise, rejectPromise) => {
+  const timeout = setTimeout(() => rejectPromise(new Error(`Timed out waiting for ${label}`)), timeoutMs);
+  promise.then(
+    (value) => { clearTimeout(timeout); resolvePromise(value); },
+    (error) => { clearTimeout(timeout); rejectPromise(error); },
+  );
+});
 const artifacts = resolve("artifacts");
+const recoverySmokeOnly = process.argv.includes("--recovery-only");
+const RECOVERY_SMOKE_COMPLETE = Symbol("recovery-smoke-complete");
 
 function browserExecutable() {
   const candidates = [
@@ -76,11 +86,44 @@ class Cdp {
     this.listeners.set(method, listeners);
   }
 
-  send(method, params = {}) {
+  waitFor(method, timeoutMs = 15_000) {
+    return new Promise((resolveEvent, reject) => {
+      const cleanup = () => {
+        clearTimeout(timeout);
+        const listeners = this.listeners.get(method) ?? [];
+        this.listeners.set(method, listeners.filter((candidate) => candidate !== listener));
+      };
+      const listener = (params) => {
+        cleanup();
+        resolveEvent(params);
+      };
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timed out waiting for Chrome DevTools event ${method}`));
+      }, timeoutMs);
+      this.on(method, listener);
+    });
+  }
+
+  send(method, params = {}, timeoutMs = 15_000) {
     const id = this.nextId++;
     return new Promise((resolveCall, reject) => {
-      this.pending.set(id, { resolve: resolveCall, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      const timeoutError = new Error(`Timed out waiting for Chrome DevTools ${method}`);
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(timeoutError);
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timeout); resolveCall(value); },
+        reject: (error) => { clearTimeout(timeout); reject(error); },
+      });
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
@@ -98,6 +141,8 @@ class Cdp {
   }
 
   close() {
+    for (const pending of this.pending.values()) pending.reject(new Error("Chrome DevTools connection closed"));
+    this.pending.clear();
     this.socket.close();
   }
 }
@@ -109,6 +154,80 @@ async function poll(cdp, expression, label, timeoutMs = 12_000) {
     await delay(100);
   }
   throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function readWorkspaceRecoveryStorage(cdp) {
+  return cdp.evaluate(`new Promise((resolve) => {
+    const request = indexedDB.open('semaframe-workspace-recovery-v3', 1);
+    request.onerror = () => resolve({ slots: [], databaseError: true });
+    request.onsuccess = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains('snapshots')) {
+        database.close();
+        resolve({ slots: [], fallbackPresent: Boolean(localStorage.getItem('semaframe-workspace-recovery-v3-fallback')), legacyPresent: Boolean(localStorage.getItem('semaframe-workspace-recovery-v2')) });
+        return;
+      }
+      const transaction = database.transaction('snapshots', 'readonly');
+      const records = transaction.objectStore('snapshots').getAll();
+      let value = { slots: [], databaseError: true };
+      transaction.onerror = () => { database.close(); resolve({ slots: [], databaseError: true }); };
+      transaction.onabort = () => { database.close(); resolve({ slots: [], databaseError: true }); };
+      transaction.oncomplete = () => { database.close(); resolve(value); };
+      records.onerror = () => { value = { slots: [], databaseError: true }; };
+      records.onsuccess = () => {
+        value = {
+          slots: records.result.map((record) => ({ slot: record.slot, sequence: record.sequence, projectName: record.projectName })),
+          fallbackPresent: Boolean(localStorage.getItem('semaframe-workspace-recovery-v3-fallback')),
+          legacyPresent: Boolean(localStorage.getItem('semaframe-workspace-recovery-v2')),
+        };
+      };
+    };
+  })`);
+}
+
+async function waitForWorkspaceRecoverySlots(cdp, requiredSlots, label, timeoutMs = 12_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const state = await readWorkspaceRecoveryStorage(cdp);
+    if (requiredSlots.every((slot) => state.slots.some((record) => record.slot === slot))) return state;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function corruptCurrentWorkspaceRecovery(cdp) {
+  return cdp.evaluate(`new Promise((resolve, reject) => {
+    const request = indexedDB.open('semaframe-workspace-recovery-v3', 1);
+    request.onerror = () => reject(request.error ?? new Error('Recovery database could not open'));
+    request.onsuccess = () => {
+      const database = request.result;
+      const transaction = database.transaction('snapshots', 'readwrite');
+      transaction.onerror = () => reject(transaction.error ?? new Error('Recovery transaction failed'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Recovery transaction aborted'));
+      const store = transaction.objectStore('snapshots');
+      const current = store.get('current');
+      let updated = false;
+      current.onerror = () => reject(current.error ?? new Error('Current recovery could not be read'));
+      current.onsuccess = () => {
+        if (!current.result) return;
+        updated = true;
+        store.put({ ...current.result, sha256: 'sha256:' + 'f'.repeat(64) });
+      };
+      transaction.oncomplete = () => { database.close(); resolve(updated); };
+    };
+  })`);
+}
+
+async function reloadWorkspaceApp(cdp, label) {
+  await cdp.evaluate("window.__workspaceRecoveryReloadMarker = 'before'");
+  const loaded = cdp.waitFor("Page.loadEventFired");
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await loaded;
+  await poll(
+    cdp,
+    "window.__workspaceRecoveryReloadMarker !== 'before' && Boolean(document.querySelector('.app-shell'))",
+    label,
+  );
 }
 
 function clickExactButton(text) {
@@ -149,14 +268,67 @@ async function callWorkspaceAgent(client, name, args) {
 }
 
 async function unlockWorkspaceThroughAgent(cdp, clientLabel) {
-  if (await cdp.evaluate("Boolean(document.querySelector('.app-workspace'))")) return undefined;
+  if (await cdp.evaluate("document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive === 'true'")) return undefined;
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", `${clientLabel} connection gate`);
-  if (await cdp.evaluate("Boolean(document.querySelector('.agent-connection-page.status-disabled'))")) {
-    if (!await cdp.evaluate(clickExactButton("Enable agent control"))) {
-      throw new Error(`${clientLabel} could not enable Agent control.`);
+  let connectionInputReady = false;
+  for (let attempt = 0; attempt < 3 && !connectionInputReady; attempt += 1) {
+    if (await cdp.evaluate("Boolean(document.querySelector('.agent-connection-page.status-approved'))")) {
+      await cdp.evaluate(clickExactButton(attempt === 0 ? "Check status" : "Start over with a fresh URL"));
+      await delay(50);
+    } else if (await cdp.evaluate("Boolean(document.querySelector('.agent-connection-page.status-disconnected'))")) {
+      await cdp.evaluate(clickExactButton("Check status"));
+      await delay(50);
     }
+    if (await cdp.evaluate("Boolean(document.querySelector('.agent-connection-page.status-disabled'))")) {
+      await poll(
+        cdp,
+        "Boolean(document.querySelector('.agent-connection-page.status-disabled:not([aria-busy=\"true\"]) button.agent-primary-action:not(:disabled)'))",
+        `${clientLabel} settled enable action`,
+      );
+      if (!await cdp.evaluate(clickExactButton("Enable agent control"))) {
+        throw new Error(`${clientLabel} could not enable Agent control.`);
+      }
+      await delay(50);
+    }
+    try {
+      await poll(
+        cdp,
+        "document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive === 'true' || Boolean(document.querySelector('.agent-connection-page.status-waiting .agent-connection-url-wrap input')) || Boolean(document.querySelector('.agent-connection-error'))",
+        `${clientLabel} active Workspace, waiting connection URL, or actionable error`,
+        4_000,
+      );
+    } catch {
+      // Project replacement can render the disabled gate just before its
+      // exclusive operation releases. Re-evaluate and retry only while the
+      // page is still the same enabled, non-busy disabled state.
+    }
+    connectionInputReady = await cdp.evaluate("Boolean(document.querySelector('.agent-connection-page.status-waiting .agent-connection-url-wrap input'))");
+    if (connectionInputReady) break;
+    if (await cdp.evaluate("document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive === 'true'")) {
+      return undefined;
+    }
+    const actionError = await cdp.evaluate("document.querySelector('.agent-connection-error')?.textContent?.trim() ?? ''");
+    const retryableDisabledGate = await cdp.evaluate(
+      "Boolean(document.querySelector('.agent-connection-page.status-disabled:not([aria-busy=\"true\"]) button.agent-primary-action:not(:disabled)'))",
+    );
+    if (actionError && !retryableDisabledGate && !/workspace operation is still in progress/iu.test(actionError)) {
+      throw new Error(`${clientLabel} could not enable Agent control: ${actionError || "unknown connection error"}`);
+    }
+    await delay(100);
   }
-  await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-waiting .agent-connection-url-wrap input'))", `${clientLabel} waiting connection URL`);
+  if (!connectionInputReady) {
+    const state = await cdp.evaluate(`({
+      pageClass: document.querySelector('.agent-connection-page')?.className,
+      workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+      buttons: [...document.querySelectorAll('.agent-connection-page button')].map((button) => ({
+        text: button.textContent?.replace(/\\s+/g, ' ').trim(),
+        disabled: button.disabled,
+      })),
+      actionError: document.querySelector('.agent-connection-error')?.textContent,
+      toast: document.querySelector('.toast-stack')?.textContent,
+    })`);
+    throw new Error(`${clientLabel} did not reach a waiting connection URL. Non-sensitive UI state: ${JSON.stringify(state)}`);
+  }
   const connectionUrl = await cdp.evaluate("document.querySelector('.agent-connection-url-wrap input')?.value");
   if (typeof connectionUrl !== "string" || !connectionUrl.startsWith("http://127.0.0.1:")) {
     throw new Error(`${clientLabel} did not receive a local connection URL.`);
@@ -187,7 +359,11 @@ async function unlockWorkspaceThroughAgent(cdp, clientLabel) {
   if (instructions.ok !== true || typeof instructions.data?.session_token !== "string") {
     throw new Error(`${clientLabel} did not complete the Workspace instruction handshake (${instructions.error?.code ?? "invalid_response"}).`);
   }
-  await poll(cdp, "document.querySelector('.hybrid-workspace-canvas')?.dataset.sceneEngineReady === 'true'", `${clientLabel} Workspace unlock`);
+  await poll(
+    cdp,
+    "document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive === 'true' && document.querySelector('.hybrid-workspace-canvas')?.dataset.sceneEngineReady === 'true'",
+    `${clientLabel} authenticated Workspace unlock`,
+  );
   return client;
 }
 
@@ -400,32 +576,46 @@ function assertWorkspaceProject(serialized) {
 
 const gatewayPort = await freePort();
 const vitePort = await freePort();
-const cdpPort = await freePort();
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const appUrl = `http://127.0.0.1:${vitePort}/`;
 const profile = mkdtempSync(join(tmpdir(), "semaframe-workspace-smoke-"));
-const stack = spawn("npm", ["run", "dev"], {
-  stdio: ["ignore", "pipe", "pipe"],
-  env: {
-    ...process.env,
-    SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
-    SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
-    SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
-    SEMAFRAME_DISABLE_HMR: "1",
-  },
-});
-const browser = spawn(browserExecutable(), [
-  "--headless=new",
-  "--disable-gpu-sandbox",
-  "--enable-webgl",
-  "--enable-unsafe-swiftshader",
-  "--use-gl=angle",
-  "--use-angle=swiftshader",
-  `--remote-debugging-port=${cdpPort}`,
-  `--user-data-dir=${profile}`,
-  "about:blank",
-], { stdio: "ignore" });
-
+let browserStartup;
+try {
+  browserStartup = await launchChromeForSmoke({
+    executable: browserExecutable(),
+    profile,
+    extraArgs: [
+      "--headless=new",
+      "--disable-gpu-sandbox",
+      "--enable-webgl",
+      "--enable-unsafe-swiftshader",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+    ],
+  });
+} catch (error) {
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  throw error;
+}
+const { browserTree, cdpPort } = browserStartup;
+let stackTree;
+try {
+  stackTree = spawnOwnedProcessTree("npm", ["run", "dev"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
+      SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
+      SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
+      SEMAFRAME_DISABLE_HMR: "1",
+    },
+  }, { termGraceMs: 20_000, forceGraceMs: 5_000 });
+} catch (error) {
+  await browserTree.stop().catch(() => undefined);
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  throw error;
+}
+const { child: stack } = stackTree;
 const processLogs = [];
 stack.stdout.on("data", (chunk) => processLogs.push(String(chunk)));
 stack.stderr.on("data", (chunk) => processLogs.push(String(chunk)));
@@ -449,13 +639,20 @@ try {
   });
   cdp.on("Runtime.consoleAPICalled", ({ type, args }) => {
     const value = args.map((arg) => arg.value ?? arg.description).join(" ");
-    if (["error", "warning"].includes(type) && !/GL Driver Message|software WebGL|Automatic fallback|Allow attribute will take precedence over 'allowfullscreen'/iu.test(value)) {
+    if (["error", "warning"].includes(type) && !/GL Driver Message|software WebGL|Automatic fallback|Allow attribute will take precedence over 'allowfullscreen'|Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture/iu.test(value)) {
       problems.push(`${type}: ${value}`);
     }
   });
   cdp.on("Log.entryAdded", ({ entry }) => {
-    const ignored = /favicon\.ico|GL Driver Message|software WebGL|Automatic fallback|Allow attribute will take precedence over 'allowfullscreen'/iu.test(entry.text);
+    const ignored = /favicon\.ico|GL Driver Message|software WebGL|Automatic fallback|Allow attribute will take precedence over 'allowfullscreen'|Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture/iu.test(entry.text);
     if (["error", "warning"].includes(entry.level) && !ignored) problems.push(`${entry.level}: ${entry.text}`);
+  });
+  cdp.on("Page.javascriptDialogOpening", ({ type, message }) => {
+    const isBeforeUnload = type === "beforeunload";
+    if (!isBeforeUnload) problems.push(`unexpected ${type} dialog: ${message}`);
+    void cdp.send("Page.handleJavaScriptDialog", { accept: isBeforeUnload }).catch((error) => {
+      problems.push(`dialog handling: ${error instanceof Error ? error.message : String(error)}`);
+    });
   });
   cdp.on("Fetch.requestPaused", ({ requestId }) => {
     void cdp.send("Fetch.fulfillRequest", {
@@ -482,28 +679,37 @@ try {
   });
   await cdp.send("Page.navigate", { url: appUrl });
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", "initial Agent connection gate");
-  await cdp.evaluate("localStorage.clear(); sessionStorage.clear(); location.reload()");
+  await cdp.evaluate("localStorage.clear(); sessionStorage.clear()");
+  await reloadWorkspaceApp(cdp, "clean Workspace reload");
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-disabled'))", "clean disabled Agent connection gate");
   const initialGate = await cdp.evaluate(`({
-    hasWorkspace: Boolean(document.querySelector('.app-workspace')),
+    workspaceMounted: Boolean(document.querySelector('.app-workspace')),
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
+    workspaceAriaHidden: document.querySelector('.app-workspace')?.getAttribute('aria-hidden'),
     hasProjectBar: Boolean(document.querySelector('.project-bar')),
     hasBackButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('Back to workspace')),
   })`);
-  if (initialGate.hasWorkspace || initialGate.hasProjectBar || initialGate.hasBackButton) {
-    throw new Error(`The disconnected app exposed Workspace UI outside the connection gate: ${JSON.stringify(initialGate)}`);
+  if (!initialGate.workspaceMounted || initialGate.workspaceActive !== "false" || !initialGate.workspaceInert ||
+      initialGate.workspaceAriaHidden !== "true" || initialGate.hasProjectBar || initialGate.hasBackButton) {
+    throw new Error(`The disconnected app did not keep its mounted Workspace inert behind the connection gate: ${JSON.stringify(initialGate)}`);
   }
   const initialAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace browser smoke");
   if (initialAgentClient) workspaceAgentClients.push(initialAgentClient);
 
   const initialUi = await cdp.evaluate(`({
     panelLabel: document.querySelector('.app-workspace')?.getAttribute('aria-label'),
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
     canvasLabel: document.querySelector('.hybrid-workspace-canvas')?.getAttribute('aria-label'),
     hasWebGlCanvas: Boolean(document.querySelector('.hybrid-workspace-canvas canvas')),
     hasTools: Boolean(document.querySelector('.workspace-tool-dock')),
     hasAgentControls: Boolean(document.querySelector('.agent-workspace-controls')),
     hasLegacyModeSwitch: Boolean(document.querySelector('.control-mode-switch')),
   })`);
-  if (initialUi.panelLabel !== "Workspace" || initialUi.canvasLabel !== "Universal 2D and 3D workspace canvas" || !initialUi.hasWebGlCanvas || !initialUi.hasTools || !initialUi.hasAgentControls || initialUi.hasLegacyModeSwitch) {
+  if (initialUi.panelLabel !== "Workspace" || initialUi.workspaceActive !== "true" || initialUi.workspaceInert ||
+      initialUi.canvasLabel !== "Universal 2D and 3D workspace canvas" || !initialUi.hasWebGlCanvas ||
+      !initialUi.hasTools || !initialUi.hasAgentControls || initialUi.hasLegacyModeSwitch) {
     throw new Error(`The unified hybrid Workspace did not open with its human and Agent controls: ${JSON.stringify(initialUi)}`);
   }
   await poll(cdp, clickExactButton("Components"), "enabled Component library control");
@@ -534,6 +740,57 @@ try {
     return true;
   })()`)) throw new Error("Component library could not be closed.");
   await poll(cdp, "!document.querySelector('.workspace-tool-panel')", "closed component panel");
+
+  if (recoverySmokeOnly) {
+    if (!await cdp.evaluate(`(() => {
+      const input = document.querySelector('input[aria-label="Project name"]');
+      if (!(input instanceof HTMLInputElement)) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, 'recovery-smoke-current');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`)) throw new Error("Project name could not create the focused recovery snapshot.");
+    const recoverySlots = await waitForWorkspaceRecoverySlots(
+      cdp,
+      ["current", "previous"],
+      "focused current and previous recovery snapshots",
+    );
+    const previousProjectName = recoverySlots.slots.find((record) => record.slot === "previous")?.projectName;
+    if (typeof previousProjectName !== "string" || !previousProjectName) {
+      throw new Error(`Focused recovery previous snapshot had no project name: ${JSON.stringify(recoverySlots)}`);
+    }
+    if (!await corruptCurrentWorkspaceRecovery(cdp)) {
+      throw new Error("The focused current recovery snapshot was unavailable for corruption testing.");
+    }
+    await reloadWorkspaceApp(cdp, "focused Workspace recovery reload");
+    const reloadClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace recovery reload");
+    if (reloadClient) workspaceAgentClients.push(reloadClient);
+    await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "focused recovery banner");
+    if (!await cdp.evaluate(clickExactButton("Continue recovered project"))) {
+      throw new Error("The focused recovery banner could not restore its previous snapshot.");
+    }
+    await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", "focused recovery replacement gate");
+    const restoreClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace after recovery restore");
+    if (restoreClient) workspaceAgentClients.push(restoreClient);
+    await poll(
+      cdp,
+      `document.querySelector('input[aria-label="Project name"]')?.value === ${JSON.stringify(previousProjectName)} && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 1`,
+      "focused previous recovery restoration",
+    );
+    await reloadWorkspaceApp(cdp, "focused Workspace reload before dismissal");
+    const dismissClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace recovery dismissal");
+    if (dismissClient) workspaceAgentClients.push(dismissClient);
+    await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "focused recovery banner before dismissal");
+    if (!await cdp.evaluate(clickExactButton("Dismiss"))) throw new Error("Focused recovery dismissal was unavailable.");
+    await poll(cdp, "!document.querySelector('.recovery-banner')", "focused dismissed recovery banner");
+    const dismissed = await readWorkspaceRecoveryStorage(cdp);
+    if (dismissed.slots.length !== 0 || dismissed.fallbackPresent || dismissed.legacyPresent) {
+      throw new Error(`Focused Dismiss did not clear every recovery store: ${JSON.stringify(dismissed)}`);
+    }
+    if (problems.length) throw new Error(`Browser reported warnings/errors:\n${problems.join("\n")}`);
+    console.log("Focused Workspace recovery browser smoke passed: current/previous write, corrupt-current reload fallback, project restore, and verified dismissal.");
+    throw RECOVERY_SMOKE_COMPLETE;
+  }
 
   await poll(cdp, clickExactButton("Mixed demo"), "enabled Mixed demo control");
   await poll(
@@ -763,37 +1020,57 @@ try {
   if (!await cdp.evaluate(clickButtonWithAriaLabel("Reset view"))) throw new Error("Reset view was unavailable after wheel zoom.");
   await poll(cdp, "Number(document.querySelector('.hybrid-workspace-canvas')?.dataset.canvasZoom) === 1", "hybrid Reset view recovery");
   await delay(400);
-  if (!await cdp.evaluate(`(() => {
+  const microscopicZoom = await cdp.evaluate(`(async () => {
     const button = document.querySelector('button[aria-label="Zoom in"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    for (let index = 0; index < 40; index += 1) button.click();
-    return true;
-  })()`)) throw new Error("The accessible hybrid Zoom in control was unavailable.");
-  await poll(
-    cdp,
-    "Number(document.querySelector('.hybrid-workspace-canvas')?.dataset.canvasZoom) > 1000 && Number(document.querySelector('.hybrid-workspace-canvas')?.dataset.cameraDistance) < 0.05",
-    "microscopic hybrid zoom",
-  );
-  if (!await cdp.evaluate(`(() => {
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return { available: false };
+    let state;
+    for (let index = 0; index < 80; index += 1) {
+      button.click();
+      if (index % 8 === 7) await new Promise(requestAnimationFrame);
+      const canvas = document.querySelector('.hybrid-workspace-canvas');
+      state = {
+        available: true,
+        clicks: index + 1,
+        canvasZoom: Number(canvas?.dataset.canvasZoom),
+        cameraDistance: Number(canvas?.dataset.cameraDistance),
+      };
+      if (state.canvasZoom > 1000 && state.cameraDistance < 0.05) return { ...state, reached: true };
+    }
+    return { ...state, reached: false };
+  })()`);
+  if (!microscopicZoom.available) throw new Error("The accessible hybrid Zoom in control was unavailable.");
+  if (!microscopicZoom.reached) {
+    throw new Error(`Microscopic hybrid zoom did not reach its bounded target: ${JSON.stringify(microscopicZoom)}.`);
+  }
+  const planetaryZoom = await cdp.evaluate(`(async () => {
     const button = document.querySelector('button[aria-label="Zoom out"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    for (let index = 0; index < 100; index += 1) button.click();
-    return true;
-  })()`)) throw new Error("The accessible hybrid Zoom out control was unavailable.");
-  await poll(
-    cdp,
-    `(() => {
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return { available: false };
+    let state;
+    for (let index = 0; index < 180; index += 1) {
+      button.click();
+      if (index % 8 === 7) await new Promise(requestAnimationFrame);
       const canvas = document.querySelector('.hybrid-workspace-canvas');
       const distance = Number(canvas?.dataset.cameraDistance);
       const near = Number(canvas?.dataset.cameraNear);
       const far = Number(canvas?.dataset.cameraFar);
-      return Number(canvas?.dataset.canvasZoom) === 0.0001
-        && distance > 100000
-        && near > 0
-        && far > distance;
-    })()`,
-    "planetary hybrid zoom with adaptive clipping",
-  );
+      state = {
+        available: true,
+        clicks: index + 1,
+        canvasZoom: Number(canvas?.dataset.canvasZoom),
+        cameraDistance: distance,
+        cameraNear: near,
+        cameraFar: far,
+      };
+      if (state.canvasZoom === 0.0001 && distance > 100000 && near > 0 && far > distance) {
+        return { ...state, reached: true };
+      }
+    }
+    return { ...state, reached: false };
+  })()`);
+  if (!planetaryZoom.available) throw new Error("The accessible hybrid Zoom out control was unavailable.");
+  if (!planetaryZoom.reached) {
+    throw new Error(`Planetary hybrid zoom did not reach its bounded target: ${JSON.stringify(planetaryZoom)}.`);
+  }
   const distantNavigation = await cdp.evaluate(`(() => {
     const video = document.querySelector('[data-workspace-component-type="video-player"]');
     return {
@@ -942,13 +1219,23 @@ try {
     return true;
   })()`)) throw new Error("The presentation timer could not be started.");
   await poll(cdp, "Boolean(document.querySelector('.workspace-timer.is-running button[aria-label=\"Pause timer\"]'))", "running timer state");
-  await poll(cdp, "Boolean(document.querySelector('.workspace-timer__readout') && document.querySelector('.workspace-timer__readout')?.textContent?.trim() !== '05:00')", "live timer countdown", 4_000);
+  await poll(
+    cdp,
+    "document.querySelector('.workspace-timer__phase')?.textContent?.trim() === 'running' && document.querySelector('.scene-stat')?.textContent?.includes('rev 9')",
+    "durable running timer revision",
+  );
+  await poll(
+    cdp,
+    "(() => { const text = document.querySelector('.workspace-timer__readout')?.textContent?.trim() ?? ''; return /^\\d{2}:\\d{2}$/.test(text) && text !== '05:00'; })()",
+    "live timer countdown",
+    5_000,
+  );
   const runningUi = await cdp.evaluate(`({
     phase: document.querySelector('.workspace-timer__phase')?.textContent?.trim(),
     readout: document.querySelector('.workspace-timer__readout')?.textContent?.trim(),
     revision: document.querySelector('.scene-stat')?.textContent,
   })`);
-  if (runningUi.phase !== "running" || runningUi.readout === "05:00" || !runningUi.revision?.includes("rev 9")) {
+  if (runningUi.phase !== "running" || !/^\d{2}:\d{2}$/u.test(runningUi.readout ?? "") || !runningUi.revision?.includes("rev 9")) {
     throw new Error(`Timer action did not produce one durable semantic revision and a live projection: ${JSON.stringify(runningUi)}`);
   }
 
@@ -960,8 +1247,28 @@ try {
   const mixedScreenshot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
   writeFileSync(join(artifacts, "workspace-smoke-mixed.png"), Buffer.from(mixedScreenshot.data, "base64"));
 
+  let projectActionDiagnostics;
+  const projectActionDeadline = Date.now() + 12_000;
+  while (Date.now() < projectActionDeadline) {
+    projectActionDiagnostics = await cdp.evaluate(`({
+      topLevel: window === window.top,
+      href: location.href,
+      readyState: document.readyState,
+      projectBarPresent: Boolean(document.querySelector('.project-bar')),
+      buttonCount: document.querySelectorAll('button').length,
+      controls: [...document.querySelectorAll('button')]
+        .map((button) => button.getAttribute('aria-controls'))
+        .filter(Boolean),
+    })`);
+    if (projectActionDiagnostics.controls.includes('project-actions-menu')) break;
+    await delay(100);
+  }
+  if (!projectActionDiagnostics?.controls.includes('project-actions-menu')) {
+    throw new Error(`Project actions button did not become available after save: ${JSON.stringify(projectActionDiagnostics)}`);
+  }
   if (!await cdp.evaluate(`(() => {
-    const button = document.querySelector('button[aria-label^="More project actions"]');
+    const button = [...document.querySelectorAll('button')]
+      .find((candidate) => candidate.getAttribute('aria-controls') === 'project-actions-menu');
     if (!(button instanceof HTMLButtonElement)) return false;
     button.click();
     return true;
@@ -978,6 +1285,10 @@ try {
     "!document.querySelector('.workspace-timer') && !document.querySelector('[data-workspace-component-type=\"video-player\"]') && !document.querySelector('[data-workspace-component-type=\"stage-3d\"]') && !document.querySelector('iframe') && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 0",
     "fresh blank universal workspace",
   );
+  const resetRecoveryStorage = await readWorkspaceRecoveryStorage(cdp);
+  if (resetRecoveryStorage.slots.length !== 0 || resetRecoveryStorage.fallbackPresent || resetRecoveryStorage.legacyPresent) {
+    throw new Error(`New project did not clear every recovery store: ${JSON.stringify(resetRecoveryStorage)}`);
+  }
 
   const injected = await cdp.evaluate(`(() => {
     const input = document.querySelector('input[type="file"]');
@@ -1125,30 +1436,97 @@ try {
     mobile: false,
   });
 
+  // Produce a second durable snapshot, corrupt only the newest IndexedDB head,
+  // and prove a real reload can still recover the previous semantic project.
+  if (!await cdp.evaluate(`(() => {
+    const input = document.querySelector('input[aria-label="Project name"]');
+    if (!(input instanceof HTMLInputElement)) return false;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, 'workspace-mixed-smoke-recovery-current');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`)) throw new Error("Project name could not create the recovery smoke snapshot.");
+  await poll(
+    cdp,
+    "document.querySelector('input[aria-label=\"Project name\"]')?.value === 'workspace-mixed-smoke-recovery-current'",
+    "recovery project-name snapshot",
+  );
+  await waitForWorkspaceRecoverySlots(cdp, ["current", "previous"], "current and previous recovery snapshots");
+  if (!await corruptCurrentWorkspaceRecovery(cdp)) throw new Error("The current recovery snapshot was unavailable for corruption testing.");
+
+  await reloadWorkspaceApp(cdp, "Workspace reload with a corrupt current recovery");
+  const recoveryReloadAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace recovery reload");
+  if (recoveryReloadAgentClient) workspaceAgentClients.push(recoveryReloadAgentClient);
+  await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "recovery banner after reload");
+  if (!await cdp.evaluate(clickExactButton("Continue recovered project"))) {
+    throw new Error("The recovery banner could not restore its last-known-good snapshot.");
+  }
+  await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", "recovery project replacement gate");
+  const restoredRecoveryAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace after recovery restore");
+  if (restoredRecoveryAgentClient) workspaceAgentClients.push(restoredRecoveryAgentClient);
+  await poll(
+    cdp,
+    "document.querySelector('input[aria-label=\"Project name\"]')?.value === 'workspace-mixed-smoke' && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 5 && document.querySelector('.toast-stack')?.textContent?.includes('last-known-good Workspace snapshot')",
+    "last-known-good previous recovery restoration",
+  );
+
+  // The recovery remains available until the human dismisses it. A second
+  // reload exercises the actual Dismiss button and verifies both stores clear.
+  await reloadWorkspaceApp(cdp, "Workspace reload before recovery dismissal");
+  const dismissRecoveryAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace recovery dismissal");
+  if (dismissRecoveryAgentClient) workspaceAgentClients.push(dismissRecoveryAgentClient);
+  await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "recovery banner before dismissal");
+  if (!await cdp.evaluate(clickExactButton("Dismiss"))) throw new Error("Recovery dismissal was unavailable.");
+  await poll(cdp, "!document.querySelector('.recovery-banner')", "dismissed recovery banner");
+  const dismissedRecoveryStorage = await readWorkspaceRecoveryStorage(cdp);
+  if (dismissedRecoveryStorage.slots.length !== 0 || dismissedRecoveryStorage.fallbackPresent || dismissedRecoveryStorage.legacyPresent) {
+    throw new Error(`Dismiss did not clear every recovery store: ${JSON.stringify(dismissedRecoveryStorage)}`);
+  }
+
   if (!await cdp.evaluate(clickExactButton("Manage"))) throw new Error("Final Agent management was unavailable.");
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-connected'))", "final connected Agent management");
   if (!await cdp.evaluate(clickExactButton("Disable agent control"))) throw new Error("Agent control could not be disabled.");
-  await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-disabled')) && !document.querySelector('.app-workspace')", "final disabled Agent connection gate");
+  await poll(
+    cdp,
+    "Boolean(document.querySelector('.agent-connection-page.status-disabled')) && Boolean(document.querySelector('.app-workspace[data-agent-workspace-active=\"false\"][inert][aria-hidden=\"true\"]'))",
+    "final disabled Agent connection gate with mounted inert Workspace",
+  );
   const finalGate = await cdp.evaluate(`({
     hasProjectBar: Boolean(document.querySelector('.project-bar')),
-    hasWorkspace: Boolean(document.querySelector('.app-workspace')),
+    workspaceMounted: Boolean(document.querySelector('.app-workspace')),
+    workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
+    workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
+    workspaceAriaHidden: document.querySelector('.app-workspace')?.getAttribute('aria-hidden'),
     hasBackButton: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('Back to workspace')),
   })`);
-  if (finalGate.hasProjectBar || finalGate.hasWorkspace || finalGate.hasBackButton) {
-    throw new Error(`Disabled Agent control exposed Workspace UI: ${JSON.stringify(finalGate)}`);
+  if (finalGate.hasProjectBar || !finalGate.workspaceMounted || finalGate.workspaceActive !== "false" ||
+      !finalGate.workspaceInert || finalGate.workspaceAriaHidden !== "true" || finalGate.hasBackButton) {
+    throw new Error(`Disabled Agent control did not preserve an inert mounted Workspace: ${JSON.stringify(finalGate)}`);
   }
 
   if (problems.length) throw new Error(`Browser reported warnings/errors:\n${problems.join("\n")}`);
-  console.log("Workspace browser smoke passed: exclusive pre-handshake Agent gate, authenticated Workspace unlock, unified hybrid canvas, one-batch 3D desk + presenter + 2D timer, normal-path active video creation, one-command aspect-locked resize, universal 2D halo and 3D emission/bloom effects, microscopic-to-planetary hybrid zoom with adaptive clipping and Frame recovery, screen-fixed iframe preservation and unchanged Workspace history, desktop/mobile full screen with native fallback, explicit/Escape exit, exact stage dimensions and 3D scale, semantic timer action/live projection, Protocol 1.3 universal save validation, gated blank reset/open round trip, connected Agent management, and responsive layout.");
+  console.log("Workspace browser smoke passed: exclusive pre-handshake Agent gate, authenticated Workspace unlock, unified hybrid canvas, one-batch 3D desk + presenter + 2D timer, normal-path active video creation, one-command aspect-locked resize, universal 2D halo and 3D emission/bloom effects, microscopic-to-planetary hybrid zoom with adaptive clipping and Frame recovery, screen-fixed iframe preservation and unchanged Workspace history, desktop/mobile full screen with native fallback, explicit/Escape exit, exact stage dimensions and 3D scale, semantic timer action/live projection, Protocol 1.3 universal save validation, gated blank reset/open round trip, corrupt-current reload fallback, verified recovery dismissal, connected Agent management, and responsive layout.");
   console.log(`Screenshots: ${join(artifacts, "workspace-smoke-mixed.png")}, ${join(artifacts, "workspace-smoke-fullscreen.png")}, ${join(artifacts, "workspace-smoke-fullscreen-mobile.png")}, ${join(artifacts, "workspace-smoke-agent.png")}, ${join(artifacts, "workspace-smoke-agent-mobile.png")}`);
 } catch (error) {
+  if (error === RECOVERY_SMOKE_COMPLETE) {
+    // The focused mode exits through the shared resource cleanup below.
+  } else {
   const safeLogs = processLogs.join("").replace(/[A-Za-z0-9_-]{40,}/gu, "[redacted]");
   if (safeLogs.trim()) console.error(safeLogs.slice(-5_000));
   throw error;
+  }
 } finally {
-  await Promise.allSettled(workspaceAgentClients.map((client) => client.close()));
-  cdp?.close();
-  for (const child of [browser, stack]) child.kill("SIGTERM");
-  await delay(200);
+  await Promise.allSettled(workspaceAgentClients.map((client, index) => withTimeout(
+    client.close(),
+    5_000,
+    `Workspace smoke Agent client ${index + 1} to close`,
+  )));
+  if (cdp) {
+    await cdp.send("Browser.close", {}, 5_000).catch(() => undefined);
+    cdp.close();
+    const browserCloseDeadline = Date.now() + 5_000;
+    while (!browserTree.closed && Date.now() < browserCloseDeadline) await delay(50);
+  }
+  await stopOwnedProcessTrees([browserTree, stackTree]);
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

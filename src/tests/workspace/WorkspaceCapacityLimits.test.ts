@@ -10,6 +10,18 @@ import {
 } from "../../workspace/state";
 import { workspaceBatch } from "./helpers";
 
+function capacityPanelPlacement(index: number) {
+  const columns = 50;
+  return {
+    space: "viewport" as const,
+    anchor: "top_left" as const,
+    offset: {
+      x: (index % columns) * 340,
+      y: Math.floor(index / columns) * 240,
+    },
+  };
+}
+
 describe("Workspace application capacity", () => {
   it("folds old undo snapshots into a deterministic checkpoint", () => {
     const store = new WorkspaceStore();
@@ -70,7 +82,12 @@ describe("Workspace application capacity", () => {
     const components = new Map<string, typeof sample>();
     for (let index = 0; index < MAX_WORKSPACE_COMPONENTS; index += 1) {
       const id = `CMP_LIMIT_${index}`;
-      components.set(id, { ...structuredClone(sample), id, label: id });
+      components.set(id, {
+        ...structuredClone(sample),
+        id,
+        label: id,
+        placement: capacityPanelPlacement(index),
+      });
     }
     const store = new WorkspaceStore({ initialState: { ...initial, components } });
     const revision = store.getRevision();
@@ -79,7 +96,7 @@ describe("Workspace application capacity", () => {
       op_id: "overflow",
       id: "CMP_OVERFLOW",
       component_type: DEFAULT_COMPONENT_REGISTRY.ref("panel"),
-      placement: { space: "viewport", anchor: "center", offset: { x: 0, y: 0 } },
+      placement: capacityPanelPlacement(MAX_WORKSPACE_COMPONENTS),
     }]))).toThrowError(expect.objectContaining<Partial<WorkspaceStoreError>>({ code: "workspace_capacity_exceeded" }));
     expect(store.getRevision()).toBe(revision);
     expect(store.getState().components.size).toBe(MAX_WORKSPACE_COMPONENTS);

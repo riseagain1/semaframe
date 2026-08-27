@@ -1,4 +1,4 @@
-import { ChevronDown, Download, FolderOpen, MoreHorizontal, Redo2, Save, Undo2 } from "lucide-react";
+import { Box, Boxes, ChevronDown, Download, FolderArchive, FolderOpen, MoreHorizontal, Redo2, Save, Undo2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SemaFrameMark } from "./SemaFrameMark";
 
@@ -13,11 +13,29 @@ type ProjectBarProps = {
   onRedo: () => void;
   onOpen: () => void;
   onSave: () => void;
+  onSavePortable?: () => void;
+  onExportExchange?: () => void;
+  onOpenBridge?: () => void;
   onNew: () => void;
 };
 
 export function ProjectBar(props: ProjectBarProps) {
-  const { projectName, dirty, canUndo, canRedo, busy, onProjectName, onUndo, onRedo, onOpen, onSave, onNew } = props;
+  const {
+    projectName,
+    dirty,
+    canUndo,
+    canRedo,
+    busy,
+    onProjectName,
+    onUndo,
+    onRedo,
+    onOpen,
+    onSave,
+    onSavePortable,
+    onExportExchange,
+    onOpenBridge,
+    onNew,
+  } = props;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -77,7 +95,13 @@ export function ProjectBar(props: ProjectBarProps) {
         </div>
         <div className="action-group file-actions">
           <button type="button" onClick={onOpen} disabled={busy} aria-label="Open project" title={busy ? "Available after pending changes finish" : "Open project"}><FolderOpen size={16} /><span>Open</span></button>
-          <button type="button" onClick={onSave} aria-label="Save project"><Save size={16} /><span>Save</span></button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={busy}
+            aria-label="Save project"
+            title={busy ? "Available after pending changes finish" : "Save project"}
+          ><Save size={16} /><span>Save</span></button>
         </div>
         <div className="more-menu" ref={menuRef}>
           {dirty && <span className="compact-unsaved-dot" aria-hidden="true" />}
@@ -87,7 +111,10 @@ export function ProjectBar(props: ProjectBarProps) {
             <button type="button" role="menuitem" className="compact-only" onClick={() => runMenuAction(onRedo)} disabled={!canRedo || busy}><Redo2 size={14} />Redo last change</button>
             <span className="menu-separator compact-only" role="separator" />
             <button type="button" role="menuitem" data-initial-menu-item onClick={() => runMenuAction(onNew)} disabled={busy}>New project</button>
-            <button type="button" role="menuitem" onClick={() => runMenuAction(onSave)}><Download size={14} />Download copy</button>
+            <button type="button" role="menuitem" onClick={() => runMenuAction(onSave)} disabled={busy}><Download size={14} />Download copy</button>
+            {onSavePortable && <button type="button" role="menuitem" onClick={() => runMenuAction(onSavePortable)} disabled={busy}><FolderArchive size={14} />Download portable project</button>}
+            {onExportExchange && <button type="button" role="menuitem" onClick={() => runMenuAction(onExportExchange)} disabled={busy}><Box size={14} />Export Scene Exchange</button>}
+            {onOpenBridge && <button type="button" role="menuitem" onClick={() => runMenuAction(onOpenBridge)} disabled={busy}><Boxes size={14} />Open Scene Bridge</button>}
           </div>}
         </div>
       </div>

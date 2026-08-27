@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -63,6 +63,36 @@ describe("keyboard and assistive interaction", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it("prevents snapshot file actions while another project operation is active", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const view = render(<ProjectBar
+      projectName="Busy world"
+      dirty={false}
+      canUndo
+      canRedo
+      busy
+      onProjectName={vi.fn()}
+      onUndo={vi.fn()}
+      onRedo={vi.fn()}
+      onOpen={vi.fn()}
+      onSave={onSave}
+      onSavePortable={vi.fn()}
+      onExportExchange={vi.fn()}
+      onOpenBridge={vi.fn()}
+      onNew={vi.fn()}
+    />);
+
+    const projectBar = within(view.container);
+    expect(projectBar.getByRole("button", { name: "Save project" })).toBeDisabled();
+    await user.click(projectBar.getByRole("button", { name: "More project actions" }));
+    expect(projectBar.getByRole("menuitem", { name: /download copy/i })).toBeDisabled();
+    expect(projectBar.getByRole("menuitem", { name: /download portable project/i })).toBeDisabled();
+    expect(projectBar.getByRole("menuitem", { name: /export scene exchange/i })).toBeDisabled();
+    expect(projectBar.getByRole("menuitem", { name: /open scene bridge/i })).toBeDisabled();
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("removes the covered viewport from assistive and keyboard interaction", () => {

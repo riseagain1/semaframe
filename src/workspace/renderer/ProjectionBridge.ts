@@ -1,12 +1,15 @@
 import * as THREE from "three";
 import { INFINITE_NAVIGATION_LIMITS } from "../../renderer/infiniteNavigation";
-import { DEFAULT_DECLARATIVE_COMPONENT_SIZE } from "../components/componentTypes";
+import {
+  CANONICAL_LAYOUT_FRAME,
+  componentLayoutSize,
+  viewportAnchorTopLeft,
+} from "../layout";
 import {
   isSpatialComponent,
   type CameraProjectionState,
   type CanvasViewTransform,
   type ProjectedComponent,
-  type ViewportAnchor,
   type WorkspacePlacement,
   type WorkspaceRenderComponent,
   type WorkspaceSize2D,
@@ -25,7 +28,7 @@ export type ProjectionBridgeOptions = Readonly<{
   camera?: CameraProjectionState;
 }>;
 
-const DEFAULT_SIZE: WorkspaceSize2D = DEFAULT_DECLARATIVE_COMPONENT_SIZE;
+const DEFAULT_SIZE: WorkspaceSize2D = Object.freeze({ width: 240, height: 144 });
 const DEFAULT_CAMERA: CameraProjectionState = {
   position: { x: 7.5, y: 5.5, z: 9.5 },
   target: { x: 0, y: 1, z: 0 },
@@ -112,7 +115,7 @@ export class ProjectionBridge {
     let maxY = Number.NEGATIVE_INFINITY;
     for (const component of canvasComponents) {
       if (component.placement.space !== "canvas2d") continue;
-      const size = componentSize(component);
+      const size = componentLayoutSize(component, this.defaultSize);
       minX = Math.min(minX, component.placement.position.x - size.width / 2);
       maxX = Math.max(maxX, component.placement.position.x + size.width / 2);
       minY = Math.min(minY, component.placement.position.y - size.height / 2);
@@ -147,7 +150,7 @@ export class ProjectionBridge {
 
   project(component: WorkspaceRenderComponent): ProjectedComponent {
     const placement = component.placement;
-    const intrinsicSize = componentSize(component);
+    const intrinsicSize = componentLayoutSize(component, this.defaultSize);
     const size = placement.space === "viewport"
       ? responsiveViewportSize(component, intrinsicSize, this.viewport)
       : intrinsicSize;
@@ -167,7 +170,11 @@ export class ProjectionBridge {
       }
       case "viewport": {
         const offset = placement.offset;
-        point = viewportAnchorPoint(placement.anchor, this.viewport, size);
+        point = viewportAnchorTopLeft(placement.anchor, size, {
+          ...CANONICAL_LAYOUT_FRAME,
+          width: this.viewport.width,
+          height: this.viewport.height,
+        });
         return {
           componentId: component.id,
           space: placement.space,
@@ -267,34 +274,6 @@ export class ProjectionBridge {
   }
 }
 
-function componentSize(component: WorkspaceRenderComponent): WorkspaceSize2D {
-  const placement = component.placement;
-  const placementSize = "size" in placement ? placement.size : undefined;
-  const defaults = defaultsForType(component.type.typeId);
-  return {
-    width: positiveFinite(placementSize?.width, defaults.width),
-    height: positiveFinite(placementSize?.height, defaults.height),
-  };
-}
-
-function defaultsForType(typeName: string): WorkspaceSize2D {
-  switch (typeName) {
-    case "text": return { width: 280, height: 72 };
-    case "annotation": return { width: 260, height: 128 };
-    case "timer": return { width: 210, height: 112 };
-    case "checklist": return { width: 280, height: 240 };
-    case "chart": return { width: 360, height: 240 };
-    case "table": return { width: 420, height: 260 };
-    case "document": return { width: 420, height: 520 };
-    case "image": return { width: 320, height: 220 };
-    case "video-player": return { width: 480, height: 306 };
-    case "web-panel": return { width: 560, height: 420 };
-    case "data-panel": return { width: 520, height: 340 };
-    case "panel": return { width: 320, height: 220 };
-    default: return DEFAULT_SIZE;
-  }
-}
-
 function responsiveViewportSize(
   component: WorkspaceRenderComponent,
   size: WorkspaceSize2D,
@@ -311,32 +290,6 @@ function responsiveViewportSize(
     width,
     height: Math.min(size.height, externalChromeHeight + (width * 9) / 16),
   };
-}
-
-function viewportAnchorPoint(
-  anchor: ViewportAnchor,
-  viewport: ProjectionViewport,
-  size: WorkspaceSize2D,
-): WorkspaceVec2 {
-  const padding = 20;
-  const left = padding;
-  const centerX = (viewport.width - size.width) / 2;
-  const right = viewport.width - size.width - padding;
-  const top = padding;
-  const centerY = (viewport.height - size.height) / 2;
-  const bottom = viewport.height - size.height - padding;
-  const points: Record<ViewportAnchor, WorkspaceVec2> = {
-    top_left: { x: left, y: top },
-    top: { x: centerX, y: top },
-    top_right: { x: right, y: top },
-    left: { x: left, y: centerY },
-    center: { x: centerX, y: centerY },
-    right: { x: right, y: centerY },
-    bottom_left: { x: left, y: bottom },
-    bottom: { x: centerX, y: bottom },
-    bottom_right: { x: right, y: bottom },
-  };
-  return points[anchor] ?? points.center;
 }
 
 function centered(

@@ -24,13 +24,14 @@ function viewportComponent(
   typeId: "button" | "chart" | "table" | "timer" | "checklist",
   id: string,
   props?: JSONObject,
+  offset = { x: 0, y: 0 },
 ): WorkspaceOperation {
   return {
     op: "create_component",
     op_id: `create_${id}`,
     id,
     component_type: DEFAULT_COMPONENT_REGISTRY.ref(typeId),
-    placement: { space: "viewport", anchor: "center", offset: { x: 0, y: 0 } },
+    placement: { space: "viewport", anchor: "center", offset },
     ...(props ? { props } : {}),
   };
 }
@@ -109,11 +110,11 @@ describe("truthful built-in interactions", () => {
         chartType: "line",
         labels: ["Mon"],
         series: [{ id: "price", label: "Price", values: [100] }],
-      }),
+      }, { x: -240, y: 0 }),
       viewportComponent("table", "TABLE", {
         columns: [{ key: "name", label: "Name" }],
         rows: [{ id: "row_market", name: "Market" }],
-      }),
+      }, { x: 240, y: 0 }),
       connect("CHART_TO_TABLE", "CHART", "point_selected", "TABLE", "select_row", {
         rowId: "row_market",
       }),
@@ -297,28 +298,31 @@ describe("truthful built-in interactions", () => {
   it("rejects unsafe, locked, recipe, already-current, and route-breaking upgrades atomically", () => {
     const currentPanel = DEFAULT_COMPONENT_REGISTRY.ref("panel");
     const legacyPanel = DEFAULT_COMPONENT_REGISTRY.ref("panel", "1.1.0");
-    const createLegacyPanel = (id: string): WorkspaceOperation => ({
+    const createLegacyPanel = (
+      id: string,
+      offset: { x: number; y: number },
+    ): WorkspaceOperation => ({
       op: "create_component",
       op_id: `create_${id}`,
       id,
       component_type: legacyPanel,
-      placement: { space: "viewport", anchor: "center", offset: { x: 0, y: 0 } },
+      placement: { space: "viewport", anchor: "center", offset },
     });
 
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "upgrade_rejections", [
-      createLegacyPanel("LEGACY"),
-      viewportComponent("checklist", "ROUTE_TARGET"),
+      createLegacyPanel("LEGACY", { x: -360, y: -160 }),
+      viewportComponent("checklist", "ROUTE_TARGET", undefined, { x: 0, y: -160 }),
       connect("LEGACY_SELECTED", "LEGACY", "selected", "ROUTE_TARGET", "clear_completed"),
       {
         op: "create_component",
         op_id: "create_current",
         id: "CURRENT",
         component_type: currentPanel,
-        placement: { space: "viewport", anchor: "center", offset: { x: 20, y: 20 } },
+        placement: { space: "viewport", anchor: "center", offset: { x: 360, y: -160 } },
       },
-      createLegacyPanel("LOCKED"),
-      createLegacyPanel("PROPS_LOCKED"),
+      createLegacyPanel("LOCKED", { x: -360, y: 160 }),
+      createLegacyPanel("PROPS_LOCKED", { x: 0, y: 160 }),
     ]));
     store.apply(workspaceBatch(store, "lock_upgrade", [{
       op: "update_component",
@@ -382,7 +386,7 @@ describe("truthful built-in interactions", () => {
     }, {
       op: "create_component", op_id: "create_recipe", id: "RECIPE",
       component_type: { typeId: recipe.typeId, version: recipe.version, digest: recipe.digest },
-      placement: { space: "viewport", anchor: "center", offset: { x: 40, y: 40 } },
+      placement: { space: "viewport", anchor: "center", offset: { x: 360, y: 160 } },
     }]));
     rejected("recipe_upgrade", {
       op: "upgrade_component_manifest", op_id: "recipe_upgrade", id: "RECIPE",
@@ -462,8 +466,8 @@ describe("truthful built-in interactions", () => {
     const sentinel = "Bearer MCP_CONNECTION_SENTINEL_83";
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "private_route", [
-      viewportComponent("button", "PRIVATE_SOURCE"),
-      viewportComponent("checklist", "PRIVATE_TARGET"),
+      viewportComponent("button", "PRIVATE_SOURCE", undefined, { x: -240, y: 0 }),
+      viewportComponent("checklist", "PRIVATE_TARGET", undefined, { x: 240, y: 0 }),
       connect("PRIVATE_CONNECTION", "PRIVATE_SOURCE", "pressed", "PRIVATE_TARGET", "add_item", {
         id: "private_item",
         text: sentinel,
@@ -493,16 +497,16 @@ describe("truthful built-in interactions", () => {
         chartType: "line",
         labels: ["Mon"],
         series: [{ id: "price", label: "Price", values: [100] }],
-      }),
+      }, { x: -450, y: 0 }),
       viewportComponent("chart", "TARGET_CHART", {
         chartType: "line",
         labels: ["Mon"],
         series: [{ id: "price", label: "Price", values: [100] }],
-      }),
+      }, { x: 0, y: 0 }),
       viewportComponent("table", "MISMATCH_TABLE", {
         columns: [{ key: "name", label: "Name" }],
         rows: [{ id: "price:0", name: "Price" }],
-      }),
+      }, { x: 450, y: 0 }),
       {
         op: "connect_event",
         op_id: "connect_exact_payload",
@@ -580,8 +584,8 @@ describe("truthful built-in interactions", () => {
     let now = 1_000;
     const store = new WorkspaceStore({ clock: () => now });
     store.apply(workspaceBatch(store, "setup", [
-      viewportComponent("timer", "TIMER", { durationMs: 100 }),
-      viewportComponent("checklist", "CHECKLIST"),
+      viewportComponent("timer", "TIMER", { durationMs: 100 }, { x: -240, y: 0 }),
+      viewportComponent("checklist", "CHECKLIST", undefined, { x: 240, y: 0 }),
       connect("TIMER_FINISHED", "TIMER", "finished", "CHECKLIST", "add_item", {
         id: "complete",
         text: "Timer completed",
@@ -650,11 +654,11 @@ describe("truthful built-in interactions", () => {
   it("allocates a fresh completion event after deleting and recreating the same timer ID", () => {
     const store = new WorkspaceStore({ clock: () => 2_000 });
     const timerAndRoute = (): WorkspaceOperation[] => [
-      viewportComponent("timer", "REUSED_TIMER", { durationMs: 0 }),
+      viewportComponent("timer", "REUSED_TIMER", { durationMs: 0 }, { x: 240, y: 0 }),
       connect("REUSED_TIMER_ROUTE", "REUSED_TIMER", "finished", "PRESS_TARGET", "press"),
     ];
     store.apply(workspaceBatch(store, "setup_reused_timer", [
-      viewportComponent("button", "PRESS_TARGET"),
+      viewportComponent("button", "PRESS_TARGET", undefined, { x: -240, y: 0 }),
       ...timerAndRoute(),
     ]));
 
@@ -720,7 +724,8 @@ describe("truthful built-in interactions", () => {
         scale: { x: 1, y: 1, z: 1 },
       },
       props: { assetId: "humanoid_adult_neutral_01", entityKind: "character" },
-    }, viewportComponent("button", "BUTTON"), viewportComponent("checklist", "CHECKLIST"),
+    }, viewportComponent("button", "BUTTON", undefined, { x: -240, y: 0 }),
+    viewportComponent("checklist", "CHECKLIST", undefined, { x: 240, y: 0 }),
     connect("ANIMATION_FINISHED", "ACTOR", "animation_finished", "CHECKLIST", "add_item", {
       id: "animation",
       text: "Animation finished",

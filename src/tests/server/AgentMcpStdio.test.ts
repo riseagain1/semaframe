@@ -29,6 +29,7 @@ const EXPECTED_TOOLS = [
   "inspect_workspace_photo_reconstruction",
   "inspect_workspace_physics",
   "inspect_workspace_space",
+  "query_layout_placement",
   "query_spatial_placement",
   "query_stable_placement",
   "read_workspace_events",
@@ -115,7 +116,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
     expect(result.era).toBe("legacy");
     expect(result.protocolVersion).toMatch(/^2025-/u);
     expect(result.discoverResult).toBeUndefined();
-    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.9.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.10.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);
@@ -131,7 +132,7 @@ describe("Agent MCP stdio protocol negotiation", () => {
       supportedVersions: ["2026-07-28"],
       resultType: "complete",
     });
-    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.9.0" });
+    expect(result.serverVersion).toEqual({ name: "semaframe-workspace-engine", version: "1.10.0" });
     expect(result.toolNames).toEqual(EXPECTED_TOOLS);
     expect(result.allInputsClosed).toBe(true);
     expect(result.allHaveOutputSchema).toBe(true);

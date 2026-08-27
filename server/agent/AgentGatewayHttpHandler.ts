@@ -43,6 +43,19 @@ import {
 import { VOICE_RELAY_HOST_ACTION_HEADER, VOICE_RELAY_HTTP_PATHS } from "../../src/voice-relay";
 import { WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT } from "../../src/workspace/agents/contracts";
 import { XR_HTTP_SESSION_HEADER } from "../xr/http/XrHttpAdapter";
+import {
+  BRIDGE_HTTP_PREFIX,
+  BridgeSessionService,
+  createBridgeBrowserHttpHandler,
+  createBridgeHttpHandler,
+} from "../bridge";
+import {
+  AgentClientInstallationService,
+  AgentClientInstallationServiceError,
+} from "./AgentClientInstallationService";
+import {
+  createAgentBootstrapDiscoveryHandler,
+} from "./AgentBootstrapDiscovery";
 
 const DEFAULT_BODY_LIMIT_BYTES = 512 * 1024;
 const AGENT_PHOTO_RECONSTRUCTION_SCOPE = "asset:reconstruct" as const;
@@ -70,12 +83,17 @@ export type AgentGatewayHttpOptions = Readonly<{
   voiceRelayService?: VoiceRelayService;
   /** Injectable volatile one-shot grant store. */
   voiceRelayHostActions?: VoiceRelayHostActionStore;
+  /** Injectable volatile native-tool exchange sessions. */
+  bridgeSessions?: BridgeSessionService;
+  /** Shell-free, closed-vocabulary manager for supported Agent clients. */
+  clientInstallations?: AgentClientInstallationService;
 }>;
 
 export type NodeRequestLike = AsyncIterable<Uint8Array | string> & {
   method?: string;
   url?: string;
   headers: Record<string, string | string[] | undefined>;
+  socket?: Readonly<{ remoteAddress?: string }>;
   on?(event: "aborted", listener: () => void): void;
   off?(event: "aborted", listener: () => void): void;
 };
@@ -620,6 +638,17 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
       },
     };
   }
+  if (pathname === "/v1/workspace/layout/query" && method === "POST") {
+    const body = exactObject(value, ["session_token", "instruction_digest", "candidate"]);
+    return {
+      name: "query_layout_placement",
+      input: {
+        session_token: boundedString(body.session_token, "session_token", 8, 256),
+        instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
+        candidate: body.candidate,
+      },
+    };
+  }
   if (pathname === "/v1/workspace/physics/inspect" && method === "POST") {
     const body = exactObject(value, ["session_token", "instruction_digest", "component_ids"], [
       "session_token", "instruction_digest",
@@ -820,6 +849,13 @@ export function createAgentGatewayHttpHandler(
       action,
     ),
   });
+  const bridgeSessions = options.bridgeSessions ?? new BridgeSessionService();
+  const publicBridge = createBridgeHttpHandler(bridgeSessions);
+  const browserBridge = createBridgeBrowserHttpHandler(bridgeSessions, {
+    publicBaseUrl: options.publicBaseUrl,
+  });
+  const bridgeOwnerId = `gateway:${gateway.getConfig().gatewayInstanceId}`;
+  const clientInstallations = options.clientInstallations;
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -865,6 +901,10 @@ export function createAgentGatewayHttpHandler(
       return jsonResponse(200, openApi);
     }
     if (mcp.matches(pathname)) return mcp.fetch(request);
+    if (pathname.startsWith(BRIDGE_HTTP_PREFIX)) {
+      return await publicBridge(request)
+        ?? errorResponse(404, "not_found", "Bridge route was not found.");
+    }
 
     const browserPhotoUpload = /^\/api\/agent\/reconstructions\/photo-uploads\/[0-9a-f-]{36}$/iu.test(pathname);
 
@@ -953,10 +993,43 @@ export function createAgentGatewayHttpHandler(
         return errorResponse(403, "csrf_invalid", "The agent-control browser session expired. Refresh and try again.");
       }
 
+      if (browserBridge.matches(pathname)) {
+        return browserBridge.fetch(request, bridgeOwnerId, cors);
+      }
+
       try {
         const value = await readJson(request, bodyLimitBytes);
         let result: unknown;
-        if (pathname === "/api/agent/host-actions/voice-relay/mint") {
+        if (pathname === "/api/agent/browser/installations/status") {
+          emptyInput(value);
+          if (!clientInstallations) {
+            return errorResponse(
+              503,
+              "agent_installations_unavailable",
+              "Agent client installation management is unavailable in this host.",
+              undefined,
+              cors,
+            );
+          }
+          result = await clientInstallations.status();
+        } else if (
+          pathname === "/api/agent/browser/installations/install" ||
+          pathname === "/api/agent/browser/installations/update" ||
+          pathname === "/api/agent/browser/installations/remove"
+        ) {
+          const body = exactObject(value, ["client"]);
+          if (!clientInstallations) {
+            return errorResponse(
+              503,
+              "agent_installations_unavailable",
+              "Agent client installation management is unavailable in this host.",
+              undefined,
+              cors,
+            );
+          }
+          const action = pathname.slice(pathname.lastIndexOf("/") + 1);
+          result = await clientInstallations.run(body.client, action);
+        } else if (pathname === "/api/agent/host-actions/voice-relay/mint") {
           const body = exactObject(value, ["action"]);
           result = voiceRelayHostActions.mint(voiceRelayDesktopHostAction(body.action));
         } else if (pathname === "/api/agent/reconstructions/capability") {
@@ -1125,6 +1198,16 @@ export function createAgentGatewayHttpHandler(
         if (error instanceof FeedFetchError) return errorResponse(error.status, error.code, error.message, error.details, cors);
         if (error instanceof PhotoReconstructionServiceError) return photoReconstructionErrorResponse(error, cors);
         if (error instanceof AgentAssetIngressError) return assetErrorResponse(error, cors);
+        if (error instanceof AgentClientInstallationServiceError) {
+          const status = error.code === "invalid_client" || error.code === "invalid_action"
+            ? 400
+            : error.code === "operation_in_progress"
+              ? 409
+            : error.code === "service_closed"
+              ? 503
+              : 500;
+          return errorResponse(status, error.code, error.message, undefined, cors);
+        }
         if (error instanceof AgentGatewayError) return errorResponse(statusFor(error), error.code, error.message, error.details, cors);
         return errorResponse(500, "gateway_error", "The local agent gateway could not complete the browser request.", undefined, cors);
       }
@@ -1343,6 +1426,9 @@ export function createAgentGatewayHttpHandler(
       feedApprovals.clear();
       voiceRelayHostActions.clear();
       const failures: unknown[] = [];
+      // Close installer admission immediately, then let the already-accepted
+      // transaction finish before this handler reports shutdown complete.
+      const clientInstallationsClosing = clientInstallations?.close();
       // Reconstruction teardown may still need to revoke staged candidates,
       // so keep AssetIngress alive until it has settled. A cleanup failure must
       // not skip the remaining MCP/ingress shutdown work.
@@ -1357,10 +1443,12 @@ export function createAgentGatewayHttpHandler(
         failures.push(error);
       }
       removeVoiceRelayOwner();
+      bridgeSessions.revokeOwner(bridgeOwnerId);
       const trailing = await Promise.allSettled([
         mcp.close(),
         assetIngress.close(),
         voiceRelay.close(),
+        ...(clientInstallationsClosing ? [clientInstallationsClosing] : []),
       ]);
       for (const result of trailing) {
         if (result.status === "rejected") failures.push(result.reason);
@@ -1448,6 +1536,10 @@ export function createNodeAgentGatewayHttpHandler(
     assetIngress,
     photoReconstruction,
   });
+  const bootstrapDiscovery = createAgentBootstrapDiscoveryHandler(
+    gateway,
+    gateway.bootstrapBaseUrl,
+  );
   const bodyLimitBytes = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES;
   const handle = async (request: NodeRequestLike, response: NodeResponseLike): Promise<void> => {
     const controller = new AbortController();
@@ -1460,6 +1552,17 @@ export function createNodeAgentGatewayHttpHandler(
     try {
       const method = request.method ?? "GET";
       const target = new URL(request.url ?? "/", `${options.publicBaseUrl}/`);
+      if (bootstrapDiscovery.matches(target.pathname)) {
+        const result = bootstrapDiscovery.fetch(new Request(target, {
+          method,
+          headers: nodeHeaders(request.headers),
+        }), request.socket?.remoteAddress);
+        if (response.destroyed || response.writableEnded) return;
+        response.statusCode = result.status;
+        result.headers.forEach((value, name) => response.setHeader(name, value));
+        response.end(method === "HEAD" ? undefined : await result.text());
+        return;
+      }
       let fetchRequest: Request;
       if (
         assetIngress.matchesUploadPath(target.pathname)

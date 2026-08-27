@@ -132,6 +132,7 @@ export const WORKSPACE_CREATE_COMPONENT_QUICKSTART: JSONValue = Object.freeze(js
     canonical_geometry: "Use the selected placement's resizePolicy: box2d/stage_dimensions/none world scale stays identity; scale3d and stage_dimensions cannot carry placement.size; supplied dimensions, size, scale, bounds, and aspect/uniform rules must match the policy.",
     defaults_and_merge: "Create performs a top-level shallow merge over defaults, not a deep merge. Omit a nested object to keep its complete default, or supply a complete schema-valid replacement object.",
     spatial_collision: "Before creating or moving spatial-entity, call inspect_workspace_space and query_spatial_placement. Current spatial manifests support asset_bounds, explicit box, and compound box colliders; overlapping solid parts reject the whole batch.",
+    layout_overlap: "Before creating, moving, or resizing a canvas2d or viewport component, call inspect_workspace_space and query_layout_placement with an explicit size. The ui2d layout graph blocks 2D/2D overlap independently from world3d collision; 2D/3D visual overlap is allowed and never cross-compared.",
     physics_validation: "physics.enabled is the master switch for stability, constraints, and settling; collision remains independent. Physics 2.0 uses exact horizontal OBB/compound contact faces, the finite Stage footprint, and a grounded load-path graph. Disabled, trigger, none, hidden, unsupported, or unstable bodies cannot carry another body. For enabled dynamic or constrained structures call inspect_workspace_physics, then query_stable_placement before mutation. simulate_workspace_physics is a bounded, fixed-step, read-only vertical drop preview; copy a returned absolute placement into a later prepared batch if desired.",
   },
 }));
@@ -417,10 +418,17 @@ Required workflow
    logical_node_id, part_number, and material_name. The complete result is exact,
    bounded to 1,048,576 encoded bytes, and fails with model_inspection_too_large
    rather than silently truncating nodes or CAD metadata.
-   For spatial reasoning, call inspect_workspace_space. Its data.spatial_graph
-   SemaFrame Spatial Graph projection is derived from the same authoritative Workspace revision and gives
+   For spatial or 2D layout reasoning, call inspect_workspace_space. Its
+   data.spatial_graph and data.layout_graph projections are derived from the
+   same authoritative Workspace revision. spatial_graph declares
+   dimension_domain world3d and gives
    each 3D entity a prim path, local placement, composed world transform, asset-
    derived world bounds and collision parts, hierarchy, rigid-body intent, and spatial relations.
+   layout_graph declares dimension_domain ui2d and gives canonical logical-pixel
+   bounds, polygons, overlap conflicts, and projection-dependent status for
+   non-spatial components. These domains are intentionally disjoint: 2D panels
+   may visually overlap 3D content, while 2D/2D overlap and solid 3D/3D
+   penetration are checked only by their own graph.
    Pass since_revision to receive a bounded delta when possible; the engine may
    return a safe full snapshot after deletions or other structurally ambiguous
    changes. Do not infer 3D layout from labels or the bounded component summary.
@@ -462,6 +470,15 @@ Component and placement rules
 - world3d components use meters in a right-handed +Y-up space. canvas2d is a
   workspace plane; viewport is screen anchored; surface and billboard target an
   existing component.
+- Before creating, placing, or resizing a canvas2d or viewport component, call
+  query_layout_placement with its exact placement and an explicit size copied
+  from the pinned manifest's active box2d policy when necessary. A valid result
+  means the candidate does not overlap another canonical ui2d node at the
+  inspected revision. Use suggested_placements rather than zIndex to resolve a
+  conflict; stacking order never exempts a 2D panel from layout overlap.
+  surface, billboard, and non-spatial world3d cards are camera/projection-
+  dependent layout nodes. Inspect their reported status and never treat an
+  unresolved projection-dependent node as proof of non-overlap.
 - Current spatial-entity manifests include collision and physics. Collision may
   use shape asset_bounds, one explicit box, or a compound of at most 16 oriented
   box parts. The host resolves every part against the composed world transform. Solid/solid

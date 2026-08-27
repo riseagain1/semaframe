@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from "react";
-import { Mic2 } from "lucide-react";
 import {
   AgentGatewayClient,
   AgentGatewayCommandError,
@@ -7,6 +6,12 @@ import {
   type AgentGatewayCommandHandler,
   type AgentGatewayConfig,
   type AgentGatewayStatus,
+  type AgentBridgeProposalRecord,
+  type AgentBridgeSessionAccess,
+  type AgentClientInstallationSnapshot,
+  type AgentClientInstallationView,
+  type AgentInstallationAction,
+  type AgentInstallationClient,
   type PhotoReconstructionCapability,
 } from "../agent/AgentGatewayClient";
 import {
@@ -35,21 +40,31 @@ import {
   AgentConnectionPage,
   type AgentConnectionClient,
   type AgentConnectionPageProps,
-  type AgentConnectionStatus,
 } from "./components/AgentConnectionPage";
+import {
+  deriveAgentExperienceState,
+  type AgentConfigPhase,
+} from "./agentExperience";
+import {
+  isAgentWorkspaceUnlocked,
+  quiesceAgentBridgeForProjectReplacement,
+  replaceAgentOfferAndRestoreBridge,
+  restoreAgentBrowserBridge,
+  shouldClearRealityMeasurementForWorkspaceGate,
+  stopXrSessionsForProjectReplacement,
+} from "./lifecycle";
 import { AgentWorkspaceGate } from "./components/AgentWorkspaceGate";
 import { statusLabel } from "./components/StatusPill";
 import type { HybridWorkspaceCanvasHandle } from "./components/workspace/HybridWorkspaceCanvas";
-import {
-  XRWorkspaceButton,
-  type XRWorkspaceButtonHandle,
-  type XRWorkspaceButtonPhase,
+import type {
+  XRWorkspaceButtonHandle,
+  XRWorkspaceButtonPhase,
 } from "./components/XRWorkspaceButton";
-import {
-  XRHeadsetSessionButton,
-  type XRHeadsetSessionButtonHandle,
-  type XRHeadsetSessionPhase,
+import type {
+  XRHeadsetSessionButtonHandle,
+  XRHeadsetSessionPhase,
 } from "./components/XRHeadsetSessionButton";
+import { XRSetupAssistant } from "./components/XRSetupAssistant";
 import type {
   WorkspaceComponentResizeRequest,
   WorkspaceComponentHierarchyRequest,
@@ -59,6 +74,11 @@ import type {
 } from "./components/workspace/WorkspaceInspector";
 import type { ComponentCreationOptions } from "./components/workspace/WorkspaceComponentLibrary";
 import type { WorkspacePanel } from "./components/workspace/WorkspaceChrome";
+import { WorkspaceStartPanel } from "./components/workspace/WorkspaceStartPanel";
+import {
+  buildWorkspaceValidationView,
+  type WorkspaceValidationTarget,
+} from "./validation/buildWorkspaceValidationView";
 import { buildWorkspaceComponentCatalog } from "./components/workspace/modelingCatalog";
 import type {
   WorkspaceModelExportAction,
@@ -69,7 +89,11 @@ import {
   planWorkspaceModelInstance,
   WorkspaceModelExportGate,
 } from "./components/workspace/workspaceModelActions";
-import type { WorkspaceInlineSourceSaveRequest } from "./components/workspace/WorkspaceSourcePanel";
+import type {
+  WorkspaceInlineSourceSaveRequest,
+  WorkspaceSourceAtomicCreateRequest,
+} from "./components/workspace/WorkspaceSourcePanel";
+import { planWorkspaceSourceAtomicCreate } from "./workspaceSourceAtomicCreate";
 import type {
   RealityAssetAvailability,
   WorkspaceRealityAssetItem,
@@ -105,6 +129,10 @@ import {
   type WorkspaceState,
 } from "../workspace/state";
 import {
+  findAvailableLayoutPlacement,
+  planAutoArrangeLayout,
+} from "../workspace/layout";
+import {
   localPlacementForWorldTransform,
   resolveComponentWorldTransform,
 } from "../workspace/state/worldTransform";
@@ -137,6 +165,24 @@ import {
   type WorkspaceProjectFile,
 } from "../workspace/persistence";
 import {
+  createPortableProjectBundle,
+  importWorkspaceProjectArtifact,
+  PORTABLE_PROJECT_EXTENSION,
+  PORTABLE_PROJECT_LIMITS,
+  PORTABLE_PROJECT_MEDIA_TYPE,
+} from "../workspace/persistence/portable";
+import { createSemaFrameExchange } from "../bridge";
+import {
+  approvedBridgeChangesToWorkspaceOperations,
+  reviewSemaFrameBridgeProposal,
+  type SemaFrameBridgeTarget,
+  type SemaFrameSha256,
+} from "../bridge";
+import type {
+  SceneBridgeProposalItem,
+  SceneBridgePublicationSummary,
+} from "./components/SceneBridgeDialog";
+import {
   planWorkspaceTimerSignals,
   workspaceAnimationCompletionAction,
 } from "./workspaceHostSignals";
@@ -167,7 +213,13 @@ import {
   type ModelDefinition,
 } from "../workspace/modeling";
 import { historyEntriesForStore } from "./workspaceHistory";
-import { safeStorageGet, safeStorageRemove, safeStorageSet } from "./browserStorage";
+import { safeStorageGet, safeStorageRemove } from "./browserStorage";
+import {
+  FallbackWorkspaceRecoveryRepository,
+  IndexedDbWorkspaceRecoveryRepository,
+  LocalStorageWorkspaceRecoveryRepository,
+  WorkspaceRecoveryCoordinator,
+} from "./recovery";
 import {
   assertRealityAssetCandidatePurpose,
   PhotoReconstructionCancellationTracker,
@@ -243,6 +295,8 @@ const AgentWorkspaceControls = lazy(() => import("./components/AgentWorkspaceCon
   .then((module) => ({ default: module.AgentWorkspaceControls })));
 const AgentHistoryDrawer = lazy(() => import("./components/AgentWorkspaceControls")
   .then((module) => ({ default: module.AgentHistoryDrawer })));
+const SceneBridgeDialog = lazy(() => import("./components/SceneBridgeDialog")
+  .then((module) => ({ default: module.SceneBridgeDialog })));
 
 function uid(prefix: string): string {
   return `${prefix}_${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
@@ -324,108 +378,6 @@ function stableAgentBrowserInstanceId(): string {
   }
 }
 
-type RecoverableAgentBridgeClient = Pick<AgentGatewayClient, "running" | "start" | "stop">;
-
-/**
- * Restores this tab's browser-engine lease after an offer mutation. A gateway
- * restart can make a refresh/rotation succeed against a new process while the
- * old polling loop is still unwinding, so wait for that loop before claiming
- * the new lease.
- */
-export async function restoreAgentBrowserBridge(
-  client: RecoverableAgentBridgeClient,
-  config: Pick<AgentGatewayConfig, "engineConnected">,
-  claimAndStart: () => Promise<boolean>,
-): Promise<boolean> {
-  if (client.running && config.engineConnected) return true;
-  if (client.running) {
-    const previousRun = client.start();
-    client.stop("disconnected");
-    await previousRun.catch(() => undefined);
-  }
-  return claimAndStart();
-}
-
-/**
- * Keeps local capabilities valid until the remote offer replacement is
- * confirmed. Once confirmed, local state must move to the new offer even when
- * restoring the browser lease subsequently fails.
- */
-export async function replaceAgentOfferAndRestoreBridge(
-  replaceOffer: () => Promise<AgentGatewayConfig>,
-  onOfferReplaced: (config: AgentGatewayConfig) => void,
-  restoreBridge: (config: AgentGatewayConfig) => Promise<boolean>,
-): Promise<boolean> {
-  const config = await replaceOffer();
-  onOfferReplaced(config);
-  return restoreBridge(config);
-}
-
-/** The visual Workspace is private until an approved client completes its instruction handshake. */
-export function isAgentWorkspaceUnlocked(
-  sessionReady: boolean,
-  status: AgentGatewayStatus,
-): boolean {
-  return sessionReady && (status === "connected" || status === "applying");
-}
-
-/** Ephemeral renderer measurements must never outlive the gated Workspace canvas. */
-export function shouldClearRealityMeasurementForWorkspaceGate(
-  workspaceActive: boolean,
-  measurement: RealityMeasurementEvent | undefined,
-): boolean {
-  return !workspaceActive && measurement !== undefined;
-}
-
-/** Project identity changes remain an explicit XR teardown boundary. */
-export async function stopXrSessionsForProjectReplacement(
-  sameDevice: Pick<XRWorkspaceButtonHandle, "exitFromUserGesture"> | null | undefined,
-  headset: Pick<XRHeadsetSessionButtonHandle, "stop"> | null | undefined,
-): Promise<readonly Readonly<{ target: "same_device" | "headset"; reason: unknown }>[]> {
-  type TeardownOutcome = Readonly<{
-    locallyReleased: boolean;
-    teardownConfirmed: boolean;
-    error?: string;
-  }>;
-  const pending: Readonly<{ target: "same_device" | "headset"; operation: Promise<TeardownOutcome> }>[] = [
-    ...(sameDevice ? [{ target: "same_device" as const, operation: sameDevice.exitFromUserGesture() }] : []),
-    ...(headset ? [{ target: "headset" as const, operation: headset.stop() }] : []),
-  ];
-  const settled = await Promise.allSettled(pending.map(({ operation }) => operation));
-  return Object.freeze(settled.flatMap((result, index) => {
-    if (result.status === "rejected") {
-      return [Object.freeze({ target: pending[index]!.target, reason: result.reason })];
-    }
-    if (result.value.locallyReleased && result.value.teardownConfirmed) return [];
-    return [Object.freeze({
-      target: pending[index]!.target,
-      reason: result.value.error ?? "XR teardown was not fully confirmed.",
-    })];
-  }));
-}
-
-type ProjectReplacementAgentBridge = Pick<AgentGatewayClient, "running" | "start" | "stop" | "disable">;
-
-/** Abort and drain the browser command loop before a project can replace its store. */
-export async function quiesceAgentBridgeForProjectReplacement(input: Readonly<{
-  client?: ProjectReplacementAgentBridge;
-  occupied: boolean;
-  revoke: () => void;
-  waitForTrustRevocation: () => Promise<unknown>;
-}>): Promise<void> {
-  const previousRun = input.client?.running ? input.client.start() : undefined;
-  input.revoke();
-  input.client?.stop(input.occupied ? "disconnected" : "disabled");
-  const disable = !input.occupied && input.client
-    ? input.client.disable().catch(() => input.client?.stop("disabled"))
-    : Promise.resolve();
-  await Promise.all([
-    previousRun?.catch(() => undefined),
-    input.waitForTrustRevocation().catch(() => undefined),
-    disable,
-  ]);
-}
-
 function initialProjectName(): string {
   const formatted = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date());
   return `Untitled world · ${formatted}`;
@@ -466,6 +418,76 @@ function downloadArtifact(
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function artifactStem(name: string, fallback = "semaframe"): string {
+  return name.trim().replace(/[^a-z0-9_.-]+/gi, "-").replace(/^-|-$/g, "") || fallback;
+}
+
+function downloadBlob(name: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+type BrowserSaveFilePicker = (options: Readonly<{
+  suggestedName: string;
+  types: readonly Readonly<{
+    description: string;
+    accept: Readonly<Record<string, readonly string[]>>;
+  }>[];
+}>) => Promise<Readonly<{
+  createWritable(): Promise<Readonly<{
+    write(value: Uint8Array): Promise<void>;
+    close(): Promise<void>;
+    abort?(reason?: unknown): Promise<void>;
+  }>>;
+}>>;
+
+async function savePortableBundleToBrowser(
+  name: string,
+  bundle: Awaited<ReturnType<typeof createPortableProjectBundle>>,
+): Promise<void> {
+  const filename = `${artifactStem(name)}${PORTABLE_PROJECT_EXTENSION}`;
+  const picker = (window as unknown as { showSaveFilePicker?: BrowserSaveFilePicker }).showSaveFilePicker;
+  if (!picker) {
+    if (bundle.byteLength > PORTABLE_PROJECT_LIMITS.defaultMaximumMaterializedBytes) {
+      throw new Error(
+        "This browser cannot stream a portable project of this size. Use a Chromium browser with the system save picker, or download the smaller metadata-only project instead.",
+      );
+    }
+    downloadBlob(filename, await bundle.toBlob());
+    return;
+  }
+  const handle = await picker({
+    suggestedName: filename,
+    types: [{
+      description: "SemaFrame portable project",
+      accept: { [PORTABLE_PROJECT_MEDIA_TYPE]: [PORTABLE_PROJECT_EXTENSION] },
+    }],
+  });
+  const writable = await handle.createWritable();
+  const reader = bundle.stream().getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await writable.write(value);
+    }
+    await writable.close();
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    await writable.abort?.(error).catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function binaryBlobPart(contents: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(contents.byteLength);
   copy.set(contents);
@@ -474,6 +496,11 @@ function binaryBlobPart(contents: Uint8Array): ArrayBuffer {
 
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : "An unexpected error occurred.";
+}
+
+function sceneBridgeAlreadyRevoked(error: unknown): boolean {
+  return error instanceof AgentGatewayError
+    && (error.gatewayCode === "session_not_found" || error.gatewayCode === "session_expired");
 }
 
 function reconstructionPhotoMediaType(file: File): PhotoReconstructionMediaType | undefined {
@@ -510,7 +537,11 @@ function latestStatus(entries: WorkspaceHistoryEntry[]): WorkspaceHistoryStatus 
   return entries.at(-1)?.status ?? "ready";
 }
 
-function defaultWorkspacePlacement(manifest: ComponentManifest, ordinal: number): ComponentPlacement {
+function defaultWorkspacePlacement(
+  manifest: ComponentManifest,
+  ordinal: number,
+  state?: Readonly<WorkspaceState>,
+): ComponentPlacement {
   if (manifest.typeId === "stage-3d") {
     return {
       space: "world3d",
@@ -519,34 +550,54 @@ function defaultWorkspacePlacement(manifest: ComponentManifest, ordinal: number)
       scale: { x: 1, y: 1, z: 1 },
     };
   }
-  if (manifest.allowedPlacements.includes("viewport")) {
-    const isVideoPlayer = manifest.typeId === "video-player";
+  // Timers are deliberate HUD controls and video players are screen-fixed
+  // media surfaces. Other 2D content belongs on the zoomable authored plane
+  // by default so a dashboard does not fill every viewer's fixed viewport.
+  const screenFixed = manifest.typeId === "timer" || manifest.typeId === "video-player";
+  if (screenFixed && manifest.allowedPlacements.includes("viewport")) {
     const resizePolicy = resizePolicyForPlacement(manifest, "viewport");
     const size = resizePolicy.kind === "box2d"
       ? structuredClone(resizePolicy.defaultSize)
       : { width: 340, height: 220 };
-    return {
+    const base = {
       space: "viewport",
       anchor: manifest.typeId === "timer" ? "top_right" : "center",
-      offset: manifest.typeId === "timer"
-        ? { x: -28, y: 58 + (ordinal % 3) * 18 }
-        : isVideoPlayer
-          ? { x: 0, y: 0 }
-        : { x: (ordinal % 5) * 24 - 48, y: (ordinal % 4) * 20 - 30 },
+      offset: { x: 0, y: 0 },
       size,
       zIndex: 20 + ordinal,
-    };
+    } as const;
+    return state
+      ? findAvailableLayoutPlacement(state, { placement: base }) ?? base
+      : base;
   }
   if (manifest.allowedPlacements.includes("canvas2d")) {
     const resizePolicy = resizePolicyForPlacement(manifest, "canvas2d");
-    return {
+    const base = {
       space: "canvas2d",
-      position: { x: 80 + (ordinal % 5) * 36, y: 90 + (ordinal % 4) * 30 },
+      position: { x: 0, y: 0 },
       size: resizePolicy.kind === "box2d"
         ? structuredClone(resizePolicy.defaultSize)
         : { width: 340, height: 220 },
       zIndex: ordinal,
-    };
+    } as const;
+    return state
+      ? findAvailableLayoutPlacement(state, { placement: base }) ?? base
+      : base;
+  }
+  if (manifest.allowedPlacements.includes("viewport")) {
+    const resizePolicy = resizePolicyForPlacement(manifest, "viewport");
+    const base = {
+      space: "viewport",
+      anchor: "center",
+      offset: { x: 0, y: 0 },
+      size: resizePolicy.kind === "box2d"
+        ? structuredClone(resizePolicy.defaultSize)
+        : { width: 340, height: 220 },
+      zIndex: 20 + ordinal,
+    } as const;
+    return state
+      ? findAvailableLayoutPlacement(state, { placement: base }) ?? base
+      : base;
   }
   return {
     space: "world3d",
@@ -570,6 +621,19 @@ function agentConfigTrustIdentity(config: AgentGatewayConfig): string {
   });
 }
 
+function createAppRecoveryCoordinator(): WorkspaceRecoveryCoordinator | undefined {
+  let localRepository: LocalStorageWorkspaceRecoveryRepository | undefined;
+  try { localRepository = new LocalStorageWorkspaceRecoveryRepository(); } catch { /* storage may be blocked */ }
+  let indexedRepository: IndexedDbWorkspaceRecoveryRepository | undefined;
+  try {
+    if (globalThis.indexedDB) indexedRepository = new IndexedDbWorkspaceRecoveryRepository();
+  } catch { /* IndexedDB may be unavailable in a restricted browser */ }
+  const repository = indexedRepository && localRepository
+    ? new FallbackWorkspaceRecoveryRepository(indexedRepository, localRepository)
+    : indexedRepository ?? localRepository;
+  return repository ? new WorkspaceRecoveryCoordinator(repository) : undefined;
+}
+
 export default function App() {
   const workspaceStoreRef = useRef<WorkspaceStore | null>(null);
   if (!workspaceStoreRef.current) {
@@ -577,6 +641,8 @@ export default function App() {
       registry: DEFAULT_COMPONENT_REGISTRY,
     });
   }
+  const recoveryCoordinatorRef = useRef<WorkspaceRecoveryCoordinator | null | undefined>(null);
+  if (recoveryCoordinatorRef.current === null) recoveryCoordinatorRef.current = createAppRecoveryCoordinator();
   const realityAssetVaultRef = useRef<AppRealityAssetVault | null>(null);
   if (!realityAssetVaultRef.current) realityAssetVaultRef.current = createAppRealityAssetVault();
   const hybridCanvasRef = useRef<HybridWorkspaceCanvasHandle>(null);
@@ -659,6 +725,16 @@ export default function App() {
   const [workspace, setWorkspace] = useState<Readonly<WorkspaceState>>(workspaceStoreRef.current.getState());
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
   const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>(null);
+  const [sceneBridgeOpen, setSceneBridgeOpen] = useState(false);
+  const [sceneBridgeSession, setSceneBridgeSession] = useState<AgentBridgeSessionAccess>();
+  const sceneBridgeSessionRef = useRef<AgentBridgeSessionAccess | undefined>(undefined);
+  const sceneBridgeLifecycleRef = useRef(0);
+  sceneBridgeSessionRef.current = sceneBridgeSession;
+  const [sceneBridgePublication, setSceneBridgePublication] = useState<SceneBridgePublicationSummary>();
+  const [sceneBridgeProposals, setSceneBridgeProposals] = useState<readonly AgentBridgeProposalRecord[]>([]);
+  const [sceneBridgeBusy, setSceneBridgeBusy] = useState(false);
+  const [sceneBridgeError, setSceneBridgeError] = useState<string>();
+  const [startCenterDismissed, setStartCenterDismissed] = useState(false);
   const [workspaceConfigureRequestId, setWorkspaceConfigureRequestId] = useState<string>();
   const [entries, setEntriesState] = useState<WorkspaceHistoryEntry[]>([]);
   const entriesRef = useRef(entries);
@@ -688,9 +764,13 @@ export default function App() {
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [agentStatus, setAgentStatus] = useState<AgentGatewayStatus>("disabled");
   const [agentConfig, setAgentConfig] = useState<AgentGatewayConfig>();
+  const [agentConfigPhase, setAgentConfigPhase] = useState<AgentConfigPhase>("loading");
   const [approvedAgentClaim, setApprovedAgentClaim] = useState<AgentConnectionClient>();
   const [agentError, setAgentError] = useState<string>();
   const [agentBrowserOccupied, setAgentBrowserOccupied] = useState(false);
+  const [agentInstallations, setAgentInstallations] = useState<AgentClientInstallationSnapshot>();
+  const [agentInstallationsLoading, setAgentInstallationsLoading] = useState(Boolean(AGENT_CONTROL_ENDPOINT));
+  const [agentInstallationsUnavailable, setAgentInstallationsUnavailable] = useState<string>();
   const agentBrowserOccupiedRef = useRef(agentBrowserOccupied);
   agentBrowserOccupiedRef.current = agentBrowserOccupied;
   const agentCommandGenerationRef = useRef(0);
@@ -832,6 +912,12 @@ export default function App() {
       // while a real unmount still closes its database and Worker resources.
       queueMicrotask(() => {
         if (realityVaultLifecycleRef.current === lifecycle) {
+          sceneBridgeLifecycleRef.current += 1;
+          const bridgeSession = sceneBridgeSessionRef.current;
+          if (bridgeSession) {
+            agentGatewayRef.current?.releaseBridgeSession(bridgeSession.sessionId);
+            sceneBridgeSessionRef.current = undefined;
+          }
           preparedXrModeRef.current = undefined;
           void voiceRelayClientRef.current?.disarm().catch(() => undefined);
           if (activeReconstruction && cancellationClient) {
@@ -848,6 +934,18 @@ export default function App() {
   }, [confirmTrackedPhotoReconstructionCancellation, invalidatePendingHostAction]);
 
   useEffect(() => {
+    const releaseSceneBridge = () => {
+      sceneBridgeLifecycleRef.current += 1;
+      const session = sceneBridgeSessionRef.current;
+      if (!session) return;
+      agentGatewayRef.current?.releaseBridgeSession(session.sessionId);
+      sceneBridgeSessionRef.current = undefined;
+    };
+    window.addEventListener("pagehide", releaseSceneBridge);
+    return () => window.removeEventListener("pagehide", releaseSceneBridge);
+  }, []);
+
+  useEffect(() => {
     if (!dirty) return;
     const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -862,6 +960,49 @@ export default function App() {
     setNotices((current) => [...current, item].slice(-3));
     window.setTimeout(() => setNotices((current) => current.filter((entry) => entry.id !== item.id)), 4_500);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const initializeRecovery = async () => {
+      const coordinator = recoveryCoordinatorRef.current;
+      if (!coordinator) {
+        if (!cancelled) setRecoveryAvailable(false);
+        return;
+      }
+      try {
+        const legacy = safeStorageGet(RECOVERY_KEY);
+        if (legacy) {
+          await coordinator.migrateLegacy(legacy, () => {
+            if (!safeStorageRemove(RECOVERY_KEY)) throw new Error("Legacy recovery could not be cleared after migration");
+          });
+        }
+        const available = Boolean(await coordinator.read());
+        if (!cancelled) setRecoveryAvailable(available);
+        // estimate() is passive: unlike persist(), it never asks the user for
+        // storage permission. Two maximum-size snapshots are needed to keep a
+        // real current/previous recovery pair.
+        try {
+          const estimate = await globalThis.navigator?.storage?.estimate?.();
+          const remaining = estimate?.quota !== undefined && estimate.usage !== undefined
+            ? estimate.quota - estimate.usage
+            : undefined;
+          if (!cancelled && remaining !== undefined && remaining < MAX_WORKSPACE_PROJECT_BYTES * 2) {
+            notice("Browser storage is nearly full. Local recovery may not retain both current and previous snapshots; download a project copy.", "warning");
+          }
+        } catch { /* storage estimates are advisory and unavailable in some browsers */ }
+      } catch (error) {
+        if (!cancelled) {
+          setRecoveryAvailable(Boolean(safeStorageGet(RECOVERY_KEY)));
+          if (!recoveryStorageWarningRef.current) {
+            recoveryStorageWarningRef.current = true;
+            notice(`Local recovery could not be initialized: ${friendlyError(error)}`, "warning");
+          }
+        }
+      }
+    };
+    void initializeRecovery();
+    return () => { cancelled = true; };
+  }, [notice]);
 
   const runConfirmedVoiceRelayHostAction = useCallback(async <T,>(
     action: "voice_relay_accessibility" | "voice_relay_configure_target" | "voice_relay_draft_round_trip" | "voice_relay_arm",
@@ -1335,6 +1476,24 @@ export default function App() {
     };
   }, [connectWorkspaceStore, installWorkspaceAgentController]);
 
+  const storeRecoveryProject = useCallback(async (
+    recoveryProjectName: string,
+    project: WorkspaceProjectFile,
+  ): Promise<void> => {
+    const coordinator = recoveryCoordinatorRef.current;
+    if (!coordinator) throw new Error("browser recovery storage is unavailable");
+    await coordinator.schedule({
+      projectName: recoveryProjectName,
+      serializedProject: workspaceSerializerRef.current.serialize(project),
+      projectId: project.projectId,
+      workspaceRevision: project.workspace.revision,
+      // This is the recovery capture time, not the source project's authored
+      // timestamp. It lets the fallback repository order snapshots correctly
+      // even when opening an older project file after an IndexedDB failure.
+      createdAt: new Date().toISOString(),
+    });
+  }, []);
+
   const recoverySnapshot = useCallback(() => {
     try {
       const store = workspaceStoreRef.current;
@@ -1344,23 +1503,43 @@ export default function App() {
         store,
         { createdAt: createdAtRef.current },
       );
-      const stored = safeStorageSet(RECOVERY_KEY, JSON.stringify({
-        version: 1,
-        projectName,
-        project,
-      }));
-      if (!stored && !recoveryStorageWarningRef.current) {
-        recoveryStorageWarningRef.current = true;
-        notice("Local recovery is unavailable because browser storage is full or blocked. Download a copy to protect your work.", "warning");
-      }
+      void storeRecoveryProject(projectName, project).then(() => {
+        recoveryStorageWarningRef.current = false;
+        if (appMountedRef.current) setRecoveryAvailable(true);
+      }).catch((error) => {
+        if (!recoveryStorageWarningRef.current && appMountedRef.current) {
+          recoveryStorageWarningRef.current = true;
+          notice(`Local recovery is unavailable: ${friendlyError(error)} Download a copy to protect your work.`, "warning");
+        }
+      });
     } catch (error) {
       if (!recoveryStorageWarningRef.current) {
         recoveryStorageWarningRef.current = true;
         notice(`Local recovery is unavailable: ${friendlyError(error)}`, "warning");
       }
     }
-  }, [notice, projectId, projectName]);
+  }, [notice, projectId, projectName, storeRecoveryProject]);
   recoverySnapshotRef.current = recoverySnapshot;
+
+  const closeSceneBridgeForProjectChange = useCallback(async () => {
+    const session = sceneBridgeSession;
+    if (!session) return;
+    if (sceneBridgeBusy) throw new Error("Wait for the active Scene Bridge operation to finish.");
+    const client = agentGatewayRef.current;
+    if (!client) throw new Error("The local gateway is unavailable, so the old Scene Bridge cannot be revoked safely.");
+    try {
+      await client.closeBridgeSession(session.sessionId);
+    } catch (error) {
+      if (!sceneBridgeAlreadyRevoked(error)) throw error;
+    }
+    sceneBridgeLifecycleRef.current += 1;
+    sceneBridgeSessionRef.current = undefined;
+    setSceneBridgeSession(undefined);
+    setSceneBridgePublication(undefined);
+    setSceneBridgeProposals([]);
+    setSceneBridgeError(undefined);
+    setSceneBridgeOpen(false);
+  }, [sceneBridgeBusy, sceneBridgeSession]);
 
   const save = useCallback(() => {
     if (busyRef.current) return;
@@ -1380,45 +1559,101 @@ export default function App() {
     } catch (error) { notice(`Couldn’t save: ${friendlyError(error)}`, "error"); }
   }, [notice, projectId, projectName]);
 
+  const savePortableProject = useCallback(async () => {
+    await runExclusive(async () => {
+      try {
+        const store = workspaceStoreRef.current;
+        if (!store) throw new Error("The workspace is not ready.");
+        const project = workspaceSerializerRef.current.fromStore(
+          projectId,
+          store,
+          { createdAt: createdAtRef.current },
+        );
+        const bundle = await createPortableProjectBundle(
+          project,
+          realityAssetVaultRef.current!.vault,
+          { serializer: workspaceSerializerRef.current },
+        );
+        await savePortableBundleToBrowser(projectName, bundle);
+        setDirty(false);
+        notice(
+          `Portable project saved with ${bundle.manifest.assets.length} verified Reality asset${bundle.manifest.assets.length === 1 ? "" : "s"}.`,
+          "success",
+        );
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        notice(`Couldn’t save portable project: ${friendlyError(error)}`, "error");
+      }
+    });
+  }, [notice, projectId, projectName, runExclusive]);
+
+  const exportSceneExchange = useCallback(async () => {
+    await runExclusive(async () => {
+      try {
+        const state = workspaceStoreRef.current?.getState();
+        if (!state) throw new Error("The workspace is not ready.");
+        const exchange = await createSemaFrameExchange(state, {
+          registry: DEFAULT_COMPONENT_REGISTRY,
+        });
+        downloadBlob(
+          `${artifactStem(projectName)}.semaframe-exchange`,
+          new Blob([binaryBlobPart(exchange.archive.bytes)], { type: exchange.archive.mediaType }),
+        );
+        notice(
+          `Scene Exchange exported ${exchange.manifest.nodes.length} stable component${exchange.manifest.nodes.length === 1 ? "" : "s"} with OpenUSD, GLB, semantics, and a fidelity report.`,
+          "success",
+        );
+      } catch (error) {
+        notice(`Couldn’t export Scene Exchange: ${friendlyError(error)}`, "error");
+      }
+    });
+  }, [notice, projectName, runExclusive]);
+
   const loadProject = useCallback(async (file: File) => {
     await runExclusive(async () => {
       try {
-        if (file.size > MAX_WORKSPACE_PROJECT_BYTES) {
-          throw new Error(`Project exceeds the ${MAX_WORKSPACE_PROJECT_BYTES} byte limit.`);
-        }
-        const raw = await file.text();
-        const project = workspaceSerializerRef.current.deserialize(raw);
-        await verifyWorkspaceProjectCadEvidence(project);
-        const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
-        const restoredName = file.name.replace(/\.semaframe\.json$|\.json$/i, "");
-        await stopAgentForProjectChange("project_opened");
+        const restoredName = file.name.replace(/\.semaframe-project$|\.semaframe\.json$|\.json$/i, "");
+        const result = await importWorkspaceProjectArtifact(file, {
+          vault: realityAssetVaultRef.current!.vault,
+          serializer: workspaceSerializerRef.current,
+          commitProject: async (project) => {
+            const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
+            await closeSceneBridgeForProjectChange();
+            await stopAgentForProjectChange("project_opened");
+            await recoveryCoordinatorRef.current?.replaceGeneration({ clear: false });
 
-        workspaceStoreRef.current = nextWorkspaceStore;
-        installWorkspaceAgentController(nextWorkspaceStore);
-        connectWorkspaceStore(nextWorkspaceStore);
-        setProjectId(project.projectId);
-        createdAtRef.current = project.createdAt;
-        setProjectName(restoredName);
-        setEntries(historyEntriesForStore(nextWorkspaceStore));
-        setDirty(false);
-        setRecoveryAvailable(false);
+            workspaceStoreRef.current = nextWorkspaceStore;
+            installWorkspaceAgentController(nextWorkspaceStore);
+            connectWorkspaceStore(nextWorkspaceStore);
+            setProjectId(project.projectId);
+            createdAtRef.current = project.createdAt;
+            setProjectName(restoredName);
+            setStartCenterDismissed(true);
+            setEntries(historyEntriesForStore(nextWorkspaceStore));
+            setDirty(false);
+            setRecoveryAvailable(false);
+          },
+        });
 
-        const stored = safeStorageSet(RECOVERY_KEY, JSON.stringify({ version: 1, projectName: restoredName, project }));
-        if (!stored) {
-          recoveryStorageWarningRef.current = true;
-          notice("Workspace opened, but local recovery could not be stored. Download a copy to protect it.", "warning");
-        } else {
+        try {
+          await storeRecoveryProject(restoredName, result.project);
           recoveryStorageWarningRef.current = false;
-          notice("Workspace opened from its validated resolved history.", "success");
+          notice(result.kind === "portable"
+            ? `Portable Workspace opened with ${result.importedAssetIds.length} imported and ${result.reusedAssetIds.length} reused Reality asset${result.importedAssetIds.length + result.reusedAssetIds.length === 1 ? "" : "s"}.`
+            : "Workspace opened from its validated resolved history.", "success");
+        } catch (error) {
+          recoveryStorageWarningRef.current = true;
+          notice(`Workspace opened, but local recovery could not be stored. Download a copy to protect it. ${friendlyError(error)}`, "warning");
         }
       } catch (error) {
         notice(`This Workspace project could not be opened. Your current project is unchanged. ${friendlyError(error)}`, "error");
       }
     });
-  }, [connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange, storeRecoveryProject]);
 
   const resetProject = useCallback(async () => {
     await runExclusive(async () => {
+      await closeSceneBridgeForProjectChange();
       await stopAgentForProjectChange("new_project");
       const nextWorkspaceStore = new WorkspaceStore({
         registry: DEFAULT_COMPONENT_REGISTRY,
@@ -1429,43 +1664,93 @@ export default function App() {
       setEntries([]);
       setProjectId(uid("project"));
       setProjectName(initialProjectName());
+      setStartCenterDismissed(false);
       setDirty(false);
       createdAtRef.current = new Date().toISOString();
-      if (!safeStorageRemove(RECOVERY_KEY)) {
-        notice("New Workspace created, but browser recovery storage could not be cleared.", "warning");
+      try {
+        await recoveryCoordinatorRef.current?.clear();
+        const legacyRecoveryPresent = safeStorageGet(RECOVERY_KEY) !== null;
+        if (!safeStorageRemove(RECOVERY_KEY) && legacyRecoveryPresent) {
+          throw new Error("Legacy browser recovery storage could not be cleared.");
+        }
+      } catch (error) {
+        notice(`New Workspace created, but browser recovery storage could not be cleared. ${friendlyError(error)}`, "warning");
+        setRecoveryAvailable(true);
+        return;
       }
       setRecoveryAvailable(false);
     });
-  }, [connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
 
   const restoreRecovery = useCallback(async () => {
     await runExclusive(async () => {
-      const raw = safeStorageGet(RECOVERY_KEY);
-      if (!raw) { setRecoveryAvailable(false); return; }
+      const coordinator = recoveryCoordinatorRef.current;
+      const candidates = coordinator ? await coordinator.readCandidates().catch(() => []) : [];
+      if (candidates.length > 0) {
+        try {
+          await closeSceneBridgeForProjectChange();
+        } catch (error) {
+          notice(`Recovery was not opened because the current Scene Bridge could not be closed safely. ${friendlyError(error)}`, "error");
+          return;
+        }
+      }
+      let lastError: unknown = new Error("Recovery snapshot is unavailable.");
+      for (const recovered of candidates) {
+        try {
+          const project = workspaceSerializerRef.current.deserialize(recovered.snapshot.serializedProject);
+          await verifyWorkspaceProjectCadEvidence(project);
+          const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
+          await stopAgentForProjectChange("recovery_restored");
+          await coordinator?.replaceGeneration({ clear: false });
+          workspaceStoreRef.current = nextWorkspaceStore;
+          installWorkspaceAgentController(nextWorkspaceStore);
+          connectWorkspaceStore(nextWorkspaceStore);
+          setProjectId(project.projectId);
+          setProjectName(recovered.snapshot.projectName || "Recovered world");
+          setStartCenterDismissed(true);
+          createdAtRef.current = project.createdAt;
+          setEntries(historyEntriesForStore(nextWorkspaceStore));
+          setDirty(true);
+          setRecoveryAvailable(false);
+          notice(recovered.recoveredFromPrevious
+            ? "Recovered the last-known-good Workspace snapshot because the current recovery was invalid or older."
+            : "Recovered your last local Workspace snapshot.", "success");
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
       try {
-        const recovered = JSON.parse(raw) as { version?: number; projectName?: string; project?: WorkspaceProjectFile };
-        if (recovered.version !== 1 || !recovered.project) throw new Error("Recovery snapshot is incomplete or retired.");
-        const project = workspaceSerializerRef.current.deserialize(recovered.project);
-        await verifyWorkspaceProjectCadEvidence(project);
-        const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
-        await stopAgentForProjectChange("recovery_restored");
-        workspaceStoreRef.current = nextWorkspaceStore;
-        installWorkspaceAgentController(nextWorkspaceStore);
-        connectWorkspaceStore(nextWorkspaceStore);
-        setProjectId(project.projectId);
-        setProjectName(recovered.projectName || "Recovered world");
-        createdAtRef.current = project.createdAt;
-        setEntries(historyEntriesForStore(nextWorkspaceStore));
-        setDirty(true);
+        await coordinator?.clear();
+        const legacyRecoveryPresent = safeStorageGet(RECOVERY_KEY) !== null;
+        if (!safeStorageRemove(RECOVERY_KEY) && legacyRecoveryPresent) {
+          throw new Error("Legacy browser recovery storage could not be cleared.");
+        }
         setRecoveryAvailable(false);
-        notice("Recovered your last local Workspace snapshot.", "success");
-      } catch (error) {
-        safeStorageRemove(RECOVERY_KEY);
-        setRecoveryAvailable(false);
-        notice(`Recovery could not be opened: ${friendlyError(error)}`, "error");
+        notice(`Recovery could not be opened: ${friendlyError(lastError)}`, "error");
+      } catch (clearError) {
+        setRecoveryAvailable(true);
+        notice(
+          `Recovery could not be opened or cleared. ${friendlyError(lastError)} ${friendlyError(clearError)}`,
+          "error",
+        );
       }
     });
-  }, [connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+
+  const dismissRecovery = useCallback(async () => {
+    try {
+      await recoveryCoordinatorRef.current?.clear();
+      const legacyRecoveryPresent = safeStorageGet(RECOVERY_KEY) !== null;
+      if (!safeStorageRemove(RECOVERY_KEY) && legacyRecoveryPresent) {
+        throw new Error("Legacy browser recovery storage could not be cleared.");
+      }
+    } catch (error) {
+      notice(`Recovery could not be dismissed: ${friendlyError(error)}`, "warning");
+      return;
+    }
+    setRecoveryAvailable(false);
+  }, [notice]);
 
   const undo = useCallback(() => {
     if (busyRef.current) return;
@@ -1500,6 +1785,12 @@ export default function App() {
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const command = event.metaKey || event.ctrlKey;
+      if (sceneBridgeOpen) {
+        if (command && ["s", "o", "z", "y"].includes(event.key.toLowerCase())) {
+          event.preventDefault();
+        }
+        return;
+      }
       const editableTarget = event.target instanceof HTMLElement && (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement ||
@@ -1513,7 +1804,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [busy, redo, save, undo]);
+  }, [busy, redo, save, sceneBridgeOpen, undo]);
 
   const applyWorkspaceOperations = useCallback((
     operations: WorkspaceOperation[],
@@ -1555,6 +1846,230 @@ export default function App() {
     return result;
   }, [notice]);
 
+  const publishSceneBridgeSnapshot = useCallback(async (
+    session: AgentBridgeSessionAccess,
+    sequence: number,
+  ): Promise<SceneBridgePublicationSummary> => {
+    const client = agentGatewayRef.current;
+    const store = workspaceStoreRef.current;
+    if (!client || !store) throw new Error("The local Scene Bridge is unavailable.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    if (!sessionIsCurrent()) throw new Error("The Scene Bridge session is no longer active.");
+    const source = store.getState();
+    const exchange = await createSemaFrameExchange(source, { registry: DEFAULT_COMPONENT_REGISTRY });
+    if (store.getState().revision !== source.revision || store.getState().workspaceId !== source.workspaceId) {
+      throw new Error("The Workspace changed while Scene Exchange was being built. Publish again.");
+    }
+    if (!sessionIsCurrent()) throw new Error("The Scene Bridge session ended while the exchange was being built.");
+    await client.publishBridgeSession(session.sessionId, sequence, exchange);
+    if (!sessionIsCurrent()) throw new Error("The Scene Bridge session ended while the exchange was being published.");
+    const summary = Object.freeze({
+      sequence,
+      revision: exchange.manifest.source.revision,
+      digest: exchange.archive.sha256,
+    });
+    setSceneBridgePublication(summary);
+    return summary;
+  }, []);
+
+  const createSceneBridgeSession = useCallback(async (target: SemaFrameBridgeTarget) => {
+    if (busyRef.current || sceneBridgeBusy) throw new Error("Another Workspace operation is still in progress.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await runExclusive(async () => {
+        if (sceneBridgeSession) throw new Error("Close the current Scene Bridge before creating another one.");
+        const client = agentGatewayRef.current;
+        const store = workspaceStoreRef.current;
+        if (!client || !store) throw new Error("The local Scene Bridge is unavailable.");
+        const source = store.getState();
+        const exchange = await createSemaFrameExchange(source, { registry: DEFAULT_COMPONENT_REGISTRY });
+        if (store.getState().revision !== source.revision || store.getState().workspaceId !== source.workspaceId) {
+          throw new Error("The Workspace changed while Scene Exchange was being built. Try again.");
+        }
+        const access = await client.createBridgeSession(target, exchange);
+        if (sceneBridgeLifecycleRef.current !== lifecycle) {
+          client.releaseBridgeSession(access.sessionId);
+          throw new Error("The Agent connection changed while Scene Bridge was being created.");
+        }
+        sceneBridgeSessionRef.current = access;
+        setSceneBridgeSession(access);
+        setSceneBridgePublication(Object.freeze({
+          sequence: 1,
+          revision: exchange.manifest.source.revision,
+          digest: exchange.archive.sha256,
+        }));
+        setSceneBridgeProposals([]);
+        notice(`${target === "freecad" ? "FreeCAD" : target === "unreal" ? "Unreal Engine" : target[0].toUpperCase() + target.slice(1)} Scene Bridge created. Copy its scoped setup JSON into the adapter.`, "success");
+      });
+    } catch (error) {
+      if (sceneBridgeLifecycleRef.current === lifecycle) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sceneBridgeLifecycleRef.current === lifecycle) setSceneBridgeBusy(false);
+    }
+  }, [notice, runExclusive, sceneBridgeBusy, sceneBridgeSession]);
+
+  const publishLatestSceneBridge = useCallback(async () => {
+    if (busyRef.current || sceneBridgeBusy) throw new Error("Another Workspace operation is still in progress.");
+    const session = sceneBridgeSession;
+    const publication = sceneBridgePublication;
+    if (!session || !publication) throw new Error("Create a Scene Bridge first.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await runExclusive(async () => {
+        const next = await publishSceneBridgeSnapshot(session, publication.sequence + 1);
+        notice(`Scene Bridge published Workspace revision ${next.revision}.`, "success");
+      });
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [notice, publishSceneBridgeSnapshot, runExclusive, sceneBridgeBusy, sceneBridgePublication, sceneBridgeSession]);
+
+  const refreshSceneBridgeProposals = useCallback(async () => {
+    if (sceneBridgeBusy) throw new Error("Another Scene Bridge operation is still in progress.");
+    const session = sceneBridgeSession;
+    const client = agentGatewayRef.current;
+    if (!session || !client) throw new Error("Create a Scene Bridge first.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      const records = await client.readBridgeProposals(session.sessionId);
+      if (sessionIsCurrent()) setSceneBridgeProposals(records);
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [sceneBridgeBusy, sceneBridgeSession]);
+
+  const discardSceneBridgeProposals = useCallback(async (throughCursor: number) => {
+    if (sceneBridgeBusy) throw new Error("Another Scene Bridge operation is still in progress.");
+    const session = sceneBridgeSession;
+    const client = agentGatewayRef.current;
+    if (!session || !client) throw new Error("Create a Scene Bridge first.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await client.discardBridgeProposals(session.sessionId, throughCursor);
+      if (sessionIsCurrent()) {
+        setSceneBridgeProposals((current) => current.filter((record) => record.cursor > throughCursor));
+      }
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [sceneBridgeBusy, sceneBridgeSession]);
+
+  const applySceneBridgeProposal = useCallback(async (
+    record: AgentBridgeProposalRecord,
+    approvedChangeIds: readonly string[],
+  ) => {
+    if (busyRef.current || sceneBridgeBusy) throw new Error("Another Workspace operation is still in progress.");
+    const session = sceneBridgeSession;
+    const publication = sceneBridgePublication;
+    const client = agentGatewayRef.current;
+    const store = workspaceStoreRef.current;
+    if (!session || !publication || !client || !store) throw new Error("The Scene Bridge is unavailable.");
+    if (!approvedChangeIds.length) throw new Error("Select at least one eligible change to apply.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await runExclusive(async () => {
+        const state = store.getState();
+        const review = reviewSemaFrameBridgeProposal(record.proposal, state, {
+          expectedExchangeDigest: publication.digest,
+          registry: DEFAULT_COMPONENT_REGISTRY,
+        });
+        const operations = approvedBridgeChangesToWorkspaceOperations(review, approvedChangeIds);
+        applyWorkspaceOperations(
+          [...operations],
+          `Applied ${approvedChangeIds.length} reviewed ${session.target} Bridge change${approvedChangeIds.length === 1 ? "" : "s"}`,
+          state.revision,
+        );
+        // Keep the reviewed proposal until the committed authoritative state
+        // has been published. A failed publish then leaves an auditable stale
+        // proposal instead of silently removing the recovery point.
+        await publishSceneBridgeSnapshot(session, publication.sequence + 1);
+        await client.discardBridgeProposals(session.sessionId, record.cursor);
+        if (sessionIsCurrent()) {
+          setSceneBridgeProposals((current) => current.filter((candidate) => candidate.cursor > record.cursor));
+        }
+      });
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [applyWorkspaceOperations, publishSceneBridgeSnapshot, runExclusive, sceneBridgeBusy, sceneBridgePublication, sceneBridgeSession]);
+
+  const closeSceneBridgeSession = useCallback(async () => {
+    if (sceneBridgeBusy) throw new Error("Another Scene Bridge operation is still in progress.");
+    const session = sceneBridgeSession;
+    const client = agentGatewayRef.current;
+    if (!session || !client) return;
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    let closedCurrentSession = false;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      try {
+        await client.closeBridgeSession(session.sessionId);
+      } catch (error) {
+        if (!sceneBridgeAlreadyRevoked(error)) throw error;
+      }
+      if (!sessionIsCurrent()) return;
+      sceneBridgeLifecycleRef.current += 1;
+      closedCurrentSession = true;
+      sceneBridgeSessionRef.current = undefined;
+      setSceneBridgeSession(undefined);
+      setSceneBridgePublication(undefined);
+      setSceneBridgeProposals([]);
+      notice("Scene Bridge closed and its bearer revoked.", "success");
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (closedCurrentSession || sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [notice, sceneBridgeBusy, sceneBridgeSession]);
+
+  const sceneBridgeProposalItems = useMemo<readonly SceneBridgeProposalItem[]>(() => {
+    if (!sceneBridgePublication) return [];
+    return sceneBridgeProposals.map((record) => Object.freeze({
+      record,
+      review: reviewSemaFrameBridgeProposal(record.proposal, workspace, {
+        expectedExchangeDigest: sceneBridgePublication.digest,
+        registry: DEFAULT_COMPONENT_REGISTRY,
+      }),
+    }));
+  }, [sceneBridgeProposals, sceneBridgePublication, workspace]);
+
   /**
    * Commits deterministic host acknowledgements without presenting them as a
    * manual edit or adding them to the user's Undo history.
@@ -1590,7 +2105,8 @@ export default function App() {
         (component) => component.type.typeId === "stage-3d",
       );
       if (typeId === "stage-3d" && hasStage) throw new Error("This workspace already owns its 3D stage.");
-      const placement = defaultWorkspacePlacement(manifest, store.getState().components.size);
+      const state = store.getState();
+      const placement = defaultWorkspacePlacement(manifest, state.components.size, state);
       if (typeId === "spatial-primitive" && placement.space === "world3d" && options?.props?.geometry) {
         const bounds = deriveParametricBounds(parseParametricPrimitive(options.props.geometry));
         placement.position.y = -bounds.min.y;
@@ -1909,7 +2425,7 @@ export default function App() {
           digest: stageManifest.digest,
         },
         label: "3D Stage",
-        placement: defaultWorkspacePlacement(stageManifest, state.components.size),
+        placement: defaultWorkspacePlacement(stageManifest, state.components.size, state),
       });
       operations.push({
         op: "create_component",
@@ -1933,7 +2449,7 @@ export default function App() {
           quality: "auto",
           semanticProxyIds: [],
         },
-        placement: defaultWorkspacePlacement(realityManifest, state.components.size + (stageId ? 1 : 0)),
+        placement: defaultWorkspacePlacement(realityManifest, state.components.size + (stageId ? 1 : 0), state),
         tags: ["reality", "visual-reference", "photo-reconstruction"],
       });
       applyWorkspaceOperations(operations, "Placed an editable photo reconstruction");
@@ -2011,7 +2527,7 @@ export default function App() {
             digest: stageManifest.digest,
           },
           label: "3D Stage",
-          placement: defaultWorkspacePlacement(stageManifest, state.components.size),
+          placement: defaultWorkspacePlacement(stageManifest, state.components.size, state),
         });
         operations.push({
           op: "create_component",
@@ -2038,7 +2554,7 @@ export default function App() {
             quality: "auto",
             semanticProxyIds: [],
           },
-          placement: defaultWorkspacePlacement(realityManifest, state.components.size + (stageId ? 1 : 0)),
+          placement: defaultWorkspacePlacement(realityManifest, state.components.size + (stageId ? 1 : 0), state),
           tags: ["reality", "visual-reference"],
         });
 
@@ -3234,6 +3750,61 @@ export default function App() {
     }
   }, [applyWorkspaceOperations, cancelWorkspaceHostFeedRefresh, notice]);
 
+  const commitWorkspaceSourceWithNewTarget = useCallback((
+    request: WorkspaceSourceAtomicCreateRequest,
+  ): boolean => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const state = store.getState();
+      const generation = workspaceGenerationRef.current;
+      const manifest = store.getComponentManifest(request.destination.componentType);
+      if (!manifest) throw new Error(`Unknown component type ${request.destination.componentType}.`);
+      const nextSequence = store.getAllocatorSnapshot();
+      if (!Number.isSafeInteger(nextSequence) || nextSequence < 1 || nextSequence > 999_999) {
+        throw new Error("The workspace cannot allocate another component ID.");
+      }
+      const componentId = `CMP_${String(nextSequence).padStart(6, "0")}`;
+      const resourceId = request.source.resourceId
+        ?? uid(request.kind === "local" ? "RES_local" : "RES_feed");
+      if (request.kind === "https"
+        && !hostFeedAutomationConsentRef.current.matchesPreview(request.source)) {
+        throw new Error("Preview this exact feed URL, format, and refresh policy again before saving.");
+      }
+      const plan = planWorkspaceSourceAtomicCreate({
+        request,
+        state,
+        manifest,
+        placement: defaultWorkspacePlacement(manifest, state.components.size, state),
+        componentId,
+        resourceId,
+        observedAt: new Date().toISOString(),
+        id: (purpose, index) => uid(`op_source_${purpose}${index === undefined ? "" : `_${index + 1}`}`),
+      });
+      if (generation !== workspaceGenerationRef.current) {
+        throw new Error("The project changed while the source destination was being prepared.");
+      }
+      applyWorkspaceOperations(
+        [...plan.operations],
+        `Connected ${request.source.label.trim()} to ${request.destination.componentLabel.trim()}`,
+        plan.baseRevision,
+      );
+      if (request.kind === "https") {
+        if (!hostFeedAutomationConsentRef.current.authorizePreviewedSave(resourceId, request.source)) {
+          throw new Error("Feed approval expired while the atomic update was committing.");
+        }
+        cancelWorkspaceHostFeedRefresh(resourceId);
+        setHostFeedAutomationRevision((current) => current + 1);
+        hostFeedOnOpenSeenRef.current.add(`${generation}:${state.workspaceId}:${resourceId}`);
+      }
+      setSelectedComponentId(componentId);
+      return true;
+    } catch (error) {
+      notice(friendlyError(error), "error");
+      return false;
+    }
+  }, [applyWorkspaceOperations, cancelWorkspaceHostFeedRefresh, notice]);
+
   const unbindWorkspaceSource = useCallback((bindingId: string) => {
     try {
       const connection = workspaceStoreRef.current?.getState().connections.get(bindingId);
@@ -4143,6 +4714,7 @@ export default function App() {
           invalidatePendingHostAction();
         }
         agentTrustIdentityRef.current = nextTrustIdentity;
+        setAgentConfigPhase("ready");
         setAgentConfig(config);
         setAgentEnabled(config.enabled);
         if (config.offerStatus !== "approval_granted") setApprovedAgentClaim(undefined);
@@ -4158,6 +4730,19 @@ export default function App() {
       },
     });
     agentGatewayRef.current = client;
+    setAgentInstallationsLoading(true);
+    setAgentInstallationsUnavailable(undefined);
+    void client.getAgentClientInstallations().then((snapshot) => {
+      if (cancelled) return;
+      setAgentInstallations(snapshot);
+      setAgentInstallationsUnavailable(undefined);
+    }).catch(() => {
+      if (cancelled) return;
+      setAgentInstallations(undefined);
+      setAgentInstallationsUnavailable("Automatic Agent client setup is unavailable in this Gateway host.");
+    }).finally(() => {
+      if (!cancelled) setAgentInstallationsLoading(false);
+    });
     setPhotoReconstructionCapability("checking");
     void client.getPhotoReconstructionCapability().then((capability) => {
       if (!cancelled) setPhotoReconstructionCapability(capability);
@@ -4170,6 +4755,7 @@ export default function App() {
     });
     void client.fetchConfig().then((config) => {
       if (cancelled) return;
+      setAgentConfigPhase("ready");
       setAgentEnabled(config.enabled);
       if (config.enabled) {
         void claimAndStartAgentBridge(client).catch((error) => {
@@ -4180,6 +4766,7 @@ export default function App() {
       }
     }).catch((error) => {
       if (cancelled) return;
+      setAgentConfigPhase("error");
       setAgentError(friendlyError(error));
       setAgentStatus("disconnected");
     });
@@ -4294,6 +4881,7 @@ export default function App() {
     if (!client) throw new Error("The local Agent Gateway is unavailable.");
     setAgentError(undefined);
     const current = await client.fetchConfig();
+    setAgentConfigPhase("ready");
     if (!current.enabled) {
       await enableAgentConnection(allowAgentDestructiveRef.current);
       return;
@@ -4372,35 +4960,64 @@ export default function App() {
     notice("The connection request was rejected. A fresh link is ready.", "success");
   }, [agentConfig, busy, notice]);
 
+  const refreshAgentInstallations = useCallback(async () => {
+    const client = agentGatewayRef.current;
+    if (!client || busy) throw new Error("The local Agent Gateway is unavailable.");
+    setAgentInstallationsLoading(true);
+    setAgentInstallationsUnavailable(undefined);
+    try {
+      const snapshot = await client.getAgentClientInstallations();
+      setAgentInstallations(snapshot);
+    } catch (error) {
+      setAgentInstallations(undefined);
+      setAgentInstallationsUnavailable("Automatic Agent client setup is unavailable in this Gateway host.");
+      throw error;
+    } finally {
+      setAgentInstallationsLoading(false);
+    }
+  }, [busy]);
+
+  const manageAgentInstallation = useCallback(async (
+    installationClient: AgentInstallationClient,
+    action: AgentInstallationAction,
+  ): Promise<AgentClientInstallationView> => {
+    const client = agentGatewayRef.current;
+    if (!client || busy) throw new Error("The local Agent Gateway is unavailable.");
+    const result = await client.manageAgentClientInstallation(installationClient, action);
+    setAgentInstallations((current) => current ? Object.freeze({
+      version: 1 as const,
+      clients: Object.freeze(current.clients.map((entry) =>
+        entry.client === installationClient ? result : entry)),
+    }) : current);
+    setAgentInstallationsUnavailable(undefined);
+    return result;
+  }, [busy]);
+
   const status = latestStatus(entries);
   const agentIsConnected = agentStatus === "connected" || agentStatus === "applying";
   const pendingApproval = agentConfig?.pendingApproval;
-  const offerApprovalGranted = agentConfig?.offerStatus === "approval_granted";
-  const pairedAgent = pendingApproval ? {
-    name: pendingApproval.clientName || "Unnamed agent",
-    clientId: pendingApproval.clientId
-      ? `${pendingApproval.clientId} · ${pendingApproval.fingerprint}`
-      : pendingApproval.fingerprint,
-    scopes: pendingApproval.scopes,
-    connected: false,
-  } : offerApprovalGranted && approvedAgentClaim ? approvedAgentClaim
-  : agentConfig?.clientName || agentIsConnected ? {
-    name: agentConfig?.clientName || "Unnamed MCP client",
-    scopes: agentConfig?.clientScopes ?? (allowAgentDestructive
-      ? ["workspace:read", "workspace:write", "workspace:history", "component:create", "component:update", "component:recipe_define", "component:invoke", "component:delete", "workspace:clear"]
-      : ["workspace:read", "workspace:write", "workspace:history", "component:create", "component:update", "component:recipe_define", "component:invoke"]),
-    connected: agentIsConnected,
-  } : null;
   const externalControlActive = isAgentWorkspaceUnlocked(agentSessionReady, agentStatus);
   useLayoutEffect(() => {
     if (!externalControlActive) hybridCanvasRef.current?.cancelActiveInteractions();
   }, [externalControlActive]);
   useEffect(() => {
     if (externalControlActive) return;
+    sceneBridgeLifecycleRef.current += 1;
+    const bridgeSession = sceneBridgeSessionRef.current;
+    if (bridgeSession) {
+      agentGatewayRef.current?.releaseBridgeSession(bridgeSession.sessionId);
+      sceneBridgeSessionRef.current = undefined;
+    }
     invalidatePendingHostAction();
     setAgentHistoryOpen(false);
     setAgentManageOpen(false);
     setVoiceRelaySettingsOpen(false);
+    setSceneBridgeOpen(false);
+    setSceneBridgeSession(undefined);
+    setSceneBridgePublication(undefined);
+    setSceneBridgeProposals([]);
+    setSceneBridgeBusy(false);
+    setSceneBridgeError(undefined);
     setConfirm(null);
     setPendingFile(null);
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
@@ -4412,19 +5029,15 @@ export default function App() {
       cancelRealityMeasurement();
     }
   }, [cancelRealityMeasurement, externalControlActive, realityMeasurement]);
-  const agentConnectionStatus: AgentConnectionStatus = agentBrowserOccupied
-    ? "occupied"
-    : !agentEnabled
-    ? "disabled"
-    : pendingApproval || agentConfig?.offerStatus === "approval_pending"
-      ? "approval"
-      : offerApprovalGranted
-        ? agentStatus === "disconnected" ? "disconnected" : "waiting"
-        : agentSessionReady && agentIsConnected
-          ? "connected"
-          : agentStatus === "disconnected" || agentConfig?.offerStatus === "expired" || agentConfig?.offerStatus === "denied"
-          ? "disconnected"
-            : "waiting";
+  const agentExperience = useMemo(() => deriveAgentExperienceState({
+    configPhase: agentConfigPhase,
+    gatewayStatus: agentStatus,
+    config: agentConfig,
+    sessionReady: agentSessionReady,
+    occupied: agentBrowserOccupied,
+    client: approvedAgentClaim,
+    gatewayError: agentError,
+  }), [agentBrowserOccupied, agentConfig, agentConfigPhase, agentError, agentSessionReady, agentStatus, approvedAgentClaim]);
   const workspaceSnapshot = useMemo(() => toRenderSnapshot(workspace), [workspace]);
   const xrWorldPanels = useMemo(() => {
     const projection = toXrWorkspaceProjection(workspaceSnapshot);
@@ -4467,10 +5080,10 @@ export default function App() {
   const hasSelectedSpatialComponent = selectedWorkspaceComponent?.placement.space === "world3d"
     && Boolean(selectedWorkspaceComponent.props.physics);
   const workspacePhysicsReport = useMemo(
-    () => hasSelectedSpatialComponent ? buildPhysicsValidationReport(workspace) : undefined,
-    [hasSelectedSpatialComponent, workspace],
+    () => buildPhysicsValidationReport(workspace),
+    [workspace],
   );
-  const selectedWorkspacePhysicsReport = workspacePhysicsReport
+  const selectedWorkspacePhysicsReport = hasSelectedSpatialComponent
     ? workspacePhysicsReport.bodies.find((body) => body.componentId === selectedComponentId)
     : undefined;
   const selectedWorkspaceResizePolicy = selectedWorkspaceComponent
@@ -4714,13 +5327,75 @@ export default function App() {
       } : {}),
     };
   }), [hostFeedAutomationRevision, hostFeedRuntime, workspace, workspaceSnapshot]);
+  const workspaceValidationView = useMemo(() => buildWorkspaceValidationView({
+    workspace,
+    physicsReport: workspacePhysicsReport,
+    bindingDiagnostics,
+    realityAvailability: realityAssetAvailability,
+    sources: workspaceSources.map((source) => ({
+      id: source.id,
+      label: source.label,
+      status: source.status,
+      automationPaused: source.automationPaused,
+      lastError: source.lastError,
+    })),
+  }), [bindingDiagnostics, realityAssetAvailability, workspace, workspacePhysicsReport, workspaceSources]);
+  const autoArrangeWorkspaceLayout = useCallback(() => {
+    try {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("The component workspace is not ready.");
+      const changes = planAutoArrangeLayout(store.getState());
+      if (changes.size === 0) {
+        notice(
+          "No movable 2D overlap could be rearranged. Locked panels may need to be moved or unlocked manually.",
+          "warning",
+        );
+        return;
+      }
+      const operations: WorkspaceOperation[] = [...changes]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([id, placement], index) => ({
+          op: "place_component" as const,
+          op_id: `op_auto_arrange_2d_${index + 1}`,
+          id,
+          placement: structuredClone(placement),
+        }));
+      applyWorkspaceOperations(
+        operations,
+        `Auto-arranged ${operations.length} 2D ${operations.length === 1 ? "component" : "components"}`,
+      );
+      window.setTimeout(() => hybridCanvasRef.current?.frameAll(), 80);
+    } catch (error) {
+      notice(friendlyError(error), "error");
+    }
+  }, [applyWorkspaceOperations, notice]);
+  const navigateWorkspaceValidation = useCallback((target: WorkspaceValidationTarget) => {
+    if (target.componentId) {
+      if (!workspaceStoreRef.current?.getState().components.has(target.componentId)) {
+        notice("That check target no longer exists in the current Workspace revision.", "warning");
+        setWorkspacePanel("validation");
+        return;
+      }
+      setSelectedComponentId(target.componentId);
+    }
+    setWorkspacePanel(target.surface === "sources"
+      ? "sources"
+      : target.surface === "reality"
+        ? "reality"
+        : "inspector");
+  }, [notice]);
+  const showStartCenter = externalControlActive
+    && !startCenterDismissed
+    && !recoveryAvailable
+    && workspace.components.size === 0
+    && workspace.resources.size === 0
+    && workspace.modelDefinitions.size === 0;
 
   const agentConnectionPageProps = {
     id: "agent-manage-panel",
-    status: agentConnectionStatus,
+    experience: agentExperience,
     busy,
     error: agentError,
-    pairedClient: pairedAgent,
     allowDeleteAndClear: allowAgentDestructive,
     connectionUrl: agentConfig?.connectionUrl,
     expiresAt: agentConfig?.offerStatus === "approved" ? undefined : agentConfig?.offerExpiresAt,
@@ -4751,6 +5426,11 @@ export default function App() {
     onDisableAgentControl: agentBrowserOccupied
       ? () => runAgentAction(leaveOccupiedAgentConnection)
       : () => runAgentAction(disableAgentConnection),
+    agentInstallations,
+    agentInstallationsLoading,
+    agentInstallationsUnavailable,
+    onRefreshAgentInstallations: refreshAgentInstallations,
+    onManageAgentInstallation: manageAgentInstallation,
   } satisfies Omit<AgentConnectionPageProps, "onClose">;
 
   return <Suspense fallback={<main className="agent-connection-gate" aria-label="Loading Workspace">Loading Workspace…</main>}>
@@ -4761,11 +5441,18 @@ export default function App() {
       canUndo={Boolean(workspaceStoreRef.current?.canUndoUserCommand())}
       canRedo={Boolean(workspaceStoreRef.current?.canRedoUserCommand())}
       busy={busy}
-      onProjectName={(name) => { setProjectName(name); setDirty(true); }}
+      onProjectName={(name) => {
+        setProjectName(name);
+        setDirty(true);
+        window.setTimeout(() => recoverySnapshotRef.current(), 0);
+      }}
       onUndo={() => void undo()}
       onRedo={() => void redo()}
       onOpen={() => fileRef.current?.click()}
       onSave={save}
+      onSavePortable={() => void savePortableProject()}
+      onExportExchange={() => void exportSceneExchange()}
+      onOpenBridge={() => { setSceneBridgeError(undefined); setSceneBridgeOpen(true); }}
       onNew={() => setConfirm("new")}
     />}
     <AgentWorkspaceGate
@@ -4786,64 +5473,55 @@ export default function App() {
         onResetView={() => hybridCanvasRef.current?.resetView()}
         onZoomIn={() => hybridCanvasRef.current?.zoomIn()}
         onZoomOut={() => hybridCanvasRef.current?.zoomOut()}
-        xrControl={<>
-          <button
-            type="button"
-            className={`viewport-xr-toggle${voiceRelayStatus?.armed ? " is-active" : ""}`}
-            disabled={agentManageOpen}
-            aria-label="Configure optional Voice Relay"
-            title="Configure optional voice for a text-only Agent"
-            aria-pressed={voiceRelayStatus?.armed ?? false}
-            onClick={() => {
-              setVoiceRelaySettingsOpen(true);
-              void inspectVoiceRelaySettings().catch(() => undefined);
-            }}
-          >
-            <Mic2 size={17} aria-hidden="true" />
-          </button>
-          <XRWorkspaceButton
-            ref={sameDeviceXrControlRef}
-            getCanvas={() => hybridCanvasRef.current}
-            disabled={agentManageOpen}
-            onPhaseChange={(phase, message) => {
+        xrControl={<XRSetupAssistant
+          disabled={agentManageOpen}
+          sameDeviceRef={sameDeviceXrControlRef}
+          headsetRef={headsetXrControlRef}
+          voiceRelayArmed={Boolean(voiceRelayStatus?.armed)}
+          voiceRelayTargetLabel={voiceRelayStatus?.target?.label}
+          onConfigureVoiceRelay={() => {
+            setVoiceRelaySettingsOpen(true);
+            void inspectVoiceRelaySettings().catch(() => undefined);
+          }}
+          sameDevice={{
+            getCanvas: () => hybridCanvasRef.current,
+            onPhaseChange: (phase, message) => {
               sameDeviceXrStateRef.current = { phase, message };
               if (phase === "active") notice("Immersive XR is active. The Workspace remains browser-authoritative.", "success");
               if (phase === "error") notice(message, "warning");
-            }}
-          />
-          <XRHeadsetSessionButton
-            ref={headsetXrControlRef}
-            snapshot={workspaceSnapshot}
-            registryIdentity={DEFAULT_COMPONENT_REGISTRY.digest}
-            desktopControlsVisible={externalControlActive}
-            voiceRelayEnabled={Boolean(
+            },
+          }}
+          headset={{
+            snapshot: workspaceSnapshot,
+            registryIdentity: DEFAULT_COMPONENT_REGISTRY.digest,
+            desktopControlsVisible: externalControlActive,
+            voiceRelayEnabled: Boolean(
               voiceRelayStatus?.enabled && voiceRelayStatus.armed && voiceRelayStatus.target,
-            )}
-            disabled={agentManageOpen}
-            openRealityAsset={openRealityAsset}
-            onSelect={setSelectedComponentId}
-            onActivate={(componentId) => activateWorkspaceComponent({ componentId })}
-            onPanelAction={(action) => invokeWorkspaceAction({
+            ),
+            openRealityAsset,
+            onSelect: setSelectedComponentId,
+            onActivate: (componentId) => activateWorkspaceComponent({ componentId }),
+            onPanelAction: (action) => invokeWorkspaceAction({
               componentId: action.targetComponentId,
               action: action.actionName,
               input: action.input,
-            })}
-            onSpatialContext={(context, source) => {
+            }),
+            onSpatialContext: (context, source) => {
               remoteXrContextRef.current = Object.freeze({
                 context,
                 receivedAtMs: Date.now(),
                 relayServerReceivedAtMs: source.serverReceivedAtMs,
                 relayQueueAgeMs: source.serverQueueAgeMs,
               });
-            }}
-            onPhaseChange={(phase, message) => {
+            },
+            onPhaseChange: (phase, message) => {
               headsetXrStateRef.current = { phase, message };
               if (phase !== "active") remoteXrContextRef.current = undefined;
               if (phase === "active") notice("The paired headset is reporting live immersive context.", "success");
               if (phase === "error") notice(message, "warning");
-            }}
-          />
-        </>}
+            },
+          }}
+        />}
       >
         <HybridWorkspaceCanvas
           key={`workspace-canvas-${workspaceRenderGeneration}-${realityRenderGeneration}`}
@@ -4872,6 +5550,34 @@ export default function App() {
             hybridCanvasRef.current?.setXRWorldPanels?.(xrWorldPanels, workspaceSnapshot.revision);
           }}
         />
+        {showStartCenter && <WorkspaceStartPanel
+          disabled={busy}
+          agentName={agentConfig?.clientName}
+          onBuildSpace={() => {
+            const created = createWorkspaceComponent("stage-3d");
+            if (!created) return;
+            setStartCenterDismissed(true);
+            setWorkspacePanel("library");
+          }}
+          onCreateDashboard={() => {
+            setStartCenterDismissed(true);
+            setWorkspacePanel("library");
+          }}
+          onOpenReality={() => {
+            setStartCenterDismissed(true);
+            setWorkspacePanel("reality");
+          }}
+          onConnectData={() => {
+            setStartCenterDismissed(true);
+            setWorkspacePanel("sources");
+          }}
+          onTryExample={() => {
+            createMixedWorkspaceShowcase();
+            setStartCenterDismissed(true);
+          }}
+          onOpenProject={() => fileRef.current?.click()}
+          onDismiss={() => setStartCenterDismissed(true)}
+        />}
         <WorkspaceChrome
           key={`workspace-chrome-${workspaceRenderGeneration}`}
           catalog={workspaceCatalog}
@@ -4880,6 +5586,9 @@ export default function App() {
           sources={workspaceSources}
           bindingTargets={workspaceBindingTargets}
           bindingDiagnostics={bindingDiagnostics}
+          validationView={workspaceValidationView}
+          onValidationNavigate={navigateWorkspaceValidation}
+          onAutoArrange2D={autoArrangeWorkspaceLayout}
           disabled={busy || !externalControlActive}
           panelState={workspacePanel}
           onPanelStateChange={setWorkspacePanel}
@@ -4933,6 +5642,8 @@ export default function App() {
           onRefreshSource={(resourceId) => void refreshWorkspaceHostFeed(resourceId)}
           onPreviewHostFeed={previewWorkspaceHostFeed}
           onSaveHostFeed={saveWorkspaceHostFeed}
+          onCommitSourceWithNewTarget={commitWorkspaceSourceWithNewTarget}
+          sourceScopeKey={`${workspaceRenderGeneration}:${workspace.workspaceId}`}
           onUnbindSource={unbindWorkspaceSource}
           onDeleteSource={deleteWorkspaceSource}
           sourcesOnly={false}
@@ -4953,8 +5664,8 @@ export default function App() {
       />
       <AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} />
     </AgentWorkspaceGate>
-    {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => { safeStorageRemove(RECOVERY_KEY); setRecoveryAvailable(false); }}>Dismiss</button></div>}
-    <input ref={fileRef} hidden type="file" accept=".json,.semaframe.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
+    {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => void dismissRecovery()}>Dismiss</button></div>}
+    <input ref={fileRef} hidden type="file" accept=".semaframe-project,.json,.semaframe.json,application/vnd.semaframe.project+zip,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
     <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />
     <ConfirmDialog open={externalControlActive && confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
@@ -4971,6 +5682,21 @@ export default function App() {
       onRunDiagnostics={diagnoseVoiceRelaySettings}
       onArm={armVoiceRelaySettings}
       onDisarm={disarmVoiceRelaySettings}
+    />
+    <SceneBridgeDialog
+      open={externalControlActive && sceneBridgeOpen}
+      session={sceneBridgeSession}
+      publication={sceneBridgePublication}
+      proposals={sceneBridgeProposalItems}
+      busy={sceneBridgeBusy}
+      error={sceneBridgeError}
+      onClose={() => setSceneBridgeOpen(false)}
+      onCreate={createSceneBridgeSession}
+      onPublish={publishLatestSceneBridge}
+      onRefreshProposals={refreshSceneBridgeProposals}
+      onApplyProposal={applySceneBridgeProposal}
+      onDiscardThrough={discardSceneBridgeProposals}
+      onCloseSession={closeSceneBridgeSession}
     />
     <HostActionPrompt request={externalControlActive ? hostActionPrompt : undefined} onConfirm={confirmHostAction} onCancel={cancelHostAction} />
     <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>
