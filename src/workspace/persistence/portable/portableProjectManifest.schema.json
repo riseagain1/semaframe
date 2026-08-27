@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "portableProjectManifest.schema.json",
+  "title": "SemaFrame Portable Reality Project Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "version", "project", "assets"],
+  "properties": {
+    "format": { "const": "semaframe-portable-project" },
+    "version": { "const": "1.0" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "byteLength", "projectId", "formatVersion", "protocolVersion", "workspaceSchemaVersion"],
+      "properties": {
+        "path": { "const": "project/workspace.semaframe.json" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "byteLength": { "type": "integer", "minimum": 1, "maximum": 26214400 },
+        "projectId": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "formatVersion": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "protocolVersion": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "workspaceSchemaVersion": { "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetId", "digest", "byteLength", "format", "mediaType", "objectPath", "descriptor"],
+        "properties": {
+          "assetId": { "type": "string", "pattern": "^ra_[0-9a-f]{64}$" },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "byteLength": { "type": "integer", "minimum": 1, "maximum": 268435456 },
+          "format": { "enum": ["ply", "spz-v4", "sog-v2"] },
+          "mediaType": { "enum": ["application/ply", "application/x-spz", "model/vnd.sog"] },
+          "objectPath": { "type": "string", "pattern": "^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$" },
+          "descriptor": { "$ref": "workspaceProtocol.schema.json#/$defs/realityAssetDescriptor" }
+        }
+      }
+    }
+  }
+}

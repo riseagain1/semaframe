@@ -6,6 +6,8 @@ import {
   type AgentGatewayCommandHandler,
   type AgentGatewayConfig,
   type AgentGatewayStatus,
+  type AgentBridgeProposalRecord,
+  type AgentBridgeSessionAccess,
   type PhotoReconstructionCapability,
 } from "../agent/AgentGatewayClient";
 import {
@@ -159,6 +161,24 @@ import {
   type WorkspaceProjectFile,
 } from "../workspace/persistence";
 import {
+  createPortableProjectBundle,
+  importWorkspaceProjectArtifact,
+  PORTABLE_PROJECT_EXTENSION,
+  PORTABLE_PROJECT_LIMITS,
+  PORTABLE_PROJECT_MEDIA_TYPE,
+} from "../workspace/persistence/portable";
+import { createSemaFrameExchange } from "../bridge";
+import {
+  approvedBridgeChangesToWorkspaceOperations,
+  reviewSemaFrameBridgeProposal,
+  type SemaFrameBridgeTarget,
+  type SemaFrameSha256,
+} from "../bridge";
+import type {
+  SceneBridgeProposalItem,
+  SceneBridgePublicationSummary,
+} from "./components/SceneBridgeDialog";
+import {
   planWorkspaceTimerSignals,
   workspaceAnimationCompletionAction,
 } from "./workspaceHostSignals";
@@ -271,6 +291,8 @@ const AgentWorkspaceControls = lazy(() => import("./components/AgentWorkspaceCon
   .then((module) => ({ default: module.AgentWorkspaceControls })));
 const AgentHistoryDrawer = lazy(() => import("./components/AgentWorkspaceControls")
   .then((module) => ({ default: module.AgentHistoryDrawer })));
+const SceneBridgeDialog = lazy(() => import("./components/SceneBridgeDialog")
+  .then((module) => ({ default: module.SceneBridgeDialog })));
 
 function uid(prefix: string): string {
   return `${prefix}_${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
@@ -392,6 +414,76 @@ function downloadArtifact(
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function artifactStem(name: string, fallback = "semaframe"): string {
+  return name.trim().replace(/[^a-z0-9_.-]+/gi, "-").replace(/^-|-$/g, "") || fallback;
+}
+
+function downloadBlob(name: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+type BrowserSaveFilePicker = (options: Readonly<{
+  suggestedName: string;
+  types: readonly Readonly<{
+    description: string;
+    accept: Readonly<Record<string, readonly string[]>>;
+  }>[];
+}>) => Promise<Readonly<{
+  createWritable(): Promise<Readonly<{
+    write(value: Uint8Array): Promise<void>;
+    close(): Promise<void>;
+    abort?(reason?: unknown): Promise<void>;
+  }>>;
+}>>;
+
+async function savePortableBundleToBrowser(
+  name: string,
+  bundle: Awaited<ReturnType<typeof createPortableProjectBundle>>,
+): Promise<void> {
+  const filename = `${artifactStem(name)}${PORTABLE_PROJECT_EXTENSION}`;
+  const picker = (window as unknown as { showSaveFilePicker?: BrowserSaveFilePicker }).showSaveFilePicker;
+  if (!picker) {
+    if (bundle.byteLength > PORTABLE_PROJECT_LIMITS.defaultMaximumMaterializedBytes) {
+      throw new Error(
+        "This browser cannot stream a portable project of this size. Use a Chromium browser with the system save picker, or download the smaller metadata-only project instead.",
+      );
+    }
+    downloadBlob(filename, await bundle.toBlob());
+    return;
+  }
+  const handle = await picker({
+    suggestedName: filename,
+    types: [{
+      description: "SemaFrame portable project",
+      accept: { [PORTABLE_PROJECT_MEDIA_TYPE]: [PORTABLE_PROJECT_EXTENSION] },
+    }],
+  });
+  const writable = await handle.createWritable();
+  const reader = bundle.stream().getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await writable.write(value);
+    }
+    await writable.close();
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    await writable.abort?.(error).catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function binaryBlobPart(contents: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(contents.byteLength);
   copy.set(contents);
@@ -400,6 +492,11 @@ function binaryBlobPart(contents: Uint8Array): ArrayBuffer {
 
 function friendlyError(error: unknown): string {
   return error instanceof Error ? error.message : "An unexpected error occurred.";
+}
+
+function sceneBridgeAlreadyRevoked(error: unknown): boolean {
+  return error instanceof AgentGatewayError
+    && (error.gatewayCode === "session_not_found" || error.gatewayCode === "session_expired");
 }
 
 function reconstructionPhotoMediaType(file: File): PhotoReconstructionMediaType | undefined {
@@ -624,6 +721,15 @@ export default function App() {
   const [workspace, setWorkspace] = useState<Readonly<WorkspaceState>>(workspaceStoreRef.current.getState());
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
   const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanel>(null);
+  const [sceneBridgeOpen, setSceneBridgeOpen] = useState(false);
+  const [sceneBridgeSession, setSceneBridgeSession] = useState<AgentBridgeSessionAccess>();
+  const sceneBridgeSessionRef = useRef<AgentBridgeSessionAccess | undefined>(undefined);
+  const sceneBridgeLifecycleRef = useRef(0);
+  sceneBridgeSessionRef.current = sceneBridgeSession;
+  const [sceneBridgePublication, setSceneBridgePublication] = useState<SceneBridgePublicationSummary>();
+  const [sceneBridgeProposals, setSceneBridgeProposals] = useState<readonly AgentBridgeProposalRecord[]>([]);
+  const [sceneBridgeBusy, setSceneBridgeBusy] = useState(false);
+  const [sceneBridgeError, setSceneBridgeError] = useState<string>();
   const [startCenterDismissed, setStartCenterDismissed] = useState(false);
   const [workspaceConfigureRequestId, setWorkspaceConfigureRequestId] = useState<string>();
   const [entries, setEntriesState] = useState<WorkspaceHistoryEntry[]>([]);
@@ -799,6 +905,12 @@ export default function App() {
       // while a real unmount still closes its database and Worker resources.
       queueMicrotask(() => {
         if (realityVaultLifecycleRef.current === lifecycle) {
+          sceneBridgeLifecycleRef.current += 1;
+          const bridgeSession = sceneBridgeSessionRef.current;
+          if (bridgeSession) {
+            agentGatewayRef.current?.releaseBridgeSession(bridgeSession.sessionId);
+            sceneBridgeSessionRef.current = undefined;
+          }
           preparedXrModeRef.current = undefined;
           void voiceRelayClientRef.current?.disarm().catch(() => undefined);
           if (activeReconstruction && cancellationClient) {
@@ -813,6 +925,18 @@ export default function App() {
       });
     };
   }, [confirmTrackedPhotoReconstructionCancellation, invalidatePendingHostAction]);
+
+  useEffect(() => {
+    const releaseSceneBridge = () => {
+      sceneBridgeLifecycleRef.current += 1;
+      const session = sceneBridgeSessionRef.current;
+      if (!session) return;
+      agentGatewayRef.current?.releaseBridgeSession(session.sessionId);
+      sceneBridgeSessionRef.current = undefined;
+    };
+    window.addEventListener("pagehide", releaseSceneBridge);
+    return () => window.removeEventListener("pagehide", releaseSceneBridge);
+  }, []);
 
   useEffect(() => {
     if (!dirty) return;
@@ -1390,6 +1514,26 @@ export default function App() {
   }, [notice, projectId, projectName, storeRecoveryProject]);
   recoverySnapshotRef.current = recoverySnapshot;
 
+  const closeSceneBridgeForProjectChange = useCallback(async () => {
+    const session = sceneBridgeSession;
+    if (!session) return;
+    if (sceneBridgeBusy) throw new Error("Wait for the active Scene Bridge operation to finish.");
+    const client = agentGatewayRef.current;
+    if (!client) throw new Error("The local gateway is unavailable, so the old Scene Bridge cannot be revoked safely.");
+    try {
+      await client.closeBridgeSession(session.sessionId);
+    } catch (error) {
+      if (!sceneBridgeAlreadyRevoked(error)) throw error;
+    }
+    sceneBridgeLifecycleRef.current += 1;
+    sceneBridgeSessionRef.current = undefined;
+    setSceneBridgeSession(undefined);
+    setSceneBridgePublication(undefined);
+    setSceneBridgeProposals([]);
+    setSceneBridgeError(undefined);
+    setSceneBridgeOpen(false);
+  }, [sceneBridgeBusy, sceneBridgeSession]);
+
   const save = useCallback(() => {
     if (busyRef.current) return;
     try {
@@ -1408,35 +1552,88 @@ export default function App() {
     } catch (error) { notice(`Couldn’t save: ${friendlyError(error)}`, "error"); }
   }, [notice, projectId, projectName]);
 
+  const savePortableProject = useCallback(async () => {
+    await runExclusive(async () => {
+      try {
+        const store = workspaceStoreRef.current;
+        if (!store) throw new Error("The workspace is not ready.");
+        const project = workspaceSerializerRef.current.fromStore(
+          projectId,
+          store,
+          { createdAt: createdAtRef.current },
+        );
+        const bundle = await createPortableProjectBundle(
+          project,
+          realityAssetVaultRef.current!.vault,
+          { serializer: workspaceSerializerRef.current },
+        );
+        await savePortableBundleToBrowser(projectName, bundle);
+        setDirty(false);
+        notice(
+          `Portable project saved with ${bundle.manifest.assets.length} verified Reality asset${bundle.manifest.assets.length === 1 ? "" : "s"}.`,
+          "success",
+        );
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        notice(`Couldn’t save portable project: ${friendlyError(error)}`, "error");
+      }
+    });
+  }, [notice, projectId, projectName, runExclusive]);
+
+  const exportSceneExchange = useCallback(async () => {
+    await runExclusive(async () => {
+      try {
+        const state = workspaceStoreRef.current?.getState();
+        if (!state) throw new Error("The workspace is not ready.");
+        const exchange = await createSemaFrameExchange(state, {
+          registry: DEFAULT_COMPONENT_REGISTRY,
+        });
+        downloadBlob(
+          `${artifactStem(projectName)}.semaframe-exchange`,
+          new Blob([binaryBlobPart(exchange.archive.bytes)], { type: exchange.archive.mediaType }),
+        );
+        notice(
+          `Scene Exchange exported ${exchange.manifest.nodes.length} stable component${exchange.manifest.nodes.length === 1 ? "" : "s"} with OpenUSD, GLB, semantics, and a fidelity report.`,
+          "success",
+        );
+      } catch (error) {
+        notice(`Couldn’t export Scene Exchange: ${friendlyError(error)}`, "error");
+      }
+    });
+  }, [notice, projectName, runExclusive]);
+
   const loadProject = useCallback(async (file: File) => {
     await runExclusive(async () => {
       try {
-        if (file.size > MAX_WORKSPACE_PROJECT_BYTES) {
-          throw new Error(`Project exceeds the ${MAX_WORKSPACE_PROJECT_BYTES} byte limit.`);
-        }
-        const raw = await file.text();
-        const project = workspaceSerializerRef.current.deserialize(raw);
-        await verifyWorkspaceProjectCadEvidence(project);
-        const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
-        const restoredName = file.name.replace(/\.semaframe\.json$|\.json$/i, "");
-        await stopAgentForProjectChange("project_opened");
-        await recoveryCoordinatorRef.current?.replaceGeneration({ clear: false });
+        const restoredName = file.name.replace(/\.semaframe-project$|\.semaframe\.json$|\.json$/i, "");
+        const result = await importWorkspaceProjectArtifact(file, {
+          vault: realityAssetVaultRef.current!.vault,
+          serializer: workspaceSerializerRef.current,
+          commitProject: async (project) => {
+            const nextWorkspaceStore = workspaceSerializerRef.current.openStore(project);
+            await closeSceneBridgeForProjectChange();
+            await stopAgentForProjectChange("project_opened");
+            await recoveryCoordinatorRef.current?.replaceGeneration({ clear: false });
 
-        workspaceStoreRef.current = nextWorkspaceStore;
-        installWorkspaceAgentController(nextWorkspaceStore);
-        connectWorkspaceStore(nextWorkspaceStore);
-        setProjectId(project.projectId);
-        createdAtRef.current = project.createdAt;
-        setProjectName(restoredName);
-        setStartCenterDismissed(true);
-        setEntries(historyEntriesForStore(nextWorkspaceStore));
-        setDirty(false);
-        setRecoveryAvailable(false);
+            workspaceStoreRef.current = nextWorkspaceStore;
+            installWorkspaceAgentController(nextWorkspaceStore);
+            connectWorkspaceStore(nextWorkspaceStore);
+            setProjectId(project.projectId);
+            createdAtRef.current = project.createdAt;
+            setProjectName(restoredName);
+            setStartCenterDismissed(true);
+            setEntries(historyEntriesForStore(nextWorkspaceStore));
+            setDirty(false);
+            setRecoveryAvailable(false);
+          },
+        });
 
         try {
-          await storeRecoveryProject(restoredName, project);
+          await storeRecoveryProject(restoredName, result.project);
           recoveryStorageWarningRef.current = false;
-          notice("Workspace opened from its validated resolved history.", "success");
+          notice(result.kind === "portable"
+            ? `Portable Workspace opened with ${result.importedAssetIds.length} imported and ${result.reusedAssetIds.length} reused Reality asset${result.importedAssetIds.length + result.reusedAssetIds.length === 1 ? "" : "s"}.`
+            : "Workspace opened from its validated resolved history.", "success");
         } catch (error) {
           recoveryStorageWarningRef.current = true;
           notice(`Workspace opened, but local recovery could not be stored. Download a copy to protect it. ${friendlyError(error)}`, "warning");
@@ -1445,10 +1642,11 @@ export default function App() {
         notice(`This Workspace project could not be opened. Your current project is unchanged. ${friendlyError(error)}`, "error");
       }
     });
-  }, [connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange, storeRecoveryProject]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange, storeRecoveryProject]);
 
   const resetProject = useCallback(async () => {
     await runExclusive(async () => {
+      await closeSceneBridgeForProjectChange();
       await stopAgentForProjectChange("new_project");
       const nextWorkspaceStore = new WorkspaceStore({
         registry: DEFAULT_COMPONENT_REGISTRY,
@@ -1475,12 +1673,20 @@ export default function App() {
       }
       setRecoveryAvailable(false);
     });
-  }, [connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
 
   const restoreRecovery = useCallback(async () => {
     await runExclusive(async () => {
       const coordinator = recoveryCoordinatorRef.current;
       const candidates = coordinator ? await coordinator.readCandidates().catch(() => []) : [];
+      if (candidates.length > 0) {
+        try {
+          await closeSceneBridgeForProjectChange();
+        } catch (error) {
+          notice(`Recovery was not opened because the current Scene Bridge could not be closed safely. ${friendlyError(error)}`, "error");
+          return;
+        }
+      }
       let lastError: unknown = new Error("Recovery snapshot is unavailable.");
       for (const recovered of candidates) {
         try {
@@ -1523,7 +1729,7 @@ export default function App() {
         );
       }
     });
-  }, [connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
 
   const dismissRecovery = useCallback(async () => {
     try {
@@ -1572,6 +1778,12 @@ export default function App() {
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const command = event.metaKey || event.ctrlKey;
+      if (sceneBridgeOpen) {
+        if (command && ["s", "o", "z", "y"].includes(event.key.toLowerCase())) {
+          event.preventDefault();
+        }
+        return;
+      }
       const editableTarget = event.target instanceof HTMLElement && (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement ||
@@ -1585,7 +1797,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [busy, redo, save, undo]);
+  }, [busy, redo, save, sceneBridgeOpen, undo]);
 
   const applyWorkspaceOperations = useCallback((
     operations: WorkspaceOperation[],
@@ -1626,6 +1838,230 @@ export default function App() {
     window.setTimeout(() => recoverySnapshotRef.current(), 0);
     return result;
   }, [notice]);
+
+  const publishSceneBridgeSnapshot = useCallback(async (
+    session: AgentBridgeSessionAccess,
+    sequence: number,
+  ): Promise<SceneBridgePublicationSummary> => {
+    const client = agentGatewayRef.current;
+    const store = workspaceStoreRef.current;
+    if (!client || !store) throw new Error("The local Scene Bridge is unavailable.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    if (!sessionIsCurrent()) throw new Error("The Scene Bridge session is no longer active.");
+    const source = store.getState();
+    const exchange = await createSemaFrameExchange(source, { registry: DEFAULT_COMPONENT_REGISTRY });
+    if (store.getState().revision !== source.revision || store.getState().workspaceId !== source.workspaceId) {
+      throw new Error("The Workspace changed while Scene Exchange was being built. Publish again.");
+    }
+    if (!sessionIsCurrent()) throw new Error("The Scene Bridge session ended while the exchange was being built.");
+    await client.publishBridgeSession(session.sessionId, sequence, exchange);
+    if (!sessionIsCurrent()) throw new Error("The Scene Bridge session ended while the exchange was being published.");
+    const summary = Object.freeze({
+      sequence,
+      revision: exchange.manifest.source.revision,
+      digest: exchange.archive.sha256,
+    });
+    setSceneBridgePublication(summary);
+    return summary;
+  }, []);
+
+  const createSceneBridgeSession = useCallback(async (target: SemaFrameBridgeTarget) => {
+    if (busyRef.current || sceneBridgeBusy) throw new Error("Another Workspace operation is still in progress.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await runExclusive(async () => {
+        if (sceneBridgeSession) throw new Error("Close the current Scene Bridge before creating another one.");
+        const client = agentGatewayRef.current;
+        const store = workspaceStoreRef.current;
+        if (!client || !store) throw new Error("The local Scene Bridge is unavailable.");
+        const source = store.getState();
+        const exchange = await createSemaFrameExchange(source, { registry: DEFAULT_COMPONENT_REGISTRY });
+        if (store.getState().revision !== source.revision || store.getState().workspaceId !== source.workspaceId) {
+          throw new Error("The Workspace changed while Scene Exchange was being built. Try again.");
+        }
+        const access = await client.createBridgeSession(target, exchange);
+        if (sceneBridgeLifecycleRef.current !== lifecycle) {
+          client.releaseBridgeSession(access.sessionId);
+          throw new Error("The Agent connection changed while Scene Bridge was being created.");
+        }
+        sceneBridgeSessionRef.current = access;
+        setSceneBridgeSession(access);
+        setSceneBridgePublication(Object.freeze({
+          sequence: 1,
+          revision: exchange.manifest.source.revision,
+          digest: exchange.archive.sha256,
+        }));
+        setSceneBridgeProposals([]);
+        notice(`${target === "freecad" ? "FreeCAD" : target === "unreal" ? "Unreal Engine" : target[0].toUpperCase() + target.slice(1)} Scene Bridge created. Copy its scoped setup JSON into the adapter.`, "success");
+      });
+    } catch (error) {
+      if (sceneBridgeLifecycleRef.current === lifecycle) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sceneBridgeLifecycleRef.current === lifecycle) setSceneBridgeBusy(false);
+    }
+  }, [notice, runExclusive, sceneBridgeBusy, sceneBridgeSession]);
+
+  const publishLatestSceneBridge = useCallback(async () => {
+    if (busyRef.current || sceneBridgeBusy) throw new Error("Another Workspace operation is still in progress.");
+    const session = sceneBridgeSession;
+    const publication = sceneBridgePublication;
+    if (!session || !publication) throw new Error("Create a Scene Bridge first.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await runExclusive(async () => {
+        const next = await publishSceneBridgeSnapshot(session, publication.sequence + 1);
+        notice(`Scene Bridge published Workspace revision ${next.revision}.`, "success");
+      });
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [notice, publishSceneBridgeSnapshot, runExclusive, sceneBridgeBusy, sceneBridgePublication, sceneBridgeSession]);
+
+  const refreshSceneBridgeProposals = useCallback(async () => {
+    if (sceneBridgeBusy) throw new Error("Another Scene Bridge operation is still in progress.");
+    const session = sceneBridgeSession;
+    const client = agentGatewayRef.current;
+    if (!session || !client) throw new Error("Create a Scene Bridge first.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      const records = await client.readBridgeProposals(session.sessionId);
+      if (sessionIsCurrent()) setSceneBridgeProposals(records);
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [sceneBridgeBusy, sceneBridgeSession]);
+
+  const discardSceneBridgeProposals = useCallback(async (throughCursor: number) => {
+    if (sceneBridgeBusy) throw new Error("Another Scene Bridge operation is still in progress.");
+    const session = sceneBridgeSession;
+    const client = agentGatewayRef.current;
+    if (!session || !client) throw new Error("Create a Scene Bridge first.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await client.discardBridgeProposals(session.sessionId, throughCursor);
+      if (sessionIsCurrent()) {
+        setSceneBridgeProposals((current) => current.filter((record) => record.cursor > throughCursor));
+      }
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [sceneBridgeBusy, sceneBridgeSession]);
+
+  const applySceneBridgeProposal = useCallback(async (
+    record: AgentBridgeProposalRecord,
+    approvedChangeIds: readonly string[],
+  ) => {
+    if (busyRef.current || sceneBridgeBusy) throw new Error("Another Workspace operation is still in progress.");
+    const session = sceneBridgeSession;
+    const publication = sceneBridgePublication;
+    const client = agentGatewayRef.current;
+    const store = workspaceStoreRef.current;
+    if (!session || !publication || !client || !store) throw new Error("The Scene Bridge is unavailable.");
+    if (!approvedChangeIds.length) throw new Error("Select at least one eligible change to apply.");
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      await runExclusive(async () => {
+        const state = store.getState();
+        const review = reviewSemaFrameBridgeProposal(record.proposal, state, {
+          expectedExchangeDigest: publication.digest,
+          registry: DEFAULT_COMPONENT_REGISTRY,
+        });
+        const operations = approvedBridgeChangesToWorkspaceOperations(review, approvedChangeIds);
+        applyWorkspaceOperations(
+          [...operations],
+          `Applied ${approvedChangeIds.length} reviewed ${session.target} Bridge change${approvedChangeIds.length === 1 ? "" : "s"}`,
+          state.revision,
+        );
+        // Keep the reviewed proposal until the committed authoritative state
+        // has been published. A failed publish then leaves an auditable stale
+        // proposal instead of silently removing the recovery point.
+        await publishSceneBridgeSnapshot(session, publication.sequence + 1);
+        await client.discardBridgeProposals(session.sessionId, record.cursor);
+        if (sessionIsCurrent()) {
+          setSceneBridgeProposals((current) => current.filter((candidate) => candidate.cursor > record.cursor));
+        }
+      });
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [applyWorkspaceOperations, publishSceneBridgeSnapshot, runExclusive, sceneBridgeBusy, sceneBridgePublication, sceneBridgeSession]);
+
+  const closeSceneBridgeSession = useCallback(async () => {
+    if (sceneBridgeBusy) throw new Error("Another Scene Bridge operation is still in progress.");
+    const session = sceneBridgeSession;
+    const client = agentGatewayRef.current;
+    if (!session || !client) return;
+    const lifecycle = sceneBridgeLifecycleRef.current;
+    const sessionIsCurrent = () => sceneBridgeLifecycleRef.current === lifecycle
+      && sceneBridgeSessionRef.current?.sessionId === session.sessionId;
+    let closedCurrentSession = false;
+    setSceneBridgeBusy(true);
+    setSceneBridgeError(undefined);
+    try {
+      try {
+        await client.closeBridgeSession(session.sessionId);
+      } catch (error) {
+        if (!sceneBridgeAlreadyRevoked(error)) throw error;
+      }
+      if (!sessionIsCurrent()) return;
+      sceneBridgeLifecycleRef.current += 1;
+      closedCurrentSession = true;
+      sceneBridgeSessionRef.current = undefined;
+      setSceneBridgeSession(undefined);
+      setSceneBridgePublication(undefined);
+      setSceneBridgeProposals([]);
+      notice("Scene Bridge closed and its bearer revoked.", "success");
+    } catch (error) {
+      if (sessionIsCurrent()) setSceneBridgeError(friendlyError(error));
+      throw error;
+    } finally {
+      if (closedCurrentSession || sessionIsCurrent()) setSceneBridgeBusy(false);
+    }
+  }, [notice, sceneBridgeBusy, sceneBridgeSession]);
+
+  const sceneBridgeProposalItems = useMemo<readonly SceneBridgeProposalItem[]>(() => {
+    if (!sceneBridgePublication) return [];
+    return sceneBridgeProposals.map((record) => Object.freeze({
+      record,
+      review: reviewSemaFrameBridgeProposal(record.proposal, workspace, {
+        expectedExchangeDigest: sceneBridgePublication.digest,
+        registry: DEFAULT_COMPONENT_REGISTRY,
+      }),
+    }));
+  }, [sceneBridgeProposals, sceneBridgePublication, workspace]);
 
   /**
    * Commits deterministic host acknowledgements without presenting them as a
@@ -4513,10 +4949,22 @@ export default function App() {
   }, [externalControlActive]);
   useEffect(() => {
     if (externalControlActive) return;
+    sceneBridgeLifecycleRef.current += 1;
+    const bridgeSession = sceneBridgeSessionRef.current;
+    if (bridgeSession) {
+      agentGatewayRef.current?.releaseBridgeSession(bridgeSession.sessionId);
+      sceneBridgeSessionRef.current = undefined;
+    }
     invalidatePendingHostAction();
     setAgentHistoryOpen(false);
     setAgentManageOpen(false);
     setVoiceRelaySettingsOpen(false);
+    setSceneBridgeOpen(false);
+    setSceneBridgeSession(undefined);
+    setSceneBridgePublication(undefined);
+    setSceneBridgeProposals([]);
+    setSceneBridgeBusy(false);
+    setSceneBridgeError(undefined);
     setConfirm(null);
     setPendingFile(null);
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
@@ -4944,6 +5392,9 @@ export default function App() {
       onRedo={() => void redo()}
       onOpen={() => fileRef.current?.click()}
       onSave={save}
+      onSavePortable={() => void savePortableProject()}
+      onExportExchange={() => void exportSceneExchange()}
+      onOpenBridge={() => { setSceneBridgeError(undefined); setSceneBridgeOpen(true); }}
       onNew={() => setConfirm("new")}
     />}
     <AgentWorkspaceGate
@@ -5156,7 +5607,7 @@ export default function App() {
       <AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} />
     </AgentWorkspaceGate>
     {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => void dismissRecovery()}>Dismiss</button></div>}
-    <input ref={fileRef} hidden type="file" accept=".json,.semaframe.json,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
+    <input ref={fileRef} hidden type="file" accept=".semaframe-project,.json,.semaframe.json,application/vnd.semaframe.project+zip,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
     <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />
     <ConfirmDialog open={externalControlActive && confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
@@ -5173,6 +5624,21 @@ export default function App() {
       onRunDiagnostics={diagnoseVoiceRelaySettings}
       onArm={armVoiceRelaySettings}
       onDisarm={disarmVoiceRelaySettings}
+    />
+    <SceneBridgeDialog
+      open={externalControlActive && sceneBridgeOpen}
+      session={sceneBridgeSession}
+      publication={sceneBridgePublication}
+      proposals={sceneBridgeProposalItems}
+      busy={sceneBridgeBusy}
+      error={sceneBridgeError}
+      onClose={() => setSceneBridgeOpen(false)}
+      onCreate={createSceneBridgeSession}
+      onPublish={publishLatestSceneBridge}
+      onRefreshProposals={refreshSceneBridgeProposals}
+      onApplyProposal={applySceneBridgeProposal}
+      onDiscardThrough={discardSceneBridgeProposals}
+      onCloseSession={closeSceneBridgeSession}
     />
     <HostActionPrompt request={externalControlActive ? hostActionPrompt : undefined} onConfirm={confirmHostAction} onCancel={cancelHostAction} />
     <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>

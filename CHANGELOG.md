@@ -8,12 +8,23 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 - SemaFrame Layout Graph 1.0, an independent `ui2d` Universal Space Data projection with canonical 1440×900 bounds, exact rotated-rectangle overlap relations, deterministic `query_layout_placement` suggestions, and explicit projection-dependent nodes.
 - One-click, atomic **Auto-arrange 2D** repair for movable legacy panels.
+- Deterministic `.semaframe-project` ZIP/ZIP64 portability with replay-verified Workspace state, complete retained-history Reality closure, streamed export, staged import, and rollback on project replacement failure.
+- Immutable `.semaframe-exchange` packages with sanitized semantics, fidelity reporting, OpenUSD, self-contained GLB, optional embedding-host STEP, stable IDs, and short-lived downstream pull sessions.
+- Review-only Scene Bridge round trips for Blender, FreeCAD, Unity, Unreal, and custom clients; all returned edits remain proposals until an eligible selection passes the ordinary authoritative Workspace transaction gates.
+- Source-level Extension API 1.0, immutable connector registries, bounded artifact jobs, signed static template catalogs, and opt-in previewable anonymous performance diagnostics for embedding hosts.
 
 ### Changed
 
 - New 2D overlaps now reject atomically without entering the physical 3D collision domain. Existing overlapping projects remain openable and editable, cannot worsen their layout, and can be repaired progressively.
 - General 2D components now default to the zoomable canvas and choose a deterministic free placement instead of accumulating fixed-viewport cards at tiny ordinal offsets.
 - The public Agent surface advances to 25 Workspace MCP tools, Agent Guide 3.2, MCP server 1.10.0, and Agent Gateway OpenAPI 1.3.0; `inspect_workspace_space` returns separate `layout_graph` (`ui2d`) and `spatial_graph` (`world3d`) projections.
+
+### Security and reliability
+
+- Native stdio extensions require exact manifest/package verification, a manifest-pinned complete runtime file tree, host-version compatibility, per-provider method authorization, and execution from a private verified snapshot; the process remains trusted native code rather than an OS sandbox.
+- Scene Exchange excludes connector configuration, secret references, feed values, local-path data, and Reality bytes; downstream bearers authorize immutable pulls and bounded proposals, never direct Workspace mutation.
+- Portable project import verifies canonical archive structure, CRC and SHA-256 identity, Reality format, replay, and exact closure before staging any destination bytes.
+- Catalog verification, connector results, artifact requests/results, and diagnostics storage now fail closed under forged provenance, credential-like material, unbounded output, or cardinality pressure.
 
 ## [0.4.0-rc.1] - 2026-08-27
 

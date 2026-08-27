@@ -60,6 +60,10 @@ The next public Agent contract keeps the v0.3 modeling and Reality foundation, a
 | **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid project-schema 1.3 files reopen without weakening history validation |
 | **Photo-set Reality reconstruction** | Human and approval-gated Agent flows for digest-bound photo upload, explicit local reconstruction, bounded progress/cancellation, browser-authoritative preflight, and content-addressed Reality registration |
 | **Cross-platform XR renderer** | A separately paired WebXR client with revisioned Workspace replication, collision-safe teleport, renderer-neutral live panels, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, fresh authenticated spatial context, renderer-only build reveals, resumable Reality assets, reconnect, and a fail-closed Windows PCVR Ultra gate |
+| **Portable projects** | A streamed `.semaframe-project` ZIP/ZIP64 bundle containing the replay-verified Workspace plus the complete content-addressed Reality byte closure required by current state, checkpoint, and retained undo/replay |
+| **Scene Exchange and bridges** | A sanitized `.semaframe-exchange` with semantic manifest, fidelity report, OpenUSD, self-contained GLB, optional exact STEP, stable IDs, expiring pull sessions, and review-only downstream change proposals |
+| **Extension and host services** | Versioned connector/importer/exporter/bridge contracts, digest/signature verification, Workspace-bound grants, an owned framed-stdio host, immutable connector registries, and bounded asynchronous artifact jobs |
+| **Community ecosystem** | A signed static project/model template catalog with proposal-only installation plus explicitly opt-in, previewable anonymous performance diagnostics with no bundled vendor endpoint |
 
 The development surface is now Workspace Protocol 1.3 with project schema 1.4, 25 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
 
@@ -68,6 +72,8 @@ contracts: explicit Agent states, Start and Checks centers, Basic/Advanced
 inspection, one atomic Sources Wizard, an outcome-aware Export Center, an XR
 Setup Assistant, verified IndexedDB recovery, enforced CI coverage, and a
 packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0-rc.1 notes](./docs/release-v0.4.0-rc.1.md).
+
+The ecosystem contracts are documented separately in the [ecosystem layer guide](./docs/ecosystem/README.md). They preserve the same central invariant: neither an extension, template, artifact provider, nor downstream 3D application can bypass `WorkspaceStore`.
 
 ## What's new in v0.3
 
@@ -102,6 +108,7 @@ Together, these capabilities support one inspectable workflow: import captured c
 - [Reality capture and Gaussian splats](#reality-capture-and-gaussian-splats)
 - [Spatial understanding and physics](#spatial-understanding-and-physics)
 - [Data feeds and websites](#data-feeds-and-websites)
+- [Ecosystem and downstream tools](#ecosystem-and-downstream-tools)
 - [Agent integration](#agent-integration)
 - [Protocol and persistence](#protocol-and-persistence)
 - [Security and trust model](#security-and-trust-model)
@@ -151,7 +158,10 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Web and media | User-activated sandboxed website panels plus normalized YouTube, Vimeo, MP4, and WebM video |
 | XR rendering | Separately paired desktop/WebXR client with revisioned projection, controller input, teleport, live 2D panels in 3D, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, live ephemeral spatial context, renderer-only build reveals, and fail-closed performance tiers |
 | Agent control | Approval-gated Streamable HTTP MCP, OpenAPI 3.1, and a stdio bridge |
-| Persistence | Direct Workspace project files with deterministic replay, migration, undo/redo, and validated provenance |
+| Persistence | Direct metadata projects plus portable `.semaframe-project` bundles with deterministic replay, migration, undo/redo, validated provenance, and complete required Reality bytes |
+| Extensibility | API `1.0` connector/importer/exporter/bridge contracts, digest-bound manifests and grants, framed native stdio hosting, immutable connector registries, and bounded artifact jobs |
+| Downstream tools | Immutable `.semaframe-exchange` packages and review-only proposal bridges for Blender, FreeCAD, Unity, Unreal, or a custom client |
+| Community layer | Signed static project/model template catalogs and off-by-default, exact-preview anonymous performance diagnostics |
 
 The built-in component registry contains:
 
@@ -537,7 +547,7 @@ Reconstruction quality still depends on coverage, overlap, focus, lighting, refl
 
 Automated repository verification uses valid synthetic image fixtures and a native backend capability probe. A manual macOS validation on August 25, 2026 also completed the browser-approved MCP workflow with all 51 photos from the public [ink-splashed skull photogrammetry test set](https://gitlab.com/photogrammetry-test-sets/skull-turntable-strong-lights-white-background-ink-splashed-textureless-areas): `preview` produced 250,000 splats and `balanced` produced 1,000,000 splats. This is end-to-end workflow evidence, not measured field accuracy or a permanent CI fixture; the source photos and generated artifacts are intentionally not committed.
 
-Current import limits are 256 MiB, 4 million splats, and 128 registered descriptors per Workspace. Project files are metadata/reference packages, not portable Reality Asset archives; copying a project to another browser may require same-digest relinking.
+Current import limits are 256 MiB, 4 million splats, and 128 registered descriptors per Workspace. A direct `.semaframe.json` project remains a metadata/reference artifact and may require same-digest relinking on another browser. Use `.semaframe-project` when the destination needs the complete verified Reality byte closure in the same artifact.
 
 ## Spatial understanding and physics
 
@@ -630,6 +640,38 @@ Not every site allows embedding. CSP or `X-Frame-Options` may refuse the frame, 
 
 `video-player` accepts normalized YouTube, Vimeo, and public HTTPS MP4/WebM sources. It also begins as a facade and creates no iframe or media element until a person chooses **Load video**. Private, DRM-protected, owner-disabled, expired, or unsupported media can remain unavailable. Pasted iframe HTML and credential-bearing URLs are rejected.
 
+## Ecosystem and downstream tools
+
+SemaFrame's ecosystem layer expands file portability, data/provider integration, and downstream 3D workflows without creating another scene authority.
+
+### Portable Workspace artifacts
+
+`.semaframe-project` version `1.0` is a deterministic stored ZIP/ZIP64 archive. It contains the normal replay-verified Workspace JSON plus every content-addressed Reality object required by current state, checkpoint, and retained undo/replay history. Export verifies each source object before streaming. Import verifies exact paths, entry order, CRC, SHA-256, Reality format, project replay, and closure before staging any bytes; a failed atomic project replacement rolls back newly inserted objects.
+
+The direct `.semaframe.json` format remains useful when small metadata-only files and digest relinking are preferred. See [Portable projects](./docs/ecosystem/portable-projects.md) for the format and trust boundary.
+
+### Extension SDK and host services
+
+Extension API `1.0` defines connector, importer, exporter, and bridge providers. Strict manifests pin package size and SHA-256, declare exact providers and permissions, and optionally carry an Ed25519 signature. A host can require signatures and supplies its own pinned-key verifier; the SDK does not decide publisher trust.
+
+This is currently a source/embedding contract, not a published npm SDK or an installed extension runtime. The private package has no compiled library export, and the app/gateway does not automatically instantiate the native host, extension grants, connector registry, artifact scheduler/HTTP handler, catalog planner, or diagnostics collector. An embedding host must wire and authorize the services it elects to expose; there is no built-in extension installer UI.
+
+Grants bind the exact extension/version/manifest digest to one Workspace, provider set, permission set, expiry, and optional network or secret scopes. The native host owns one length-framed stdio subprocess, checks its package-root entrypoint, minimizes the environment, reauthorizes every call, and kills the process after abort, timeout, or protocol failure. This is not an OS sandbox, so native code still requires a trusted publisher.
+
+`ConnectorRegistryV1` captures an immutable, digest-bound provider set for one open Workspace. Missing providers leave existing snapshots readable but cannot execute. `ArtifactJobService` adds owner/Workspace-scoped, idempotent, cancellable exporter/bridge jobs with bounded concurrency, runtime, JSON input, output count/bytes, content-addressed results, and expiry. See the [Extension SDK](./docs/ecosystem/extensions.md) and [host services](./docs/ecosystem/host-services.md).
+
+### Scene Exchange and bridge proposals
+
+One `.semaframe-exchange` represents one immutable Workspace revision. It contains safe semantic nodes and connections, a per-component fidelity report, deterministic OpenUSD, self-contained GLB, and optional exact STEP. Connector configuration, secret references, feed values, host-owned local-path references, and Reality Asset bytes do not cross this boundary. The Project Bar export and live Bridge currently emit OpenUSD/GLB plus semantics; exact STEP is included only when an embedding host supplies verified STEP bytes and mapped 3D component IDs. For the app's existing exact CAD path, use the Export Center's verified CAD handoff.
+
+Blender, FreeCAD, Unity, Unreal, or a custom client can pull a session-scoped publication and return bounded transform, property, presentation, or hierarchy edits. Those edits are proposals, not mutations. SemaFrame rejects stale sources, locks, invalid props, cross-domain 2D/3D moves, missing parents, and hierarchy cycles; only explicitly selected eligible changes become normal Workspace operations and still pass the ordinary atomic transaction checks. The included adapters are narrow reference implementations, and repository verification is not physical certification of every host/OS combination. See [Scene Exchange and bridges](./docs/ecosystem/scene-exchange.md) and the [adapter compatibility matrix](./docs/bridges/compatibility.md).
+
+### Signed templates and diagnostics
+
+The static template catalog verifies an operator-pinned Ed25519 signature, monotonic sequence, signed expiry, safe relative paths, and every artifact digest before parsing. Project and model templates remain ordinary bounded Workspace operation proposals with `authorization.status = "not_granted"`; installation requires an explicit host review and normal transaction authorization.
+
+Anonymous performance diagnostics are off by default. Enabling them only permits construction and exact preview of an allowlisted payload; transmission remains a separate explicit host action. The included collector has no vendor destination and stores no project identifiers, URLs, digests, paths, tokens, stable IDs, IP addresses, or User-Agent values.
+
 ## Agent integration
 
 SemaFrame exposes 25 authoritative Workspace MCP tools. When the browser-backed
@@ -718,7 +760,7 @@ Protocol source of truth:
 - [`src/workspace/protocol/workspaceTypes.ts`](src/workspace/protocol/workspaceTypes.ts)
 - [`src/workspace/agents/contracts.ts`](src/workspace/agents/contracts.ts)
 
-### Project files
+### Direct and portable project files
 
 **Save** exports one direct `WorkspaceProjectFile` with `formatVersion: "1.0"`. It contains:
 
@@ -734,6 +776,12 @@ Open validates the closed schema, registry digests, counters, command continuity
 Projects from the removed pre-Workspace runtime and its dual-envelope format are intentionally unsupported. Local recovery uses the same Workspace-only representation. Provider credentials, feed approvals, MCP approvals, session tokens, and transaction tokens are never saved.
 
 Project schema: [`src/workspace/persistence/workspaceProject.schema.json`](src/workspace/persistence/workspaceProject.schema.json).
+
+**Save portable project** wraps that same validated direct project in `.semaframe-project` version `1.0` and adds the complete content-addressed Reality byte closure required by current state, checkpoint, and retained undo/replay. The deterministic stored ZIP/ZIP64 format supports streaming, so a large valid bundle does not need to be assembled in memory. Its manifest and object paths are canonical and digest-pinned.
+
+Portable open validates exact archive structure, CRC, SHA-256, Reality preflight, project replay, and closure before replacing the current project. Missing objects are staged into the destination vault only after complete validation; if project replacement rejects, newly inserted objects are rolled back. Existing direct JSON projects remain supported through magic-based format detection.
+
+Portable format details and schemas: [`src/workspace/persistence/portable/`](src/workspace/persistence/portable/) and [Portable projects](./docs/ecosystem/portable-projects.md).
 
 ### Application limits
 
@@ -759,6 +807,11 @@ Hard limits bound main-thread work, memory use, persistence, and replay:
 | Recent undoable commands | 64 |
 | Idempotency ledger entries | 4,096 |
 | Project file size | 25 MiB |
+| Portable manifest | 1 MiB |
+| Portable Reality closure | 128 objects / 256 MiB each; streamed ZIP64 supported |
+| Scene Exchange change proposal | 100 changes / 1 MiB |
+| One live Bridge archive | 64 MiB through the local browser owner surface; 512 MiB service ceiling for an embedding host |
+| Artifact jobs (defaults) | 32 queued / 2 concurrent / 30 s / 16 outputs / 32 MiB total output |
 
 Older commands are compacted into a checkpoint rather than allowing undo memory to grow without bound.
 
@@ -774,6 +827,14 @@ Important boundaries include:
 - approvals are bound to the instruction surface, client identity, requested scopes, and browser lease;
 - mutation requires a scoped session plus a short-lived revision-bound transaction;
 - capability values are redacted from diagnostics and excluded from projects and recovery;
+- portable project import requires canonical archive structure, an exact manifest closure, CRC/SHA-256 and Reality-format verification, validated replay, and staged rollback before it can replace the current project;
+- Scene Exchange removes connector configuration, secret references, feed snapshot values, local paths, and Reality bytes; session bearers authorize immutable pulls and proposal submission only, never direct Workspace mutation;
+- bridge proposals are source-digest/revision bound, review locks and hierarchy/domain validity, and produce no Workspace operations until the person explicitly selects eligible changes;
+- extension packages are length/digest checked, can be required to carry a host-verified Ed25519 signature, and receive time-bounded grants tied to exact package, Workspace, provider, permission, network-origin, and secret-ID scopes;
+- the native extension host owns one package-root stdio child with bounded framed messages and fail-closed termination, but is explicitly not an OS sandbox for untrusted executable code;
+- connector registries are immutable per Workspace session; extension connector/artifact execution requires a host grant, connector configuration/results reject embedded credential-like material, and artifact requests/results also reject raw local paths;
+- signed template catalogs pin operator key, sequence, expiry, safe artifact path, and descriptor digest, while every installation remains an unauthorized Workspace transaction proposal until the host confirms it;
+- anonymous performance diagnostics are off by default, expose their exact allowlisted payload before any send, and have no bundled vendor destination;
 - Agent Reality imports require `asset:import`, an exact user-provided file digest, a one-time upload grant, browser-side preflight, and a browser-owned content-addressed vault;
 - Agent photo reconstruction requires the separate non-default `asset:reconstruct` scope, an exact per-photo manifest, one-time byte-verified uploads, an explicit start, digest-pinned finalization, and browser-owned final preflight; temporary source photos never enter Workspace state or project files;
 - photo upload grants appear once in MCP `structuredContent` because the client needs them for its exact `PUT`, while human-readable tool text, projects, and Workspace history stay redacted; the external client's own structured-result logging remains outside SemaFrame's control;
@@ -796,7 +857,7 @@ Important boundaries include:
 - Relay staging requires an empty composer and exact read-back; Send occurs only after XR confirmation of the unchanged digest, cancellation never clears changed text, and an unknown send outcome is not retried;
 - authority disconnect, revocation, or epoch change invalidates renderer authority instead of silently promoting a headset into a second Workspace host.
 
-This is an application-level local capability model, not an operating-system security boundary. A process that can read another process's environment, modify the trusted local proxy, or otherwise assume the user's local OS authority remains outside the model. When publishing MCP or REST through HTTPS, expose only the required external MCP, OpenAPI, `/v1`, and one-use upload paths—not `/api/agent/*`.
+This is an application-level local capability model, not an operating-system security boundary. A process that can read another process's environment, modify the trusted local proxy, run an authorized native extension, or otherwise assume the user's local OS authority remains outside the model. When publishing MCP or REST through HTTPS, expose only the required external MCP, OpenAPI, `/v1`, and one-use upload paths—not `/api/agent/*`.
 
 ## Current boundaries
 
@@ -804,19 +865,21 @@ SemaFrame deliberately does not claim the following:
 
 - **Not any website.** Remote sites may reject framing; authenticated arbitrary browsing needs a trusted browser surface.
 - **Not any API.** Host feeds are public HTTPS JSON, CSV, RSS, or Atom only. There are no arbitrary headers, request bodies, cookies, credentialed URLs, private-network targets, SSE, or WebSockets.
-- **Not a general code sandbox.** Recipe components use a closed declarative vocabulary.
+- **Not a general code sandbox.** Recipe components use a closed declarative vocabulary. Native stdio extensions are owned and bounded processes, not an OS sandbox; install executable extensions only from publishers you trust.
 - **Not a general physics engine.** Current physics focuses on collision, support, conservative stability, constraints, and bounded settle previews.
 - **Not structural certification.** Material properties, stress, fatigue, fracture, tolerances, and safety factors are not modeled.
 - **Not full mechanical CAD.** Exact primitives, bounded constraint sketches, a real editable B-rep feature subset, assembly intent, and verified AP242 handoff are available. Robust persistent per-face naming, arbitrary topology selection, evaluated shell/sweep/loft/pattern features, native vendor feature trees, STEP import, GD&T/PMI, drawings, PLM, and FEA are not.
 - **Reality capture is visual evidence, not engineering truth.** Gaussian splats do not provide collision, physics, CAD, material, or certification authority; editable semantic proxies must carry those claims.
 - **Photo reconstruction is local, visual-only, resource-bounded, and platform-bounded.** The bundled backend requires supported macOS Object Capture hardware and Xcode command-line tools. It rejects sets beyond the selected profile's pixel and memory policy and stops work if disk, memory, process-tree supervision, time, total working-tree, conversion, or candidate-staging bounds fail. Apple first produces a textured mesh, which SemaFrame samples into Gaussian PLY; every result begins as `visual_only` and `uncalibrated`. It is not a bundled cross-platform/cloud reconstruction service. A real 51-photo public test set has completed the manual end-to-end workflow, but that does not establish metric or survey accuracy and is not a committed CI fixture.
-- **Project JSON is not a portable splat bundle.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest.
+- **Direct project JSON is still metadata-only.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest. The separate `.semaframe-project` artifact includes the verified Reality closure when portability is required.
+- **Scene Exchange is not native downstream history.** OpenUSD/GLB/optional STEP preserve bounded geometry and stable semantics, but cannot reconstruct Blender modifiers, FreeCAD feature trees and constraints, or native Unity/Unreal authoring history. Downstream edits return only as reviewable proposals.
+- **Not a published extension runtime or marketplace.** The repository has source-level SDK, manifest/grant, signed static catalog, native-host, connector, and artifact contracts, but the private npm package has no compiled public SDK export and the app does not install or activate extensions. It does not yet provide dependency resolution, automatic updates, or a public extension registry service.
 - **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
 - **Not a bundled AI model or speech service.** A voice-capable Agent owns its computer-microphone and realtime path. Optional Voice Relay depends on the XR browser's speech implementation, which may be vendor- and network-dependent; SemaFrame does not claim offline recognition.
 - **Not universal desktop automation.** Voice Relay targets only compatible standard Agent windows on macOS or Windows after a no-send diagnostic and per-session arm. Application accessibility trees can change, Linux has no native helper, and the Relay is not an arbitrary-window macro system.
 - **Not universal XR hardware certification.** The standards-based viewer and safety contracts have automated coverage, but each headset, browser/OpenXR runtime, controller mapping, link mode, microphone, and GPU tier still needs physical validation.
 - **Not automatic Ultra by GPU name.** Windows PCVR Ultra remains Balanced until fresh measured probe and benchmark evidence produces a matching eligibility receipt; macOS, unknown runtimes, stale evidence, and failed runs cannot override the gate.
-- **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project format.
+- **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project schema; `.semaframe-project` is a portable wrapper around that schema, not a restored legacy runtime.
 
 ## Architecture and code map
 
@@ -826,9 +889,12 @@ flowchart LR
     Agent["External Agent<br/>MCP, OpenAPI, or stdio"]
     Approval["Gateway<br/>offer, approval, session, transaction"]
     Feed["Feed broker<br/>single-use approval and bounded HTTPS"]
+    Providers["Extensions and artifact jobs<br/>bounded host capabilities"]
+    Downstream["DCC, CAD, and game tools<br/>immutable pull and proposals"]
     Store["WorkspaceStore 1.3<br/>single project authority"]
     Vault["AssetVault<br/>content-addressed local Reality bytes"]
-    Project["WorkspaceProjectFile<br/>checkpoint and resolved history"]
+    Project["Direct or portable project<br/>checkpoint, history, optional Reality closure"]
+    Exchange["Scene Exchange<br/>semantic manifest and fidelity artifacts"]
     Projection["Semantic render snapshot"]
     Three["Three.js spatial layer"]
     DOM["DOM and SVG 2D layer"]
@@ -836,7 +902,10 @@ flowchart LR
     Human --> Store
     Agent --> Approval --> Store
     Feed --> Store
+    Providers -. validated data or proposal .-> Store
     Store <--> Project
+    Store --> Exchange --> Downstream
+    Downstream -. reviewed proposal .-> Store
     Store -. descriptor refs .-> Vault
     Store --> Projection
     Projection --> Three
@@ -863,6 +932,9 @@ src/
   app/                    React application, connection gate, panels, host signals
   agent/                  Browser-side Agent Gateway client
   assets/                 Registered spatial asset catalog
+  bridge/                 Scene Exchange, GLB, fidelity, and downstream proposal contracts
+  ecosystem/              Signed template catalog, first-party templates, diagnostics contracts
+  extensions/             Extension API, manifests, grants, brokers, and conformance helpers
   renderer/               Three.js renderer, render-only scene DTOs, and live-commit materialization
   voice-relay/            Bounded Relay contracts, HTTP client, and XR state machine
   xr/                     WebXR client, paired relay, panels, speech, live context, assets, locomotion, and Ultra gate
@@ -870,9 +942,10 @@ src/
     agents/               Agent controller, guide, scopes, public capability adapter
     assets/               Reality Asset preflight, hashing, validation, and browser vault
     components/           Built-in manifests, registry, recipes, web security
-    data/                 Resources, feeds, bindings, connector contracts
+    artifacts/            Exporter/bridge artifact job contracts
+    data/                 Resources, feeds, bindings, and immutable connector registry
     interaction/          Pointer, keyboard, selection, and activation routing
-    persistence/          Workspace project schema and serializer
+    persistence/          Direct project serializer plus streamed portable project archive
     modeling/             Exact primitives, CAD documents/solver/features, reusable models, OpenUSD, CSG, and bounded CAD/handoff workers
     physics/              Physics configuration, reports, and deterministic preview
     protocol/             Workspace Protocol schema, types, and validation
@@ -881,6 +954,10 @@ src/
     state/                 WorkspaceStore, state model, limits, and utilities
 server/
   agent/                  Loopback gateway, MCP transport, approvals, host control, OpenAPI
+  artifacts/              Bounded asynchronous artifact job scheduler and byte store
+  bridge/                 Expiring immutable-pull sessions and proposal HTTP boundary
+  diagnostics/            Anonymous performance collector core and retention contracts
+  extensions/             Extension grants, framed native protocol, and owned stdio host
   voice-relay/            Volatile Relay service, HTTP adapter, native protocol, and helper verification
   xr/                     Session-scoped authority/renderer relay and strict HTTP adapter
   feed/                   Bounded public HTTPS feed runtime and approval store
@@ -888,7 +965,8 @@ server/
 native/voice-relay/       macOS Accessibility and Windows UI Automation helpers
 public/                    SemaFrame SVG, favicon, app icons, and social preview assets
 scripts/                  Development launcher, stdio bridge, browser smoke tests
-integrations/             Installable Agent skill metadata and instructions
+integrations/             Agent skill plus Blender, FreeCAD, Unity, and Unreal reference adapters
+docs/ecosystem/           Ecosystem formats, workflows, trust boundaries, and limits
 ```
 
 ## Development and verification
@@ -909,6 +987,8 @@ npm run test:cli:package                 # packed prod-only install and real ser
 npm run test:cad:bundle                 # assert lazy Worker/WASM packaging and no duplicate/inlined OCCT binary
 npm run test:csg:bundle                 # assert the Manifold Worker uses one external fingerprinted WASM binary
 npm run test:reality:runtime            # verify Reality runtime lifecycle and the lazy Spark/Three bundle boundary
+npm run test:p2:ecosystem               # extensions, providers, portable projects, Scene Exchange, adapters, catalog, diagnostics
+npm run test:bridge:adapters             # Python behavior plus static descriptor/protocol/security adapter checks
 npm run smoke:workspace                 # real browser Workspace flow
 npm run smoke:agent                     # real browser + Streamable HTTP MCP flow
 npm run test:watch                       # interactive Vitest
@@ -919,7 +999,9 @@ npm run test:coverage                    # coverage run
 
 `smoke:agent` starts a real Streamable HTTP MCP client and browser. It covers offer creation, approval, instruction-first behavior, multi-tab lease conflict and takeover, Workspace creation, data and event flows, idempotency, undo/redo, persistence, revocation, responsive layout, and capability-secret scans. Focused integration tests additionally exercise a real MCP Reality Asset grant/stream/finalize/create/proxy/SSG/save-reopen flow.
 
-Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, materialization planning/control, Voice Relay contracts and security boundaries, XR context validation, photo reconstruction contracts and backend boundaries, MCP, and OpenAPI.
+Unit and integration suites cover all protocol operations, component manifests and recipes, placements, collision, physics, spatial projection, animation, video and website security, timers and host signals, event routing, feed security and consent, binding projection, transitions and reduced motion, permissions, rollback, idempotency, persistence/replay, hybrid rendering, materialization planning/control, Voice Relay contracts and security boundaries, XR context validation, photo reconstruction contracts and backend boundaries, extension manifests/grants/native protocol, connector and artifact providers, signed catalogs, diagnostic minimization, portable project atomicity, Scene Exchange and bridge proposal review, MCP, and OpenAPI.
+
+`test:bridge:adapters` validates pinned host descriptors, Python syntax, C# structural contracts, protocol agreement, loopback-only networking markers, digest checks, and credential non-persistence for the Blender, FreeCAD, Unity, and Unreal reference adapters. It also executes setup parsing and unsafe-archive rejection in the three Python adapters under minimal host stubs. It does not compile Unity C# or launch any desktop application; physical host validation remains a separate release step.
 
 When changing a public contract, update the schema, TypeScript type, controller/adapter, guide, focused regression, and at least one cross-layer test together. A green unit test alone is not sufficient for connection, rendering, persistence, or security changes.
 

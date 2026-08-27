@@ -1,0 +1,13 @@
+{
+  "name": "SemaFrame.Bridge.Editor",
+  "rootNamespace": "SemaFrame.Bridge.Editor",
+  "references": [
+    "SemaFrame.Bridge.Runtime",
+    "Unity.Newtonsoft.Json"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "allowUnsafeCode": false,
+  "autoReferenced": true
+}

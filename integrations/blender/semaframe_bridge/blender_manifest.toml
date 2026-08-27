@@ -1,0 +1,13 @@
+schema_version = "1.0.0"
+id = "semaframe_bridge"
+version = "1.0.0"
+name = "SemaFrame Bridge"
+tagline = "Reviewable scene exchange with SemaFrame"
+maintainer = "SemaFrame Contributors"
+type = "add-on"
+blender_version_min = "4.5.0"
+license = ["SPDX:MIT"]
+
+[permissions]
+network = "Connect to a loopback SemaFrame Bridge session"
+files = "Import a validated exchange through a temporary file"

@@ -19,6 +19,12 @@ import {
   AGENT_HOST_CONTROL_COMMAND_NAMES,
   type AgentHostControlCommandName,
 } from "./hostControlContracts";
+import {
+  parseSemaFrameBridgeChangeProposal,
+  type SemaFrameBridgeChangeProposal,
+  type SemaFrameBridgeTarget,
+  type SemaFrameExchangePackage,
+} from "../bridge";
 
 export const AGENT_GATEWAY_COMMAND_NAMES = [
   "get_workspace_instructions",
@@ -152,6 +158,21 @@ export type VoiceRelayHostActionGrant = Readonly<{
   expiresAtMs: number;
 }>;
 
+export type AgentBridgeSessionAccess = Readonly<{
+  sessionId: string;
+  bearer: string;
+  target: SemaFrameBridgeTarget;
+  expiresAt: string;
+  pullUrl: string;
+  exchangeUrl: string;
+}>;
+
+export type AgentBridgeProposalRecord = Readonly<{
+  cursor: number;
+  receivedAt: string;
+  proposal: SemaFrameBridgeChangeProposal;
+}>;
+
 export type AgentGatewayCommandContext = Readonly<{ signal: AbortSignal }>;
 
 export type AgentGatewayCommandHandler = (
@@ -199,6 +220,7 @@ export type AgentGatewayEndpoints = Readonly<{
   photoReconstructionFinalize: string;
   photoReconstructionUploadPrefix: string;
   voiceRelayHostActionMint: string;
+  bridgeSessions: string;
 }>;
 
 export class AgentGatewayError extends Error {
@@ -260,9 +282,11 @@ const DEFAULT_ENDPOINTS: AgentGatewayEndpoints = {
   photoReconstructionFinalize: "/api/agent/reconstructions/finalize",
   photoReconstructionUploadPrefix: "/api/agent/reconstructions/photo-uploads",
   voiceRelayHostActionMint: "/api/agent/host-actions/voice-relay/mint",
+  bridgeSessions: "/api/agent/bridge/sessions",
 };
 
 const CLIENT_INSTANCE_ID_PATTERN = /^[A-Za-z0-9._~-]{8,128}$/;
+const BRIDGE_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CSRF_HEADER = "X-SemaFrame-Agent-CSRF";
 const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
 
@@ -277,6 +301,100 @@ function parseVoiceRelayHostActionGrant(value: unknown): VoiceRelayHostActionGra
     throw new AgentGatewayError("invalid_response", "The gateway returned an invalid Voice Relay confirmation grant.");
   }
   return Object.freeze({ token: value.token, expiresAtMs: Number(value.expiresAtMs) });
+}
+
+function parseBridgeSessionAccess(value: unknown): AgentBridgeSessionAccess {
+  if (!isRecord(value) || !exactKeys(value, [
+    "sessionId", "bearer", "target", "expiresAt", "pullUrl", "exchangeUrl",
+  ]) || typeof value.sessionId !== "string" || !BRIDGE_SESSION_ID_PATTERN.test(value.sessionId)
+    || typeof value.bearer !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(value.bearer)
+    || !["blender", "freecad", "unity", "unreal", "custom"].includes(String(value.target))
+    || typeof value.expiresAt !== "string" || typeof value.pullUrl !== "string"
+    || typeof value.exchangeUrl !== "string") {
+    throw new AgentGatewayError("invalid_response", "The gateway returned an invalid Bridge session.");
+  }
+  const expiresAt = new Date(value.expiresAt);
+  let pullUrl: URL;
+  let exchangeUrl: URL;
+  try {
+    pullUrl = new URL(value.pullUrl);
+    exchangeUrl = new URL(value.exchangeUrl);
+  } catch (cause) {
+    throw new AgentGatewayError("invalid_response", "The gateway returned invalid Bridge URLs.", { cause });
+  }
+  const expectedPullPath = `/v1/bridge/sessions/${value.sessionId}`;
+  if (Number.isNaN(expiresAt.valueOf()) || expiresAt.toISOString() !== value.expiresAt
+    || !["http:", "https:"].includes(pullUrl.protocol)
+    || pullUrl.username || pullUrl.password || pullUrl.pathname !== expectedPullPath || pullUrl.search || pullUrl.hash
+    || exchangeUrl.origin !== pullUrl.origin || exchangeUrl.username || exchangeUrl.password
+    || exchangeUrl.pathname !== `${expectedPullPath}/exchange` || exchangeUrl.search || exchangeUrl.hash) {
+    throw new AgentGatewayError("invalid_response", "The gateway returned inconsistent Bridge session metadata.");
+  }
+  return Object.freeze({
+    sessionId: value.sessionId,
+    bearer: value.bearer,
+    target: value.target as SemaFrameBridgeTarget,
+    expiresAt: value.expiresAt,
+    pullUrl: pullUrl.toString(),
+    exchangeUrl: exchangeUrl.toString(),
+  });
+}
+
+function parseBridgeProposalRecords(value: unknown): readonly AgentBridgeProposalRecord[] {
+  if (!isRecord(value) || !exactKeys(value, ["proposals"]) || !Array.isArray(value.proposals)) {
+    throw new AgentGatewayError("invalid_response", "The gateway returned an invalid Bridge proposal queue.");
+  }
+  return Object.freeze(value.proposals.map((entry): AgentBridgeProposalRecord => {
+    if (!isRecord(entry) || !exactKeys(entry, ["cursor", "receivedAt", "proposal"])
+      || !Number.isSafeInteger(entry.cursor) || Number(entry.cursor) < 1 || typeof entry.receivedAt !== "string") {
+      throw new AgentGatewayError("invalid_response", "The gateway returned an invalid Bridge proposal record.");
+    }
+    const receivedAt = new Date(entry.receivedAt);
+    if (Number.isNaN(receivedAt.valueOf()) || receivedAt.toISOString() !== entry.receivedAt) {
+      throw new AgentGatewayError("invalid_response", "The gateway returned an invalid Bridge proposal timestamp.");
+    }
+    return Object.freeze({
+      cursor: Number(entry.cursor),
+      receivedAt: entry.receivedAt,
+      proposal: parseSemaFrameBridgeChangeProposal(entry.proposal),
+    });
+  }));
+}
+
+function bridgeSessionId(value: string): string {
+  if (!BRIDGE_SESSION_ID_PATTERN.test(value)) {
+    throw new AgentGatewayError("invalid_configuration", "The Bridge session identifier is invalid.");
+  }
+  return value;
+}
+
+function bridgePublicationForm(
+  exchange: SemaFrameExchangePackage,
+  sequence: number,
+  target?: SemaFrameBridgeTarget,
+  ttlMs?: number,
+): FormData {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new AgentGatewayError("invalid_configuration", "The Bridge publication sequence is invalid.");
+  }
+  if (target !== undefined && !["blender", "freecad", "unity", "unreal", "custom"].includes(target)) {
+    throw new AgentGatewayError("invalid_configuration", "The Bridge target is invalid.");
+  }
+  const archive = new Uint8Array(exchange.archive.bytes.byteLength);
+  archive.set(exchange.archive.bytes);
+  const metadata = {
+    ...(target === undefined ? {} : { target }),
+    sequence,
+    workspaceId: exchange.manifest.source.workspaceId,
+    revision: exchange.manifest.source.revision,
+    exchangeDigest: exchange.archive.sha256,
+    manifest: exchange.manifest,
+    ...(ttlMs === undefined ? {} : { ttlMs }),
+  };
+  const form = new FormData();
+  form.set("metadata", JSON.stringify(metadata));
+  form.set("archive", new Blob([archive.buffer], { type: exchange.archive.mediaType }), "scene.semaframe-exchange");
+  return form;
 }
 
 function parseFeedApprovalToken(value: unknown, expected: HostFeedFetchRequest): string {
@@ -917,6 +1035,135 @@ export class AgentGatewayClient {
       { action },
       signal,
     ));
+  }
+
+  /**
+   * Publishes a bounded immutable Scene Exchange to a scoped pull session.
+   * The returned bearer authorizes only this session's native-tool endpoints.
+   */
+  async createBridgeSession(
+    target: SemaFrameBridgeTarget,
+    exchange: SemaFrameExchangePackage,
+    options: Readonly<{ ttlMs?: number; signal?: AbortSignal }> = {},
+  ): Promise<AgentBridgeSessionAccess> {
+    await this.ensureConfig(options.signal);
+    if (!this.csrfToken) {
+      throw new AgentGatewayError("invalid_configuration", "The agent gateway CSRF token is unavailable.");
+    }
+    const response = await this.fetchResponse(this.endpoints.bridgeSessions, {
+      method: "POST",
+      headers: { [CSRF_HEADER]: this.csrfToken },
+      body: bridgePublicationForm(exchange, 1, target, options.ttlMs),
+      signal: options.signal,
+    }, 2 * 60_000);
+    try {
+      return parseBridgeSessionAccess(await response.json() as unknown);
+    } catch (cause) {
+      if (cause instanceof AgentGatewayError) throw cause;
+      throw new AgentGatewayError("invalid_response", "The gateway returned invalid Bridge session JSON.", { cause });
+    }
+  }
+
+  async publishBridgeSession(
+    sessionId: string,
+    sequence: number,
+    exchange: SemaFrameExchangePackage,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.ensureConfig(signal);
+    if (!this.csrfToken) {
+      throw new AgentGatewayError("invalid_configuration", "The agent gateway CSRF token is unavailable.");
+    }
+    const endpoint = `${this.endpoints.bridgeSessions}/${bridgeSessionId(sessionId)}/publish`;
+    await this.fetchResponse(endpoint, {
+      method: "POST",
+      headers: { [CSRF_HEADER]: this.csrfToken },
+      body: bridgePublicationForm(exchange, sequence),
+      signal,
+    }, 2 * 60_000);
+  }
+
+  async readBridgeProposals(
+    sessionId: string,
+    afterCursor = 0,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentBridgeProposalRecord[]> {
+    if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+      throw new AgentGatewayError("invalid_configuration", "The Bridge proposal cursor is invalid.");
+    }
+    await this.ensureConfig(signal);
+    return parseBridgeProposalRecords(await this.postJson(
+      `${this.endpoints.bridgeSessions}/${bridgeSessionId(sessionId)}/proposals/read`,
+      { afterCursor },
+      signal,
+    ));
+  }
+
+  async discardBridgeProposals(
+    sessionId: string,
+    throughCursor: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!Number.isSafeInteger(throughCursor) || throughCursor < 0) {
+      throw new AgentGatewayError("invalid_configuration", "The Bridge proposal cursor is invalid.");
+    }
+    await this.ensureConfig(signal);
+    const value = await this.postJson(
+      `${this.endpoints.bridgeSessions}/${bridgeSessionId(sessionId)}/proposals/discard`,
+      { throughCursor },
+      signal,
+    );
+    if (!isRecord(value) || !exactKeys(value, ["discardedThroughCursor"])
+      || value.discardedThroughCursor !== throughCursor) {
+      throw new AgentGatewayError("invalid_response", "The gateway did not confirm Bridge proposal discard.");
+    }
+  }
+
+  async closeBridgeSession(sessionId: string, signal?: AbortSignal): Promise<void> {
+    await this.ensureConfig(signal);
+    const value = await this.postJson(
+      `${this.endpoints.bridgeSessions}/${bridgeSessionId(sessionId)}/close`,
+      {},
+      signal,
+    );
+    if (!isRecord(value) || !exactKeys(value, ["closed"]) || value.closed !== true) {
+      throw new AgentGatewayError("invalid_response", "The gateway did not confirm Bridge session closure.");
+    }
+  }
+
+  /**
+   * Best-effort page-lifecycle revocation. This intentionally does not await a
+   * response: `pagehide` may terminate the document immediately after the
+   * request is queued, while the session TTL remains the final cleanup bound.
+   */
+  releaseBridgeSession(sessionId: string): void {
+    const csrfToken = this.csrfToken;
+    if (!csrfToken) return;
+    let endpoint: string;
+    try {
+      endpoint = `${this.endpoints.bridgeSessions}/${bridgeSessionId(sessionId)}/close`;
+    } catch {
+      return;
+    }
+    try {
+      const release = this.request(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [CSRF_HEADER]: csrfToken,
+        },
+        body: "{}",
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "error",
+        referrerPolicy: "same-origin",
+        keepalive: true,
+      });
+      void Promise.resolve(release).catch(() => undefined);
+    } catch {
+      // Best effort only. Normal in-app closure still uses closeBridgeSession
+      // and surfaces failures to the owner.
+    }
   }
 
   /**

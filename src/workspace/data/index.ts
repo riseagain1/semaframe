@@ -5,3 +5,4 @@ export * from "./connectorCatalog";
 export * from "./localInlineSource";
 export * from "./hostFeedContracts";
 export * from "./hostFeedMappings";
+export * from "./ConnectorRegistry";

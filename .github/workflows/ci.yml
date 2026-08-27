@@ -54,6 +54,8 @@ jobs:
           npm run test:cad:bundle
           npm run test:csg:bundle
           npm run test:reality:runtime
+      - name: Verify P2 ecosystem and adapter contracts
+        run: npm run test:p2:ecosystem
       - name: Measure the full Workspace performance baseline
         run: npm run benchmark:workspace -- --profile full --pretty > workspace-performance.log
       - name: Preserve Workspace performance evidence

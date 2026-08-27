@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semaframe.local/schemas/static-template-catalog-v1.json",
+  "title": "SemaFrame signed static template catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "catalogId", "sequence", "generatedAt", "expiresAt", "entries", "signature"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "catalogId": { "$ref": "#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "entries": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "version", "title", "summary", "license", "publisher", "artifactPath", "artifactDigest"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["project", "model"] },
+          "version": { "$ref": "#/$defs/version" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "license": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "publisher": { "$ref": "#/$defs/id" },
+          "artifactPath": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "artifactDigest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "keyId", "value"],
+      "properties": {
+        "algorithm": { "const": "Ed25519" },
+        "keyId": { "$ref": "#/$defs/id" },
+        "value": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

@@ -5,6 +5,13 @@ import {
   AgentGatewayCommandError,
   AgentGatewayError,
 } from "../../agent/AgentGatewayClient";
+import {
+  SEMAFRAME_CHANGE_PROPOSAL_FORMAT,
+  SEMAFRAME_CHANGE_PROPOSAL_VERSION,
+  SEMAFRAME_EXCHANGE_FORMAT,
+  SEMAFRAME_EXCHANGE_VERSION,
+  type SemaFrameExchangePackage,
+} from "../../bridge";
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(value), {
@@ -1071,5 +1078,127 @@ describe("AgentGatewayClient", () => {
     expect(requestBody(fetchMock, 1)).toEqual({ action: "voice_relay_accessibility" });
     await expect(client.mintVoiceRelayHostAction("forged" as "voice_relay_arm"))
       .rejects.toMatchObject({ code: "invalid_configuration" });
+  });
+
+  it("creates a scoped Scene Bridge, republishes, and reads review-only proposals", async () => {
+    const exchangeDigest = `sha256:${"a".repeat(64)}` as const;
+    const exchange = {
+      format: "semaframe-exchange-package",
+      version: SEMAFRAME_EXCHANGE_VERSION,
+      archive: {
+        path: "workspace.semaframe-exchange",
+        mediaType: "application/vnd.semaframe.exchange+zip",
+        byteLength: 4,
+        sha256: exchangeDigest,
+        bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+      },
+      files: [],
+      manifest: {
+        format: SEMAFRAME_EXCHANGE_FORMAT,
+        version: SEMAFRAME_EXCHANGE_VERSION,
+        generator: { name: "SemaFrame", version: "test" },
+        source: {
+          workspaceId: "WORKSPACE",
+          revision: 3,
+          workspaceDigest: `sha256:${"0".repeat(64)}`,
+          registryDigest: "fnv1a32:11111111",
+        },
+        coordinateSystem: { units: "metre", handedness: "right", upAxis: "Y", angles: "radian" },
+        nodes: [],
+        resources: [],
+        connections: [],
+        files: [],
+        roundTrip: { stableIds: true, directMutation: false, editsReturnAs: "reviewable_change_proposal" },
+      },
+      report: {
+        format: "semaframe-fidelity-report",
+        version: SEMAFRAME_EXCHANGE_VERSION,
+        outcome: "passed_with_limitations",
+        source: {
+          workspaceId: "WORKSPACE",
+          revision: 3,
+          workspaceDigest: `sha256:${"0".repeat(64)}`,
+          registryDigest: "fnv1a32:11111111",
+        },
+        items: [],
+        summary: { exact: 0, parametric: 0, visual: 0, semantic: 0 },
+        limitations: ["test"],
+      },
+    } satisfies SemaFrameExchangePackage;
+    const access = {
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      bearer: "b".repeat(43),
+      target: "blender",
+      expiresAt: "2026-08-15T04:00:00.000Z",
+      pullUrl: "https://scene.test/v1/bridge/sessions/11111111-1111-4111-8111-111111111111",
+      exchangeUrl: "https://scene.test/v1/bridge/sessions/11111111-1111-4111-8111-111111111111/exchange",
+    };
+    const proposal = {
+      format: SEMAFRAME_CHANGE_PROPOSAL_FORMAT,
+      version: SEMAFRAME_CHANGE_PROPOSAL_VERSION,
+      proposalId: "blender-1",
+      target: "blender",
+      source: { workspaceId: "WORKSPACE", baseRevision: 3, exchangeDigest },
+      changes: [{
+        changeId: "move-1",
+        kind: "transform",
+        componentId: "CUBE",
+        placement: {
+          space: "world3d",
+          position: { x: 1, y: 2, z: 3 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      }],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config()))
+      .mockResolvedValueOnce(jsonResponse(access, 201))
+      .mockResolvedValueOnce(jsonResponse({ publication: { sequence: 2 } }))
+      .mockResolvedValueOnce(jsonResponse({ proposals: [{
+        cursor: 1,
+        receivedAt: "2026-08-15T03:05:00.000Z",
+        proposal,
+      }] }))
+      .mockResolvedValueOnce(jsonResponse({ discardedThroughCursor: 1 }))
+      .mockResolvedValueOnce(jsonResponse({ closed: true }));
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      clientInstanceId: "browser-client-scene-bridge",
+      fetch: fetchMock as typeof fetch,
+      handler: vi.fn(),
+    });
+
+    await expect(client.createBridgeSession("blender", exchange)).resolves.toEqual(access);
+    const createInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(createInit.headers).toMatchObject({ "X-SemaFrame-Agent-CSRF": "csrf-memory-only" });
+    expect(createInit.body).toBeInstanceOf(FormData);
+    expect(JSON.parse(String((createInit.body as FormData).get("metadata")))).toMatchObject({
+      target: "blender",
+      sequence: 1,
+      exchangeDigest,
+    });
+    expect(String(createInit.headers)).not.toContain(access.bearer);
+
+    await expect(client.publishBridgeSession(access.sessionId, 2, exchange)).resolves.toBeUndefined();
+    await expect(client.readBridgeProposals(access.sessionId)).resolves.toMatchObject([{
+      cursor: 1,
+      proposal: { proposalId: "blender-1" },
+    }]);
+    await expect(client.discardBridgeProposals(access.sessionId, 1)).resolves.toBeUndefined();
+    await expect(client.closeBridgeSession(access.sessionId)).resolves.toBeUndefined();
+    client.releaseBridgeSession(access.sessionId);
+    const releaseInit = fetchMock.mock.calls[6]?.[1] as RequestInit;
+    expect(releaseInit).toMatchObject({ method: "POST", keepalive: true, body: "{}" });
+    expect(releaseInit.headers).toMatchObject({ "X-SemaFrame-Agent-CSRF": "csrf-memory-only" });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/agent/config",
+      "/api/agent/bridge/sessions",
+      `/api/agent/bridge/sessions/${access.sessionId}/publish`,
+      `/api/agent/bridge/sessions/${access.sessionId}/proposals/read`,
+      `/api/agent/bridge/sessions/${access.sessionId}/proposals/discard`,
+      `/api/agent/bridge/sessions/${access.sessionId}/close`,
+      `/api/agent/bridge/sessions/${access.sessionId}/close`,
+    ]);
   });
 });

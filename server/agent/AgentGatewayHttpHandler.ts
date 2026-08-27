@@ -43,6 +43,12 @@ import {
 import { VOICE_RELAY_HOST_ACTION_HEADER, VOICE_RELAY_HTTP_PATHS } from "../../src/voice-relay";
 import { WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT } from "../../src/workspace/agents/contracts";
 import { XR_HTTP_SESSION_HEADER } from "../xr/http/XrHttpAdapter";
+import {
+  BRIDGE_HTTP_PREFIX,
+  BridgeSessionService,
+  createBridgeBrowserHttpHandler,
+  createBridgeHttpHandler,
+} from "../bridge";
 
 const DEFAULT_BODY_LIMIT_BYTES = 512 * 1024;
 const AGENT_PHOTO_RECONSTRUCTION_SCOPE = "asset:reconstruct" as const;
@@ -70,6 +76,8 @@ export type AgentGatewayHttpOptions = Readonly<{
   voiceRelayService?: VoiceRelayService;
   /** Injectable volatile one-shot grant store. */
   voiceRelayHostActions?: VoiceRelayHostActionStore;
+  /** Injectable volatile native-tool exchange sessions. */
+  bridgeSessions?: BridgeSessionService;
 }>;
 
 export type NodeRequestLike = AsyncIterable<Uint8Array | string> & {
@@ -831,6 +839,12 @@ export function createAgentGatewayHttpHandler(
       action,
     ),
   });
+  const bridgeSessions = options.bridgeSessions ?? new BridgeSessionService();
+  const publicBridge = createBridgeHttpHandler(bridgeSessions);
+  const browserBridge = createBridgeBrowserHttpHandler(bridgeSessions, {
+    publicBaseUrl: options.publicBaseUrl,
+  });
+  const bridgeOwnerId = `gateway:${gateway.getConfig().gatewayInstanceId}`;
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -876,6 +890,10 @@ export function createAgentGatewayHttpHandler(
       return jsonResponse(200, openApi);
     }
     if (mcp.matches(pathname)) return mcp.fetch(request);
+    if (pathname.startsWith(BRIDGE_HTTP_PREFIX)) {
+      return await publicBridge(request)
+        ?? errorResponse(404, "not_found", "Bridge route was not found.");
+    }
 
     const browserPhotoUpload = /^\/api\/agent\/reconstructions\/photo-uploads\/[0-9a-f-]{36}$/iu.test(pathname);
 
@@ -962,6 +980,10 @@ export function createAgentGatewayHttpHandler(
       if (request.method !== "POST") return errorResponse(405, "method_not_allowed", "Use POST.");
       if (request.headers.get("x-semaframe-agent-csrf") !== gateway.csrfToken) {
         return errorResponse(403, "csrf_invalid", "The agent-control browser session expired. Refresh and try again.");
+      }
+
+      if (browserBridge.matches(pathname)) {
+        return browserBridge.fetch(request, bridgeOwnerId, cors);
       }
 
       try {
@@ -1368,6 +1390,7 @@ export function createAgentGatewayHttpHandler(
         failures.push(error);
       }
       removeVoiceRelayOwner();
+      bridgeSessions.revokeOwner(bridgeOwnerId);
       const trailing = await Promise.allSettled([
         mcp.close(),
         assetIngress.close(),
