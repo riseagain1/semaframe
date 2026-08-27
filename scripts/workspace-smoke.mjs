@@ -1020,37 +1020,57 @@ try {
   if (!await cdp.evaluate(clickButtonWithAriaLabel("Reset view"))) throw new Error("Reset view was unavailable after wheel zoom.");
   await poll(cdp, "Number(document.querySelector('.hybrid-workspace-canvas')?.dataset.canvasZoom) === 1", "hybrid Reset view recovery");
   await delay(400);
-  if (!await cdp.evaluate(`(() => {
+  const microscopicZoom = await cdp.evaluate(`(async () => {
     const button = document.querySelector('button[aria-label="Zoom in"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    for (let index = 0; index < 40; index += 1) button.click();
-    return true;
-  })()`)) throw new Error("The accessible hybrid Zoom in control was unavailable.");
-  await poll(
-    cdp,
-    "Number(document.querySelector('.hybrid-workspace-canvas')?.dataset.canvasZoom) > 1000 && Number(document.querySelector('.hybrid-workspace-canvas')?.dataset.cameraDistance) < 0.05",
-    "microscopic hybrid zoom",
-  );
-  if (!await cdp.evaluate(`(() => {
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return { available: false };
+    let state;
+    for (let index = 0; index < 80; index += 1) {
+      button.click();
+      if (index % 8 === 7) await new Promise(requestAnimationFrame);
+      const canvas = document.querySelector('.hybrid-workspace-canvas');
+      state = {
+        available: true,
+        clicks: index + 1,
+        canvasZoom: Number(canvas?.dataset.canvasZoom),
+        cameraDistance: Number(canvas?.dataset.cameraDistance),
+      };
+      if (state.canvasZoom > 1000 && state.cameraDistance < 0.05) return { ...state, reached: true };
+    }
+    return { ...state, reached: false };
+  })()`);
+  if (!microscopicZoom.available) throw new Error("The accessible hybrid Zoom in control was unavailable.");
+  if (!microscopicZoom.reached) {
+    throw new Error(`Microscopic hybrid zoom did not reach its bounded target: ${JSON.stringify(microscopicZoom)}.`);
+  }
+  const planetaryZoom = await cdp.evaluate(`(async () => {
     const button = document.querySelector('button[aria-label="Zoom out"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    for (let index = 0; index < 100; index += 1) button.click();
-    return true;
-  })()`)) throw new Error("The accessible hybrid Zoom out control was unavailable.");
-  await poll(
-    cdp,
-    `(() => {
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return { available: false };
+    let state;
+    for (let index = 0; index < 180; index += 1) {
+      button.click();
+      if (index % 8 === 7) await new Promise(requestAnimationFrame);
       const canvas = document.querySelector('.hybrid-workspace-canvas');
       const distance = Number(canvas?.dataset.cameraDistance);
       const near = Number(canvas?.dataset.cameraNear);
       const far = Number(canvas?.dataset.cameraFar);
-      return Number(canvas?.dataset.canvasZoom) === 0.0001
-        && distance > 100000
-        && near > 0
-        && far > distance;
-    })()`,
-    "planetary hybrid zoom with adaptive clipping",
-  );
+      state = {
+        available: true,
+        clicks: index + 1,
+        canvasZoom: Number(canvas?.dataset.canvasZoom),
+        cameraDistance: distance,
+        cameraNear: near,
+        cameraFar: far,
+      };
+      if (state.canvasZoom === 0.0001 && distance > 100000 && near > 0 && far > distance) {
+        return { ...state, reached: true };
+      }
+    }
+    return { ...state, reached: false };
+  })()`);
+  if (!planetaryZoom.available) throw new Error("The accessible hybrid Zoom out control was unavailable.");
+  if (!planetaryZoom.reached) {
+    throw new Error(`Planetary hybrid zoom did not reach its bounded target: ${JSON.stringify(planetaryZoom)}.`);
+  }
   const distantNavigation = await cdp.evaluate(`(() => {
     const video = document.querySelector('[data-workspace-component-type="video-player"]');
     return {
