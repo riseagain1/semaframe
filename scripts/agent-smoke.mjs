@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -6,6 +5,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { launchChromeForSmoke } from "./lib/chrome-smoke-launcher.mjs";
+import { spawnOwnedProcessTree, stopOwnedProcessTrees } from "./lib/owned-process-tree.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const artifacts = resolve("artifacts");
@@ -184,7 +184,11 @@ class Cdp {
       await this.send("Runtime.releaseObject", { objectId }).catch(() => undefined);
     }
   }
-  close() { this.socket.close(); }
+  close() {
+    for (const pending of this.pending.values()) pending.reject(new Error("Chrome DevTools connection closed"));
+    this.pending.clear();
+    this.socket.close();
+  }
 }
 
 async function openCdpPage(debugPort, url) {
@@ -322,17 +326,25 @@ try {
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   throw error;
 }
-const { browser, cdpPort } = browserStartup;
-const stack = spawn("npm", ["run", "dev"], {
-  stdio: ["ignore", "pipe", "pipe"],
-  env: {
-    ...process.env,
-    SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
-    SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
-    SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
-    SEMAFRAME_DISABLE_HMR: "1",
-  },
-});
+const { browserTree, cdpPort } = browserStartup;
+let stackTree;
+try {
+  stackTree = spawnOwnedProcessTree("npm", ["run", "dev"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
+      SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
+      SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
+      SEMAFRAME_DISABLE_HMR: "1",
+    },
+  }, { termGraceMs: 20_000, forceGraceMs: 5_000 });
+} catch (error) {
+  await browserTree.stop().catch(() => undefined);
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  throw error;
+}
+const { child: stack } = stackTree;
 const processLogs = [];
 for (const child of [stack]) {
   child.stdout.on("data", (chunk) => processLogs.push(String(chunk)));
@@ -1092,9 +1104,16 @@ try {
   throw sanitizeAgentSmokeFailure(error, sensitiveDiagnosticValues);
 } finally {
   await mcpClient?.close().catch(() => undefined);
-  cdp?.close();
-  for (const child of [browser, stack]) child.kill("SIGTERM");
-  await delay(150);
+  if (cdp) {
+    await Promise.race([
+      cdp.send("Browser.close").catch(() => undefined),
+      delay(5_000),
+    ]);
+    cdp.close();
+    const browserCloseDeadline = Date.now() + 5_000;
+    while (!browserTree.closed && Date.now() < browserCloseDeadline) await delay(50);
+  }
+  await stopOwnedProcessTrees([browserTree, stackTree]);
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 }

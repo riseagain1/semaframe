@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { launchChromeForSmoke } from "./lib/chrome-smoke-launcher.mjs";
+import { spawnOwnedProcessTree, stopOwnedProcessTrees } from "./lib/owned-process-tree.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const withTimeout = (promise, timeoutMs, label) => new Promise((resolvePromise, rejectPromise) => {
@@ -597,17 +597,25 @@ try {
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   throw error;
 }
-const { browser, cdpPort } = browserStartup;
-const stack = spawn("npm", ["run", "dev"], {
-  stdio: ["ignore", "pipe", "pipe"],
-  env: {
-    ...process.env,
-    SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
-    SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
-    SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
-    SEMAFRAME_DISABLE_HMR: "1",
-  },
-});
+const { browserTree, cdpPort } = browserStartup;
+let stackTree;
+try {
+  stackTree = spawnOwnedProcessTree("npm", ["run", "dev"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      SEMAFRAME_AGENT_GATEWAY_PORT: String(gatewayPort),
+      SEMAFRAME_AGENT_GATEWAY_PUBLIC_URL: gatewayUrl,
+      SEMAFRAME_AGENT_VITE_PORT: String(vitePort),
+      SEMAFRAME_DISABLE_HMR: "1",
+    },
+  }, { termGraceMs: 20_000, forceGraceMs: 5_000 });
+} catch (error) {
+  await browserTree.stop().catch(() => undefined);
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  throw error;
+}
+const { child: stack } = stackTree;
 const processLogs = [];
 stack.stdout.on("data", (chunk) => processLogs.push(String(chunk)));
 stack.stderr.on("data", (chunk) => processLogs.push(String(chunk)));
@@ -1493,8 +1501,12 @@ try {
     5_000,
     `Workspace smoke Agent client ${index + 1} to close`,
   )));
-  cdp?.close();
-  for (const child of [browser, stack]) child.kill("SIGTERM");
-  await delay(200);
+  if (cdp) {
+    await cdp.send("Browser.close", {}, 5_000).catch(() => undefined);
+    cdp.close();
+    const browserCloseDeadline = Date.now() + 5_000;
+    while (!browserTree.closed && Date.now() < browserCloseDeadline) await delay(50);
+  }
+  await stopOwnedProcessTrees([browserTree, stackTree]);
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

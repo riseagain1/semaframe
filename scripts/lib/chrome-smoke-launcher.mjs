@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { spawnOwnedProcessTree } from "./owned-process-tree.mjs";
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const MAX_STDERR_CHARS = 8_192;
@@ -57,38 +57,27 @@ function startupFailure(message, diagnostics) {
   return new Error(`${message}${safeDiagnostics ? ` Chrome diagnostics: ${safeDiagnostics}` : " Chrome produced no safe diagnostics."}`);
 }
 
-async function stopFailedBrowser(browser) {
-  if (browser.exitCode !== null || browser.signalCode !== null) return;
-  if (!browser.pid) return;
-  const exited = new Promise((resolveExit) => browser.once("exit", resolveExit));
-  try {
-    browser.kill("SIGTERM");
-  } catch {
-    return;
-  }
-  await Promise.race([exited, delay(1_000)]);
-  if (browser.exitCode === null && browser.signalCode === null) {
-    try {
-      browser.kill("SIGKILL");
-    } catch { /* the process exited between the state check and signal */ }
-  }
-}
-
 export async function launchChromeForSmoke({
   executable,
   profile,
   extraArgs = [],
   timeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
 }) {
-  const browser = spawn(executable, [
-    ...extraArgs,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--remote-debugging-address=127.0.0.1",
-    "--remote-debugging-port=0",
-    `--user-data-dir=${profile}`,
-    "about:blank",
-  ], { stdio: ["ignore", "ignore", "pipe"] });
+  const browserTree = spawnOwnedProcessTree(
+    executable,
+    [
+      ...extraArgs,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--remote-debugging-address=127.0.0.1",
+      "--remote-debugging-port=0",
+      `--user-data-dir=${profile}`,
+      "about:blank",
+    ],
+    { stdio: ["ignore", "ignore", "pipe"] },
+    { termGraceMs: 5_000, forceGraceMs: 5_000 },
+  );
+  const { child: browser } = browserTree;
 
   let stderr = "";
   browser.stderr.on("data", (chunk) => {
@@ -122,6 +111,7 @@ export async function launchChromeForSmoke({
         browser.off("error", recordSpawnError);
         return {
           browser,
+          browserTree,
           cdpPort: port,
           diagnosticText: () => sanitizeChromeSmokeDiagnostic(stderr),
         };
@@ -132,7 +122,9 @@ export async function launchChromeForSmoke({
   } catch (error) {
     browser.off("exit", recordExit);
     browser.off("error", recordSpawnError);
-    await stopFailedBrowser(browser);
+    try {
+      await browserTree.stop();
+    } catch { /* preserve the bounded, sanitized startup failure */ }
     throw error;
   }
 }

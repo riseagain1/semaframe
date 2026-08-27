@@ -245,6 +245,7 @@ export function spawnOwnedProcessTree(command, args, spawnOptions = {}, {
   return Object.freeze({
     child,
     pid: child.pid,
+    get closed() { return childClosed; },
     get exited() { return exited(); },
     get stopping() { return stopPromise !== undefined; },
     stop() {
