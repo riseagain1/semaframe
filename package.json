@@ -1,7 +1,7 @@
 {
   "name": "semaframe",
-  "private": true,
-  "version": "0.4.0-rc.1",
+  "private": false,
+  "version": "0.4.0-rc.2",
   "license": "MIT",
   "description": "A semantic spatial workspace for AI agents.",
   "repository": {
@@ -12,16 +12,27 @@
   "bugs": {
     "url": "https://github.com/riseagain1/semaframe/issues"
   },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
   "type": "module",
   "bin": {
-    "semaframe": "./bin/semaframe.mjs"
+    "semaframe": "bin/semaframe.mjs"
   },
   "files": [
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
     "bin/",
     ".env.example",
+    ".env.agent.example",
     "docs/bridges/",
     "docs/ecosystem/",
     "docs/extensions/",
+    "docs/hardware-support.md",
+    "docs/release-v0.4.0-rc.2.md",
     "examples/diagnostics/",
     "index.html",
     "xr.html",
@@ -51,7 +62,6 @@
     "scripts/dev-agent.mjs",
     "scripts/lib/",
     "scripts/verify-bridge-adapters.mjs",
-    "scripts/verify-bridge-adapters.test.mjs",
     "tsconfig.json",
     "tsconfig.app.json",
     "tsconfig.node.json",

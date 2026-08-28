@@ -307,6 +307,10 @@ try {
   assert.ok(packReport.files.some(({ path }) => path === "server/agent/start.ts"));
   assert.ok(packReport.files.some(({ path }) => path === "src/main.tsx"));
   assert.ok(packReport.files.some(({ path }) => path === "xr.html"));
+  assert.ok(packReport.files.some(({ path }) => path === ".env.agent.example"));
+  assert.ok(packReport.files.some(({ path }) => path === "docs/release-v0.4.0-rc.2.md"));
+  assert.ok(!packReport.files.some(({ path }) => path.startsWith("src/tests/") || path.endsWith(".test.mjs")));
+  assert.ok(!packReport.files.some(({ path }) => /native\/voice-relay\/(?:macos|windows)\/build\//u.test(path)));
   assert.ok(packReport.entryCount <= 700, `Package contains an unexpected ${packReport.entryCount} files.`);
   assert.ok(packReport.unpackedSize < 12 * 1024 * 1024, "Package source payload exceeds the 12 MiB budget.");
 
@@ -328,7 +332,9 @@ try {
 
   const installedRoot = join(temporaryRoot, "node_modules", "semaframe");
   const manifest = JSON.parse(await readFile(join(installedRoot, "package.json"), "utf8"));
-  assert.equal(manifest.bin.semaframe, "./bin/semaframe.mjs");
+  assert.equal(manifest.private, false);
+  assert.deepEqual(manifest.publishConfig, { access: "public", tag: "next" });
+  assert.equal(manifest.bin.semaframe, "bin/semaframe.mjs");
   for (const runtimeDependency of [
     "vite",
     "tsx",

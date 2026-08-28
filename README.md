@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml"><img src="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://github.com/riseagain1/semaframe/releases/latest"><img src="https://img.shields.io/github/v/release/riseagain1/semaframe?display_name=tag" alt="Latest release" /></a>
+  <a href="https://www.npmjs.com/package/semaframe"><img src="https://img.shields.io/npm/v/semaframe/next?label=npm%20next" alt="npm next version" /></a>
 </p>
 
 > **Build spaces agents can understand.**
@@ -46,9 +47,9 @@ These three silent-first English films show the product through ordinary-languag
 
 The rooms, city, and feeds are deterministic synthetic evidence—not field scans, live infrastructure, or engineering certification. Video binaries live in the [Demo Gallery release](https://github.com/riseagain1/semaframe/releases/tag/demo-gallery-v1); Remotion source, captions, contracts, and captured evidence remain reviewable in [`video/`](./video/README.md). The [original 78-second launch tour](https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4) remains available in the [v0.2.0 release](https://github.com/riseagain1/semaframe/releases/tag/v0.2.0).
 
-## Next / unreleased
+## What's new in v0.4 RC
 
-The next public Agent contract keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes the next operational loops:
+The current source candidate is `v0.4.0-rc.2`. It keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes the next operational loops:
 
 | Capability | What it adds |
 | --- | --- |
@@ -65,13 +66,13 @@ The next public Agent contract keeps the v0.3 modeling and Reality foundation, a
 | **Extension and host services** | Versioned connector/importer/exporter/bridge contracts, digest/signature verification, Workspace-bound grants, an owned framed-stdio host, immutable connector registries, and bounded asynchronous artifact jobs |
 | **Community ecosystem** | A signed static project/model template catalog with proposal-only installation plus explicitly opt-in, previewable anonymous performance diagnostics with no bundled vendor endpoint |
 
-The development surface is now Workspace Protocol 1.3 with project schema 1.4, 25 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. These values describe `main` after this change, not the published v0.3.0 tag.
+The `v0.4.0-rc.2` source surface is Workspace Protocol 1.3 with project schema 1.4, 25 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The latest stable release remains v0.3.0; this candidate uses the GitHub prerelease channel and npm `next`.
 
 The v0.4 release candidate also hardens the product surface around those
-contracts: explicit Agent states, Start and Checks centers, Basic/Advanced
+contracts: explicit Agent states, direct Agent-first Workspace entry, a unified Checks center, Basic/Advanced
 inspection, one atomic Sources Wizard, an outcome-aware Export Center, an XR
 Setup Assistant, verified IndexedDB recovery, enforced CI coverage, and a
-packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0-rc.1 notes](./docs/release-v0.4.0-rc.1.md).
+packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0-rc.2 notes](./docs/release-v0.4.0-rc.2.md).
 
 The ecosystem contracts are documented separately in the [ecosystem layer guide](./docs/ecosystem/README.md). They preserve the same central invariant: neither an extension, template, artifact provider, nor downstream 3D application can bypass `WorkspaceStore`.
 
@@ -93,7 +94,7 @@ Together, these capabilities support one inspectable workflow: import captured c
 ## Contents
 
 - [See SemaFrame in action](#see-semaframe-in-action)
-- [Next / unreleased](#next--unreleased)
+- [What's new in v0.4 RC](#whats-new-in-v04-rc)
 - [What's new in v0.3](#whats-new-in-v03)
 - [Why SemaFrame](#why-semaframe)
 - [A practical Jarvis-like workspace](#a-practical-jarvis-like-workspace)
@@ -186,13 +187,14 @@ If that optional Apple Object Capture requirement is unavailable, SemaFrame repo
 
 ### Install and run
 
-The source-distributed CLI can be tried in one line directly from GitHub. It
-checks the Node version, required package files, and local ports before it
+The release-candidate CLI can be tried in one line from npm. The exact version
+keeps the install reproducible; `semaframe@next` follows the newest candidate.
+It checks the Node version, required package files, and local ports before it
 starts anything:
 
 ```bash
-npm exec --yes --package=github:riseagain1/semaframe -- semaframe doctor
-npm exec --yes --package=github:riseagain1/semaframe -- semaframe start
+npm exec --yes --package=semaframe@0.4.0-rc.2 -- semaframe doctor
+npm exec --yes --package=semaframe@0.4.0-rc.2 -- semaframe start
 ```
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
@@ -200,7 +202,7 @@ renderer. A remote headset still needs a trusted HTTPS URL reachable on the
 LAN; the doctor reports this as an explicit warning rather than pretending a
 physical headset was verified. Voice Relay is optional and off by default.
 
-For development or a version-pinned checkout:
+For development from the current source branch:
 
 ```bash
 git clone https://github.com/riseagain1/semaframe.git
@@ -363,7 +365,7 @@ Voice Relay uses a small local helper: macOS Accessibility APIs on macOS and UI 
 npm run build:voice-relay
 ```
 
-`npm run dev` builds the optional helper when needed unless `SEMAFRAME_VOICE_RELAY_SKIP_BUILD=1`; if it cannot be built, the rest of SemaFrame remains available and Voice Relay reports unavailable. A packaged launcher must pin the shipped helper with `SEMAFRAME_VOICE_RELAY_HELPER_SHA256` (and may select an absolute `SEMAFRAME_VOICE_RELAY_HELPER_PATH`). `SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER=1` is a development/test-only escape hatch, not a production setting. Native Voice Relay is unavailable on Linux; XR and all non-Relay Workspace behavior remain cross-platform.
+`npm run dev` builds the optional helper when needed unless `SEMAFRAME_VOICE_RELAY_SKIP_BUILD=1`; if it cannot be built, the rest of SemaFrame remains available and Voice Relay reports unavailable. The launcher hashes the exact locally built helper before starting the Gateway. A launcher that supplies another helper must pin it with `SEMAFRAME_VOICE_RELAY_HELPER_SHA256` (and may select an absolute `SEMAFRAME_VOICE_RELAY_HELPER_PATH`). The public npm tarball excludes prebuilt native binaries. `SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER=1` is a development/test-only escape hatch, not a production setting. Native Voice Relay is unavailable on Linux; XR and all non-Relay Workspace behavior remain cross-platform.
 
 ## First Agent connection
 
@@ -675,7 +677,7 @@ The direct `.semaframe.json` format remains useful when small metadata-only file
 
 Extension API `1.0` defines connector, importer, exporter, and bridge providers. Strict manifests pin package size and SHA-256, declare exact providers and permissions, and optionally carry an Ed25519 signature. A host can require signatures and supplies its own pinned-key verifier; the SDK does not decide publisher trust.
 
-This is currently a source/embedding contract, not a published npm SDK or an installed extension runtime. The private package has no compiled library export, and the app/gateway does not automatically instantiate the native host, extension grants, connector registry, artifact scheduler/HTTP handler, catalog planner, or diagnostics collector. An embedding host must wire and authorize the services it elects to expose; there is no built-in extension installer UI.
+This is currently a source/embedding contract, not a compiled public SDK or an installed extension runtime. The public npm package is a CLI/source distribution with no library exports, and the app/gateway does not automatically instantiate the native host, extension grants, connector registry, artifact scheduler/HTTP handler, catalog planner, or diagnostics collector. An embedding host must wire and authorize the services it elects to expose; there is no built-in extension installer UI.
 
 Grants bind the exact extension/version/manifest digest to one Workspace, provider set, permission set, expiry, and optional network or secret scopes. The native host owns one length-framed stdio subprocess, checks its package-root entrypoint, minimizes the environment, reauthorizes every call, and kills the process after abort, timeout, or protocol failure. This is not an OS sandbox, so native code still requires a trusted publisher.
 
@@ -894,7 +896,7 @@ SemaFrame deliberately does not claim the following:
 - **Photo reconstruction is local, visual-only, resource-bounded, and platform-bounded.** The bundled backend requires supported macOS Object Capture hardware and Xcode command-line tools. It rejects sets beyond the selected profile's pixel and memory policy and stops work if disk, memory, process-tree supervision, time, total working-tree, conversion, or candidate-staging bounds fail. Apple first produces a textured mesh, which SemaFrame samples into Gaussian PLY; every result begins as `visual_only` and `uncalibrated`. It is not a bundled cross-platform/cloud reconstruction service. A real 51-photo public test set has completed the manual end-to-end workflow, but that does not establish metric or survey accuracy and is not a committed CI fixture.
 - **Direct project JSON is still metadata-only.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest. The separate `.semaframe-project` artifact includes the verified Reality closure when portability is required.
 - **Scene Exchange is not native downstream history.** OpenUSD/GLB/optional STEP preserve bounded geometry and stable semantics, but cannot reconstruct Blender modifiers, FreeCAD feature trees and constraints, or native Unity/Unreal authoring history. Downstream edits return only as reviewable proposals.
-- **Not a published extension runtime or marketplace.** The repository has source-level SDK, manifest/grant, signed static catalog, native-host, connector, and artifact contracts, but the private npm package has no compiled public SDK export and the app does not install or activate extensions. It does not yet provide dependency resolution, automatic updates, or a public extension registry service.
+- **Not a published extension runtime or marketplace.** The repository has source-level SDK, manifest/grant, signed static catalog, native-host, connector, and artifact contracts, but the public npm package is a CLI/source distribution without compiled SDK exports and the app does not install or activate extensions. It does not yet provide dependency resolution, automatic updates, or a public extension registry service.
 - **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
 - **Not a bundled AI model or speech service.** A voice-capable Agent owns its computer-microphone and realtime path. Optional Voice Relay depends on the XR browser's speech implementation, which may be vendor- and network-dependent; SemaFrame does not claim offline recognition.
 - **Not universal desktop automation.** Voice Relay targets only compatible standard Agent windows on macOS or Windows after a no-send diagnostic and per-session arm. Application accessibility trees can change, Linux has no native helper, and the Relay is not an arbitrary-window macro system.

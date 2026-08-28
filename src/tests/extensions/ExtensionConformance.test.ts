@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   EXAMPLE_JSON_EXPORTER_PROVIDER_V1,
+  EXAMPLE_EXTENSION_MANIFEST_V1,
   NOOP_CONNECTOR_PROVIDER_V1,
   runConnectorProviderConformanceV1,
   runExporterProviderConformanceV1,
   type ConnectorProviderV1,
   type ExporterProviderV1,
 } from "../../extensions";
+import { SEMAFRAME_VERSION } from "../../version";
 
 describe("Extension provider conformance", () => {
   it("passes the no-op connector and deterministic JSON exporter", async () => {
+    expect(EXAMPLE_EXTENSION_MANIFEST_V1.compatibility.minimumHostVersion).toBe(SEMAFRAME_VERSION);
     await expect(runConnectorProviderConformanceV1({
       provider: NOOP_CONNECTOR_PROVIDER_V1,
     })).resolves.toMatchObject({ passed: true, providerKind: "connector" });

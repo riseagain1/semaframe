@@ -1,4 +1,5 @@
 import { DEFAULT_COMPONENT_REGISTRY } from "../../workspace/components";
+import { SEMAFRAME_VERSION } from "../../version";
 import {
   parseTemplateDescriptor,
   type ModelTemplateDescriptor,
@@ -26,7 +27,7 @@ export const FIRST_PARTY_PROJECT_TEMPLATES: readonly ProjectTemplateDescriptor[]
     title: "Decision board",
     summary: "A small evidence, decision, and next-actions workspace.",
     license: "Apache-2.0",
-    minimumAppVersion: "0.4.0-rc.1",
+    minimumAppVersion: SEMAFRAME_VERSION,
     requiredPermissions: ["workspace:write", "component:create"],
     newProject: { suggestedTitle: "Decision board" },
     operations: [{
@@ -63,7 +64,7 @@ export const FIRST_PARTY_MODEL_TEMPLATES: readonly ModelTemplateDescriptor[] = O
     title: "Reference block",
     summary: "A neutral one-metre primitive for spatial scale and composition checks.",
     license: "CC0-1.0",
-    minimumAppVersion: "0.4.0-rc.1",
+    minimumAppVersion: SEMAFRAME_VERSION,
     requiredPermissions: ["workspace:write", "component:create", "component:update"],
     operations: [{
       op: "create_component",

@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolveNpmLaunch } from "./lib/npm-launcher.mjs";
 import {
@@ -11,8 +12,12 @@ import { buildVoiceRelayNativeHelper } from "./build-voice-relay.mjs";
 
 loadRootEnvironment();
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+let builtVoiceRelayHelperSha256;
 if (process.env.SEMAFRAME_VOICE_RELAY_SKIP_BUILD !== "1") {
-  buildVoiceRelayNativeHelper({ optional: true });
+  const helper = buildVoiceRelayNativeHelper({ optional: true });
+  if ("output" in helper && helper.output) {
+    builtVoiceRelayHelperSha256 = createHash("sha256").update(readFileSync(helper.output)).digest("hex");
+  }
 }
 
 const vitePort = process.env.SEMAFRAME_AGENT_VITE_PORT?.trim() || "4173";
@@ -36,8 +41,14 @@ const gatewayEnvironment = {
   SEMAFRAME_AGENT_ALLOWED_ORIGINS: process.env.SEMAFRAME_AGENT_ALLOWED_ORIGINS || browserOrigins,
   SEMAFRAME_AGENT_BROWSER_TOKEN: browserBootstrapToken,
   SEMAFRAME_XR_ALLOWED_ORIGINS: xrRendererOrigins,
-  SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER:
-    process.env.SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER || "1",
+  ...(process.env.SEMAFRAME_VOICE_RELAY_HELPER_SHA256?.trim()
+    ? { SEMAFRAME_VOICE_RELAY_HELPER_SHA256: process.env.SEMAFRAME_VOICE_RELAY_HELPER_SHA256.trim() }
+    : builtVoiceRelayHelperSha256
+      ? { SEMAFRAME_VOICE_RELAY_HELPER_SHA256: builtVoiceRelayHelperSha256 }
+      : {}),
+  ...(process.env.SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER?.trim()
+    ? { SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER: process.env.SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER.trim() }
+    : {}),
 };
 const viteEnvironment = {
   ...process.env,

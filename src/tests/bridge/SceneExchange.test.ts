@@ -10,6 +10,7 @@ import {
 import { DEFAULT_COMPONENT_REGISTRY, type JSONObject } from "../../workspace/components";
 import { prepareComponentRecipe } from "../../workspace/protocol";
 import { WorkspaceStore, type WorkspaceState } from "../../workspace/state";
+import { SEMAFRAME_VERSION } from "../../version";
 import { workspaceBatch } from "../workspace/helpers";
 
 function placement(x: number, y = 0, z = 0) {
@@ -85,6 +86,11 @@ function proposal(workspaceId: string, revision: number, digest: `sha256:${strin
 }
 
 describe("SemaFrame Scene Exchange", () => {
+  it("uses the installed package version as its default generator identity", async () => {
+    const exchange = await createSemaFrameExchange(new WorkspaceStore().getState() as WorkspaceState);
+    expect(exchange.manifest.generator).toEqual({ name: "SemaFrame", version: SEMAFRAME_VERSION });
+  });
+
   it("exports deterministic valid OpenUSD, GLB and semantic metadata without host secrets", async () => {
     const store = populatedStore();
     const schemaRecipe = prepareComponentRecipe({

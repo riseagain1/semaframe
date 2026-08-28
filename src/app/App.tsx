@@ -74,7 +74,6 @@ import type {
 } from "./components/workspace/WorkspaceInspector";
 import type { ComponentCreationOptions } from "./components/workspace/WorkspaceComponentLibrary";
 import type { WorkspacePanel } from "./components/workspace/WorkspaceChrome";
-import { WorkspaceStartPanel } from "./components/workspace/WorkspaceStartPanel";
 import {
   buildWorkspaceValidationView,
   type WorkspaceValidationTarget,
@@ -734,7 +733,6 @@ export default function App() {
   const [sceneBridgeProposals, setSceneBridgeProposals] = useState<readonly AgentBridgeProposalRecord[]>([]);
   const [sceneBridgeBusy, setSceneBridgeBusy] = useState(false);
   const [sceneBridgeError, setSceneBridgeError] = useState<string>();
-  const [startCenterDismissed, setStartCenterDismissed] = useState(false);
   const [workspaceConfigureRequestId, setWorkspaceConfigureRequestId] = useState<string>();
   const [entries, setEntriesState] = useState<WorkspaceHistoryEntry[]>([]);
   const entriesRef = useRef(entries);
@@ -1628,7 +1626,6 @@ export default function App() {
             setProjectId(project.projectId);
             createdAtRef.current = project.createdAt;
             setProjectName(restoredName);
-            setStartCenterDismissed(true);
             setEntries(historyEntriesForStore(nextWorkspaceStore));
             setDirty(false);
             setRecoveryAvailable(false);
@@ -1664,7 +1661,6 @@ export default function App() {
       setEntries([]);
       setProjectId(uid("project"));
       setProjectName(initialProjectName());
-      setStartCenterDismissed(false);
       setDirty(false);
       createdAtRef.current = new Date().toISOString();
       try {
@@ -1707,7 +1703,6 @@ export default function App() {
           connectWorkspaceStore(nextWorkspaceStore);
           setProjectId(project.projectId);
           setProjectName(recovered.snapshot.projectName || "Recovered world");
-          setStartCenterDismissed(true);
           createdAtRef.current = project.createdAt;
           setEntries(historyEntriesForStore(nextWorkspaceStore));
           setDirty(true);
@@ -5384,13 +5379,6 @@ export default function App() {
         ? "reality"
         : "inspector");
   }, [notice]);
-  const showStartCenter = externalControlActive
-    && !startCenterDismissed
-    && !recoveryAvailable
-    && workspace.components.size === 0
-    && workspace.resources.size === 0
-    && workspace.modelDefinitions.size === 0;
-
   const agentConnectionPageProps = {
     id: "agent-manage-panel",
     experience: agentExperience,
@@ -5550,34 +5538,6 @@ export default function App() {
             hybridCanvasRef.current?.setXRWorldPanels?.(xrWorldPanels, workspaceSnapshot.revision);
           }}
         />
-        {showStartCenter && <WorkspaceStartPanel
-          disabled={busy}
-          agentName={agentConfig?.clientName}
-          onBuildSpace={() => {
-            const created = createWorkspaceComponent("stage-3d");
-            if (!created) return;
-            setStartCenterDismissed(true);
-            setWorkspacePanel("library");
-          }}
-          onCreateDashboard={() => {
-            setStartCenterDismissed(true);
-            setWorkspacePanel("library");
-          }}
-          onOpenReality={() => {
-            setStartCenterDismissed(true);
-            setWorkspacePanel("reality");
-          }}
-          onConnectData={() => {
-            setStartCenterDismissed(true);
-            setWorkspacePanel("sources");
-          }}
-          onTryExample={() => {
-            createMixedWorkspaceShowcase();
-            setStartCenterDismissed(true);
-          }}
-          onOpenProject={() => fileRef.current?.click()}
-          onDismiss={() => setStartCenterDismissed(true)}
-        />}
         <WorkspaceChrome
           key={`workspace-chrome-${workspaceRenderGeneration}`}
           catalog={workspaceCatalog}
