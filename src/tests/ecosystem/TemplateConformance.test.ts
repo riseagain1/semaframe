@@ -9,6 +9,7 @@ import {
   planProjectTemplateInstallation,
 } from "../../ecosystem/catalog";
 import { WorkspaceStore } from "../../workspace/state";
+import { SEMAFRAME_VERSION } from "../../version";
 
 describe("template descriptor and installation proposal conformance", () => {
   it("validates the first-party project and model descriptors", () => {
@@ -17,6 +18,8 @@ describe("template descriptor and installation proposal conformance", () => {
     expect(FIRST_PARTY_PROJECT_TEMPLATES[0]?.operations).toHaveLength(3);
     expect(FIRST_PARTY_MODEL_TEMPLATES[0]?.operations.map((operation) => operation.op))
       .toEqual(["create_component", "create_component", "create_component", "publish_model"]);
+    expect(FIRST_PARTY_PROJECT_TEMPLATES[0]?.minimumAppVersion).toBe(SEMAFRAME_VERSION);
+    expect(FIRST_PARTY_MODEL_TEMPLATES[0]?.minimumAppVersion).toBe(SEMAFRAME_VERSION);
   });
 
   it("returns an unexecuted new-project transaction proposal without granting permissions", () => {
@@ -26,7 +29,7 @@ describe("template descriptor and installation proposal conformance", () => {
       requestId: "install_decision_board",
       proposedWorkspaceId: "PROPOSED_WORKSPACE",
       registryDigest: store.getRegistryDigest(),
-      appVersion: "0.4.0-rc.1",
+      appVersion: SEMAFRAME_VERSION,
     });
     expect(proposal).toMatchObject({
       kind: "new_project_proposal",
@@ -44,7 +47,7 @@ describe("template descriptor and installation proposal conformance", () => {
       workspaceId: store.getState().workspaceId,
       workspaceRevision: store.getRevision(),
       registryDigest: store.getRegistryDigest(),
-      appVersion: "0.4.0-rc.1",
+      appVersion: SEMAFRAME_VERSION,
     });
     expect(proposal).toMatchObject({
       kind: "workspace_transaction_proposal",
@@ -64,7 +67,7 @@ describe("template descriptor and installation proposal conformance", () => {
       requestId: "explicit_project_install",
       proposedWorkspaceId: projectStore.getState().workspaceId,
       registryDigest: projectStore.getRegistryDigest(),
-      appVersion: "0.4.0-rc.1",
+      appVersion: SEMAFRAME_VERSION,
     });
     expect(projectStore.getState().components.size).toBe(0);
     projectStore.apply(projectProposal.transaction);
@@ -76,7 +79,7 @@ describe("template descriptor and installation proposal conformance", () => {
       workspaceId: modelStore.getState().workspaceId,
       workspaceRevision: modelStore.getRevision(),
       registryDigest: modelStore.getRegistryDigest(),
-      appVersion: "0.4.0-rc.1",
+      appVersion: SEMAFRAME_VERSION,
     });
     expect(modelStore.getState().components.size).toBe(0);
     modelStore.apply(modelProposal.transaction);

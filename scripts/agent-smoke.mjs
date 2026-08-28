@@ -746,12 +746,13 @@ try {
     workspaceActive: document.querySelector('.app-workspace')?.dataset.agentWorkspaceActive,
     workspaceInert: document.querySelector('.app-workspace')?.hasAttribute('inert'),
     hasViewport: Boolean(document.querySelector('.viewport-canvas')),
+    hasStartCenter: Boolean(document.querySelector('.workspace-start-panel')),
     hasComposer: Boolean(document.querySelector('textarea[aria-label="Describe what happens next"]')),
     hasLegacyModeSwitch: Boolean(document.querySelector('.control-mode-switch')),
     hasLegacyStoryRail: Boolean(document.querySelector('.story-rail')),
   })`);
   if (!connectedUi.status?.includes(workspaceClientName) || connectedUi.workspaceActive !== "true" ||
-      connectedUi.workspaceInert || !connectedUi.hasViewport || connectedUi.hasComposer ||
+      connectedUi.workspaceInert || !connectedUi.hasViewport || connectedUi.hasStartCenter || connectedUi.hasComposer ||
       connectedUi.hasLegacyModeSwitch || connectedUi.hasLegacyStoryRail) {
     throw new Error(`Successful native Workspace handshake did not return to the unified Workspace: ${JSON.stringify(connectedUi)}`);
   }

@@ -52,7 +52,7 @@ export const EXAMPLE_EXTENSION_MANIFEST_V1 = parseExtensionManifestV1({
   displayName: "SemaFrame SDK Example",
   description: "No-op connector and deterministic JSON exporter used by the SDK conformance suite.",
   publisher: { id: "semaframe", displayName: "SemaFrame" },
-  compatibility: { minimumHostVersion: "0.4.0" },
+  compatibility: { minimumHostVersion: "0.4.0-rc.2" },
   entrypoint: { kind: "none" },
   providers: [
     {

@@ -19,6 +19,7 @@ import {
 } from "../workspace/modeling/openUsdExporter";
 import { parseParametricPrimitive, type ParametricPrimitive } from "../workspace/modeling/parametricGeometry";
 import type { WorkspaceState } from "../workspace/state/workspaceState";
+import { SEMAFRAME_VERSION } from "../version";
 import { bridgeJsonBytes, sha256BridgeBytes, sha256BridgeJson } from "./canonical";
 import {
   SEMAFRAME_EXCHANGE_LIMITS,
@@ -661,7 +662,7 @@ export async function createSemaFrameExchange(
   const manifest: SemaFrameExchangeManifest = Object.freeze({
     format: SEMAFRAME_EXCHANGE_FORMAT,
     version: SEMAFRAME_EXCHANGE_VERSION,
-    generator: Object.freeze({ name: "SemaFrame", version: options.generatorVersion ?? "0.4.0" }),
+    generator: Object.freeze({ name: "SemaFrame", version: options.generatorVersion ?? SEMAFRAME_VERSION }),
     source,
     coordinateSystem,
     nodes,
