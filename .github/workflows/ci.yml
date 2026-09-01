@@ -59,7 +59,7 @@ jobs:
       - name: Measure the full Workspace performance baseline
         run: npm run benchmark:workspace -- --profile full --pretty > workspace-performance.log
       - name: Preserve Workspace performance evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: workspace-performance-${{ runner.os }}-node-22
           path: workspace-performance.log
