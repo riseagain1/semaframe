@@ -612,6 +612,17 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
       },
     };
   }
+  if (pathname === "/v1/workspace/precision/analyze" && method === "POST") {
+    const body = exactObject(value, ["session_token", "instruction_digest", "component_id", "action", "options"],
+      ["session_token", "instruction_digest", "component_id"]);
+    return { name: "analyze_workspace_precision", input: {
+      session_token: boundedString(body.session_token, "session_token", 8, 256),
+      instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
+      component_id: boundedString(body.component_id, "component_id", 1, 256),
+      ...(body.action === undefined ? {} : { action: boundedString(body.action, "action", 1, 32) }),
+      ...(body.options === undefined ? {} : { options: body.options }),
+    } };
+  }
   if (pathname === "/v1/workspace/space/inspect" && method === "POST") {
     const body = exactObject(value, ["session_token", "instruction_digest", "since_revision"], [
       "session_token", "instruction_digest",
@@ -1237,7 +1248,8 @@ export function createAgentGatewayHttpHandler(
           "media_type",
           "byte_length",
           "sha256",
-        ]);
+          "purpose",
+        ], ["session_token", "instruction_digest", "request_id", "workspace_id", "display_name", "format", "media_type", "byte_length", "sha256"]);
         const validation = await gateway.dispatch("begin_workspace_asset_import", body, {
           clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
         });
@@ -1246,11 +1258,15 @@ export function createAgentGatewayHttpHandler(
           validation,
           boundedString(body.session_token, "session_token", 8, 256),
         );
+        if (body.purpose !== undefined && body.purpose !== "generic_import" && body.purpose !== "measurement_source") {
+          throw new InvalidRequestError("Public imports cannot mint service-owned purposes.");
+        }
         const result = await assetIngress.begin(principal, {
           requestId: boundedString(body.request_id, "request_id", 8, 128),
           workspaceId: boundedString(body.workspace_id, "workspace_id", 1, 256),
           displayName: boundedString(body.display_name, "display_name", 1, 255),
-          format: boundedString(body.format, "format", 3, 3) as AgentAssetFormat,
+          format: boundedString(body.format, "format", 3, 7) as AgentAssetFormat,
+          ...(body.purpose === undefined ? {} : { purpose: body.purpose as "generic_import" | "measurement_source" }),
           mediaType: boundedString(body.media_type, "media_type", 3, 192),
           byteLength: safeInteger(body.byte_length, "byte_length"),
           sha256: boundedString(body.sha256, "sha256", 71, 71),
@@ -1292,8 +1308,9 @@ export function createAgentGatewayHttpHandler(
           "workspace_id",
           "profile",
           "photos",
+          "retain_measurement_bundle",
           "approval_token",
-        ]);
+        ], ["session_token", "instruction_digest", "request_id", "workspace_id", "profile", "photos", "approval_token"]);
         const approved = approvedRestPhotoReconstructionPrincipal(gateway, body);
         const validation = await gateway.dispatch("begin_workspace_photo_reconstruction", withoutApprovalProof(body), {
           clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
@@ -1304,6 +1321,7 @@ export function createAgentGatewayHttpHandler(
           requestId: body.request_id,
           workspaceId: body.workspace_id,
           profile: body.profile,
+          ...(body.retain_measurement_bundle === undefined ? {} : { retainMeasurementBundle: body.retain_measurement_bundle }),
           photos: Array.isArray(body.photos)
             ? body.photos.map((photo) => {
                 const item = photo as Record<string, unknown>;
@@ -1397,6 +1415,7 @@ export function createAgentGatewayHttpHandler(
         const result = await gateway.dispatch("complete_workspace_reconstruction_asset", {
           candidate_handle: candidate.candidateHandle,
           workspace_id: body.workspace_id,
+          ...(candidate.measurementBundle ? { measurement_bundle: candidate.measurementBundle } : {}),
         }, {
           clientName: request.headers.get("x-semaframe-agent-name") ?? undefined,
         });

@@ -81,6 +81,44 @@ afterEach(async () => {
 });
 
 describe("AgentAssetIngress", () => {
+  it.each([
+    ["obj", "model/obj"], ["xyz-csv", "text/csv"], ["ply", "application/ply"],
+  ] as const)("admits %s only through a dedicated bounded measurement purpose", async (format, mediaType) => {
+    const { manager } = await setup();
+    const bytes = new TextEncoder().encode("unverified measurement source bytes");
+    const source = input(bytes, { format, mediaType, purpose: "measurement_source" });
+    const grant = await manager.begin(principal, source);
+    expect(grant).toMatchObject({ purpose: "measurement_source", format });
+    const uploaded = await manager.upload(grant.upload!.url.split("/").at(-1)!, grant.upload!.token, mediaType, bytes.length, body(bytes));
+    expect(uploaded).toMatchObject({ purpose: "measurement_source", status: "ready" });
+    await expect(manager.begin(principal, { ...source, purpose: "generic_import" })).rejects.toMatchObject({ code: format === "ply" ? "asset_import_idempotency_conflict" : "invalid_request" });
+  });
+  it.each([
+    { format: "spz", mediaType: "model/spz", purpose: "measurement_source" },
+    { format: "sog", mediaType: "model/sog", purpose: "measurement_source" },
+    { format: "capture-bundle", mediaType: "application/vnd.semaframe.capture+zip", purpose: "measurement_source" },
+    { format: "obj", mediaType: "model/obj", purpose: "generic_import" },
+    { format: "xyz-csv", mediaType: "text/csv", purpose: "photo_reconstruction" },
+    { format: "ply", mediaType: "application/ply", purpose: "photo_measurement" },
+  ] as const)("rejects crossed measurement and visual contracts: %s", async (override) => {
+    const { manager } = await setup();
+    await expect(manager.begin(principal, input(new Uint8Array([1]), override))).rejects.toMatchObject({ code: "invalid_request" });
+  });
+  it("caps measurement source staging at 16 MiB before upload begins", async () => {
+    const { manager } = await setup();
+    await expect(manager.begin(principal, input(new Uint8Array([1]), { format: "obj", mediaType: "model/obj", purpose: "measurement_source", byteLength: 16 * 1024 * 1024 + 1 })))
+      .rejects.toMatchObject({ code: "asset_too_large", status: 413 });
+  });
+  it("keeps native capture bundles separate from the visual Reality import purpose", async () => {
+    const { manager } = await setup();
+    const bytes = new TextEncoder().encode("test capture bytes");
+    await expect(manager.begin(principal, input(bytes, { format: "capture-bundle", mediaType: "application/vnd.semaframe.capture+zip" })))
+      .rejects.toMatchObject({ code: "invalid_request" });
+    await expect(manager.begin(principal, input(bytes, { purpose: "photo_measurement" })))
+      .rejects.toMatchObject({ code: "invalid_request" });
+    await expect(manager.begin(principal, input(bytes, { format: "capture-bundle", mediaType: "application/vnd.semaframe.capture+zip", purpose: "photo_measurement" })))
+      .resolves.toMatchObject({ purpose: "photo_measurement", format: "capture-bundle", status: "awaiting_upload" });
+  });
   it("streams an exact digest-bound asset through a one-time opaque browser handoff", async () => {
     const { manager, parent } = await setup();
     const bytes = new TextEncoder().encode("SPZ reality bytes\u0000with binary-safe content");

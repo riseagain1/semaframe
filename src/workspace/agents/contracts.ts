@@ -104,6 +104,7 @@ export const WORKSPACE_AGENT_TOOL_NAMES = [
   "inspect_workspace_asset",
   "inspect_workspace_model",
   "inspect_workspace_space",
+  "analyze_workspace_precision",
   "query_spatial_placement",
   "query_layout_placement",
   "inspect_workspace_physics",
@@ -147,6 +148,7 @@ export type BeginWorkspacePhotoReconstructionInput = Readonly<{
   request_id: string;
   workspace_id: string;
   profile: WorkspacePhotoReconstructionProfile;
+  retain_measurement_bundle?: boolean;
   photos: readonly WorkspacePhotoReconstructionPhotoInput[];
 }>;
 
@@ -388,6 +390,13 @@ export type WorkspaceEventPage = Readonly<{
  * safely from an untrusted batch alone.
  */
 export interface WorkspaceEnginePort {
+  /** Host-derived precision analysis; persisted caller-supplied pass flags are never accepted. */
+  analyzePrecision?(
+    componentId: string,
+    action: string,
+    options: unknown,
+    principal: WorkspaceAgentPrincipal,
+  ): JSONValue | Promise<JSONValue>;
   getState(): WorkspaceStateView | Promise<WorkspaceStateView>;
   inspectComponent(
     componentId: string,

@@ -1,4 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { prepareCaptureEvidence, prepareMeasurementSourceEvidence, parseCaptureCandidate, captureEvidenceRef } from "./captureEvidenceCompletion";
+import { defaultPrecisionEvidenceVault } from "../workspace/precision/evidenceVault";
+import { inspectCaptureBundle } from "../reconstruction/captureBundle";
+import { createCadWorkerKernel } from "../workspace/modeling/cadWorkerClient";
+import { parseCadPartDefinition, cadPartDefinitionDigest, parseCadEvaluationEvidence, type CadPartDefinitionV1 } from "../workspace/modeling/cad";
 import {
   AgentGatewayClient,
   AgentGatewayCommandError,
@@ -680,6 +685,7 @@ export default function App() {
     confirm(): void | Promise<void>;
   }> | undefined>(undefined);
   const workspaceAgentControllerRef = useRef<WorkspaceAgentController | null>(null);
+  const workspaceEngineAdapterRef = useRef<WorkspaceStoreEngineAdapter | null>(null);
   const workspaceAgentRouterRef = useRef<WorkspaceAgentCommandRouter | null>(null);
   const completeRealityAssetImportRef = useRef<((candidateHandle: string) => Promise<JSONObject>) | null>(null);
   const realityAssetCompletionLedgerRef = useRef(
@@ -786,6 +792,7 @@ export default function App() {
     PhotoReconstructionCapability | "checking"
   >("checking");
   const [photoReconstructionProfile, setPhotoReconstructionProfile] = useState<PhotoReconstructionProfile>("balanced");
+  const [retainMeasurementBundle, setRetainMeasurementBundle] = useState(false);
   const [photoReconstructionJob, setPhotoReconstructionJob] = useState<PhotoReconstructionJobView>();
   const [photoReconstructionStatus, setPhotoReconstructionStatus] = useState<string>();
   const [photoReconstructionBusy, setPhotoReconstructionBusy] = useState(false);
@@ -1383,6 +1390,7 @@ export default function App() {
   const installWorkspaceAgentController = useCallback((store: WorkspaceStore) => {
     workspaceAgentControllerRef.current?.revokeAll();
     const adapter = new WorkspaceStoreEngineAdapter(store);
+    workspaceEngineAdapterRef.current = adapter;
     const controller = new WorkspaceAgentController(adapter, {
       grantScopes: ({ requestedScopes }) => requestedScopes.filter((scope) => {
         if (scope === "effect:external_write" || scope === "extension:install") return false;
@@ -2129,6 +2137,87 @@ export default function App() {
     }
   }, [applyWorkspaceOperations, notice]);
 
+  const comparePrecisionCad = useCallback(async (studyId: string, targetComponentId: string): Promise<unknown> => {
+    const adapter = workspaceEngineAdapterRef.current;
+    if (!adapter) throw new Error("Workspace analysis is unavailable");
+    const result = await runExclusive(() => adapter.analyzePrecision(studyId, "compare_cad", { targetComponentId }, {
+      sessionId: "human-local-inspector", clientId: "human-local-inspector", scopes: ["workspace:read"],
+    }));
+    if (!result) throw new Error("Another Workspace operation is in progress");
+    return result;
+  }, [runExclusive]);
+
+  const createPrecisionCad = useCallback(async (input: CadPartDefinitionV1): Promise<void> => {
+    const result = await runExclusive(async () => {
+      const store = workspaceStoreRef.current;
+      if (!store) throw new Error("Workspace unavailable");
+      const generation = workspaceGenerationRef.current;
+      const definition = parseCadPartDefinition(input);
+      const kernel = await createCadWorkerKernel();
+      try {
+        const evaluated = await kernel.evaluatePart(definition, { linearDeflectionM: 0.0005, angularDeflectionRad: 0.15, budgetMs: 30_000 });
+        const evaluation = parseCadEvaluationEvidence(evaluated.evidence, definition);
+        if (store !== workspaceStoreRef.current || generation !== workspaceGenerationRef.current) throw new Error("Workspace changed during CAD evaluation");
+        const state = store.getState();
+        const hasStage = [...state.components.values()].some((component) => component.type.typeId === "stage-3d");
+        const ids = store.reserveComponentIds(hasStage ? 1 : 2);
+        const manifest = store.getComponentManifest("cad-part")!;
+        const operations: WorkspaceOperation[] = [];
+        if (!hasStage) {
+          const stage = store.getComponentManifest("stage-3d")!;
+          operations.push({ op: "create_component", op_id: uid("op_precision_stage"), id: ids[1]!,
+            component_type: { typeId: stage.typeId, version: stage.version, digest: stage.digest },
+            placement: defaultWorkspacePlacement(stage, state.components.size, state) });
+        }
+        operations.push({ op: "create_component", op_id: uid("op_precision_cad"), id: ids[0]!,
+          component_type: { typeId: manifest.typeId, version: manifest.version, digest: manifest.digest },
+          label: "Scan-derived CAD proposal — independent checks required",
+          // The fitted definition already carries its measured working frame.
+          // A cosmetic gallery offset would invalidate source/CAD comparison.
+          placement: { space: "world3d", position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+          props: { definition: definition as unknown as JSONObject, definitionDigest: cadPartDefinitionDigest(definition), evaluation: evaluation as unknown as JSONObject } });
+        applyWorkspaceOperations(operations, "Created editable scan-derived CAD proposal (not accuracy-certified)");
+        setSelectedComponentId(ids[0]!);
+        return true;
+      } finally { await kernel.dispose(); }
+    });
+    if (!result) throw new Error("Another Workspace operation is in progress");
+  }, [applyWorkspaceOperations, runExclusive]);
+
+  const completeCaptureEvidence = useCallback(async (value: unknown, visualSha256: string): Promise<JSONObject> => {
+    const candidate = parseCaptureCandidate(value);
+    const result = await runExclusive(async () => {
+      const client = agentGatewayRef.current;
+      const store = workspaceStoreRef.current;
+      if (!client || !store) throw new Error("The capture evidence importer is unavailable.");
+      const workspaceId = store.getState().workspaceId;
+      const generation = workspaceGenerationRef.current;
+      const ref = captureEvidenceRef(candidate);
+      const existing = [...store.getState().components.values()].find((component) =>
+        component.type.typeId === "precision-study" && Array.isArray(component.props.evidenceSources)
+        && component.props.evidenceSources.some((source) => source && typeof source === "object" && !Array.isArray(source) && source.digest === ref.digest));
+      // Reverify locally stored bytes even on acknowledgement retries.
+      if (existing) {
+        const blob = await defaultPrecisionEvidenceVault().open(ref);
+        await inspectCaptureBundle(blob, { expectedSha256: ref.digest, expectedVisualSha256: visualSha256 });
+      } else {
+        await prepareCaptureEvidence(client, candidate, workspaceId, visualSha256, defaultPrecisionEvidenceVault());
+      }
+      if (workspaceStoreRef.current !== store || workspaceGenerationRef.current !== generation) throw new Error("The project changed during capture verification.");
+      const id = existing?.id ?? createWorkspaceComponent("precision-study", {
+        label: "Retained measurement evidence — units and orientation unverified",
+        props: { document: null, evidenceSources: [ref as unknown as JSONObject] },
+      });
+      if (!id) throw new Error("Could not commit the retained measurement evidence.");
+      // Ack only after bytes and the undoable reference have been committed.
+      let cleanupPending = false;
+      await client.completeAssetCandidate(candidate.candidateHandle, workspaceId).catch(() => { cleanupPending = true; });
+      return { component_id: id, source_digest: ref.digest, status: "unverified", cleanup_pending: cleanupPending, requires: ["explicit working orientation", "metric calibration", "independent observations"] } as JSONObject;
+    });
+    if (!result) throw new Error("Capture evidence import was not completed.");
+    return result;
+  }, [createWorkspaceComponent, runExclusive]);
+
   const putRealityAssetBytes = useCallback(async (
     candidate: RealityAssetCandidate,
     blob: Blob,
@@ -2231,6 +2320,21 @@ export default function App() {
       let retainCandidateOnFailure = source === "photo-reconstruction";
       try {
         const inspected = await client.inspectAssetCandidate(candidateHandle, workspaceId);
+        if (inspected.purpose === "measurement_source" && source === "agent") {
+          const ref = await prepareMeasurementSourceEvidence(client, inspected, workspaceId, defaultPrecisionEvidenceVault());
+          if (workspaceStoreRef.current !== store || workspaceGenerationRef.current !== workspaceGeneration) throw new Error("The project changed during measurement source import.");
+          const existing = [...store.getState().components.values()].find((component) => component.type.typeId === "precision-study"
+            && Array.isArray(component.props.evidenceSources) && component.props.evidenceSources.some((item) => item && typeof item === "object" && !Array.isArray(item) && item.digest === ref.digest));
+          const id = existing?.id ?? createWorkspaceComponent("precision-study", {
+            label: `${inspected.displayName} — measurement evidence (unverified)`,
+            props: { document: null, evidenceSources: [ref as unknown as JSONObject] },
+          });
+          if (!id) throw new Error("Could not commit measurement evidence.");
+          let cleanupPending = false;
+          await client.completeAssetCandidate(candidateHandle, workspaceId).catch(() => { cleanupPending = true; });
+          return { component_id: id, source_digest: ref.digest, format: inspected.format, status: "unverified", cleanup_pending: cleanupPending,
+            next_action: "analyze_workspace_precision prepare_source; explicitly declare units/working basis, then commit the returned document in a normal batch" } as JSONObject;
+        }
         assertRealityAssetCandidatePurpose(inspected.purpose, source);
         const opened = await client.openAssetCandidate(candidateHandle, workspaceId);
         if (opened.descriptor.purpose !== inspected.purpose) {
@@ -2380,7 +2484,7 @@ export default function App() {
     });
     if (!completed) throw new Error("Another Workspace operation is still in progress.");
     return completed;
-  }, [announceRealityAssetCompletion, applyWorkspaceSystemOperations, putRealityAssetBytes, runExclusive]);
+  }, [announceRealityAssetCompletion, applyWorkspaceSystemOperations, createWorkspaceComponent, putRealityAssetBytes, runExclusive]);
   completeRealityAssetImportRef.current = completeRealityAssetImport;
 
   const placeReconstructedRealityLayer = useCallback(async (
@@ -2670,6 +2774,7 @@ export default function App() {
         requestId: uid("photo_reconstruction"),
         workspaceId,
         profile: photoReconstructionProfile,
+        retainMeasurementBundle,
         photos,
       }, controller.signal);
       activeJobId = begun.job.jobId;
@@ -2734,6 +2839,7 @@ export default function App() {
       if (!descriptor || descriptor.digest !== digest) {
         throw new Error("The reconstructed Reality asset was not registered after browser preflight.");
       }
+      if (candidate.measurementBundle) await completeCaptureEvidence(candidate.measurementBundle, digest);
       const ordinal = [...store.getState().components.values()]
         .filter((component) => component.type.typeId === "gaussian-splat").length + 1;
       await placeReconstructedRealityLayer(
@@ -2781,10 +2887,12 @@ export default function App() {
     }
   }, [
     completeRealityAssetImport,
+    completeCaptureEvidence,
     confirmTrackedPhotoReconstructionCancellation,
     notice,
     photoReconstructionCapability,
     photoReconstructionProfile,
+    retainMeasurementBundle,
     placeReconstructedRealityLayer,
   ]);
 
@@ -4570,12 +4678,17 @@ export default function App() {
         throw new AgentGatewayCommandError("invalid_request", "The reconstructed asset handoff is invalid.");
       }
       const body = input as Record<string, unknown>;
-      if (Object.keys(body).some((key) => !["candidate_handle", "workspace_id"].includes(key)) ||
+      if (Object.keys(body).some((key) => !["candidate_handle", "workspace_id", "measurement_bundle"].includes(key)) ||
           typeof body.candidate_handle !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(body.candidate_handle) ||
           typeof body.workspace_id !== "string" || body.workspace_id !== workspaceStoreRef.current?.getState().workspaceId) {
         throw new AgentGatewayCommandError("invalid_request", "The reconstructed asset does not match the open Workspace.");
       }
       const result = await completeRealityAssetImport(body.candidate_handle, "photo-reconstruction");
+      if (body.measurement_bundle !== undefined) {
+        const assetRef = result.asset_ref as JSONObject;
+        if (typeof assetRef?.digest !== "string") throw new Error("Missing verified reconstruction digest.");
+        result.measurement_evidence = await completeCaptureEvidence(body.measurement_bundle, assetRef.digest);
+      }
       assertCurrentCommand();
       return {
         ok: true,
@@ -4636,7 +4749,7 @@ export default function App() {
       }
     }
     return result;
-  }, [agentHostControl, completeRealityAssetImport, setEntries]);
+  }, [agentHostControl, completeRealityAssetImport, completeCaptureEvidence, setEntries]);
   const liveAgentCommandHandlerRef = useRef<AgentGatewayCommandHandler>(handleAgentCommand);
   liveAgentCommandHandlerRef.current = handleAgentCommand;
   const stableAgentCommandHandler = useCallback<AgentGatewayCommandHandler>(
@@ -5539,7 +5652,7 @@ export default function App() {
           }}
         />
         <WorkspaceChrome
-          key={`workspace-chrome-${workspaceRenderGeneration}`}
+          key={`workspace-chrome-${workspaceRenderGeneration}-${workspaceGenerationRef.current}`}
           catalog={workspaceCatalog}
           selected={selectedWorkspaceComponent}
           selectedPhysicsReport={selectedWorkspacePhysicsReport}
@@ -5588,6 +5701,11 @@ export default function App() {
             : "Private persistent storage is unavailable; imported bytes last for this App session only.")}
           realityReconstructionCapability={photoReconstructionCapability}
           realityReconstructionProfile={photoReconstructionProfile}
+          retainMeasurementBundle={retainMeasurementBundle}
+          onCreatePrecisionCad={createPrecisionCad}
+          onComparePrecisionCad={comparePrecisionCad}
+          workspaceRevision={workspace?.revision}
+          onRetainMeasurementBundle={setRetainMeasurementBundle}
           realityReconstructionJob={photoReconstructionJob}
           realityReconstructionBusy={photoReconstructionBusy}
           realityReconstructionStatus={photoReconstructionStatus}

@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 
 const PROJECT_ROOT = process.cwd();
 const EXPECTED_TOOLS = [
+  "analyze_workspace_precision",
   "begin_workspace_asset_import",
   "begin_workspace_photo_reconstruction",
   "begin_workspace_update",

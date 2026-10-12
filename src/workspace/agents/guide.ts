@@ -345,6 +345,7 @@ export const WORKSPACE_PHOTO_RECONSTRUCTION_QUICKSTART: JSONValue = Object.freez
   workflow: [
     "Request the non-default asset:reconstruct scope explicitly. It is never included in DEFAULT_WORKSPACE_AGENT_SCOPES.",
     "Compute each photo's exact byte_length and sha256, assign a stable unique photo_id, and call begin_workspace_photo_reconstruction with the current exact workspace_id.",
+    "Only when native measurement evidence is wanted, explicitly set retain_measurement_bundle:true at begin. This preserves bounded native OBJ/material/texture outputs in a separate digest-bound capture bundle; it does not retain the original source photos. Omission keeps the existing visual-only workflow.",
     "Read each short-lived upload URL and bearer only from begin_workspace_photo_reconstruction structuredContent, PUT the matching original photo once, then discard the grant. Never echo bytes, base64, local paths, upload URLs, or bearer tokens into another MCP input, transcript, log, Workspace batch, project, or history record.",
     "After every declared photo is byte-verified, call start_workspace_photo_reconstruction with the returned job_id. Starting early fails closed.",
     "Call inspect_workspace_photo_reconstruction until status is ready, failed, or cancelled. Treat progress as bounded status, not proof of output quality.",
@@ -354,9 +355,60 @@ export const WORKSPACE_PHOTO_RECONSTRUCTION_QUICKSTART: JSONValue = Object.freez
   authority: {
     result: "The reconstructed Gaussian is engineeringAuthority visual_only with source scale and coordinates unknown until separately calibrated.",
     proxies: "Create editable spatial or CAD proxies for collision, physics, feasibility, and semantic reasoning. Reconstruction never fabricates engineering authority.",
-    persistence: "Temporary photos, upload grants, reconstruction jobs, local paths, logs, and backend credentials are not project state. Only a finalized content-addressed Reality Asset descriptor and component references persist.",
+    persistence: "Temporary photos, upload grants, reconstruction jobs, local paths, logs, and backend credentials are not project state. Opt-in native capture bytes use a separate verified content-addressed evidence vault and portable-project closure. Neither those bytes nor normalized measurement geometry are automatically calibrated or certified.",
     availability: "A configured host reconstruction backend is required. Missing or unsupported backends fail explicitly; no placeholder model is fabricated.",
   },
+}));
+
+export const WORKSPACE_PRECISION_QUICKSTART: JSONValue = Object.freeze(jsonContract({
+  component_type: "precision-study@1.0.0",
+  required_read_scope: "workspace:read",
+  analysis_tool: "analyze_workspace_precision",
+  actions: ["inspect", "prepare_source", "fit_plane", "fit_circle", "fit_cylinder", "propose_shaft", "propose_plate", "compare_cad"],
+  source_upload: {
+    begin_tool: "begin_workspace_asset_import",
+    required_fields: { purpose: "measurement_source", format: "obj | ply | xyz-csv", media_type: "model/obj | model/ply | text/csv",
+      byte_length: "exact source byte count", sha256: "sha256:<64 lowercase hex>", display_name: "safe basename", request_id: "idempotent unique request", workspace_id: "current workspace ID" },
+    upload: "Stream exact bytes to the returned upload URL with its scoped upload token; never put source bytes or local paths into MCP arguments.",
+    complete: "complete_workspace_asset_import with candidate_handle creates a precision-study holding approved evidenceSources and a null document.",
+    prepare: { action: "prepare_source", options: { sourceDigest: "sha256:<registered evidence digest>", format: "obj",
+      units: "unknown", coordinateBasis: "RUB", provenance: "Describe supplied file and who declares its working axes" } },
+    normalization: "Apply the returned document unchanged via a normal prepared update. Retained source geometry is re-parsed and exact-matched before reports; edits to raw positions/topology cannot retain a false source correspondence.",
+  },
+  document_examples: {
+    notice: "Templates only, not measurements. Replace each value with actual independently obtained observations and provenance. Do not submit example values as physical evidence.",
+    source_units: ["unknown", "metre", "millimetre", "centimetre", "inch"],
+    coordinate_basis: "RUB means chosen right/up/back working axes, not a measured world/geodetic frame. Unknown capture scale remains unknown until measured similarity registration.",
+    point_control: { id: "control_1", vertexIndex: 0, referencePointM: [0, 0, 0], uncertaintyM: null,
+      provenance: "Measured registration control source/instrument and observation identity", regionId: "region_1" },
+    independent_point_check: { id: "heldout_1", vertexIndex: 3, referencePointM: [1, 0, 0], uncertaintyM: null,
+      provenance: "Independent held-out observation never used for fitting/tuning", regionId: "region_1" },
+    independent_dimension: { id: "dimension_1", aIndex: 4, bIndex: 5, referenceDistanceM: 0.1, uncertaintyM: null,
+      provenance: "Independent measured distance and instrument provenance", regionId: "region_1" },
+    calibration: { mode: "declared-units | rigid | similarity" },
+    policy: { intendedUse: "State the specific intended use", toleranceM: 0.001, minimumIndependentChecks: 3,
+      requiredRegions: ["region_1"], uncertaintyBasis: "Describe conservative independently supplied observation bounds",
+      registrationUncertaintyM: null, surfaceUncertaintyM: null, surfaceUncertaintyBasis: "Provide a justified conservative full scan-surface bound only if actually known" },
+    uncertainty: "All reference coordinates, distances, tolerances and uncertainties use metres. null means unknown, never zero. Registered reports require supplied registrationUncertaintyM; compare_cad additionally needs justified surfaceUncertaintyM plus nonempty surfaceUncertaintyBasis. Fit RMS cannot fill these fields.",
+    placement: "Put point_control objects in controls, independent_point_check objects in checks, and independent_dimension objects in dimensions. Keep control/check vertex indices and IDs disjoint. A check used to tune the model is no longer independent.",
+  },
+  workflow: [
+    "Import actual bounded OBJ, mesh/point PLY, or XYZ CSV measurement geometry, or explicitly retain the native photo-reconstruction bundle. The Gaussian visual layer is not a measurement mesh.",
+    "For an already-approved evidenceSources reference, prepare_source reads only that exact registered digest from the verified vault. Pass sourceDigest, format, coordinateBasis:'RUB', provenance and optional units (default unknown). Apply its returned document through a normal prepared update; prepare_source never mutates a component or reads arbitrary paths/URLs.",
+    "Keep unknown source units unknown. Choose a working coordinate convention explicitly; no source axes, georeferencing, or real-world accuracy is inferred from appearance. Apply measured rigid/similarity registration when needed.",
+    "Store the schema-valid measurement document in precision-study props.document through an ordinary prepared Workspace batch. Keep fit controls and independent held-out check points/dimensions disjoint; provide provenance, uncertainty bounds, intended use, tolerance, and required regions.",
+    "Call analyze_workspace_precision action inspect for a fresh revision-bound report. pass_for_scope covers only declared independent observations and regions, never an entire asset, linked CAD, structure, or manufacturing process.",
+    "Metric fits require solved calibration. Fit RMS and inliers are fit diagnostics, not independent accuracy. propose_plate additionally requires independently justified thicknessM and thicknessProvenance; hidden geometry is not invented.",
+    "propose_shaft/propose_plate only return editable CAD definitions. Apply them through begin_workspace_update/submit_workspace_batch and ordinary CAD evaluation; no analysis call mutates the scene.",
+    "Use compare_cad with options.targetComponentId to compare the current host-evaluated CAD geometry, not a cached caller pass flag. The target and all parents must have identity placement in the shared working frame. A changed target or measurement document invalidates the comparison digest.",
+  ],
+  limits: { maximum_vertices: 25000, maximum_triangles: 50000, maximum_observations: 256, preview_indices: 32 },
+  boundaries: [
+    "Oversized native captures remain downloadable as source bundles; normalized precision import fails explicitly instead of silently downsampling.",
+    "Unknown uncertainty, unsupported comparisons, insufficient coverage, or missing calibration cannot produce an acceptance claim.",
+    "Reference truth and uncertainty are supplied evidence, not independently authenticated instruments. A check used for tuning is no longer held out and must be replaced.",
+    "CAD comparison is a bounded sampled/tessellated diagnostic with uncertainty, not universal metrology, internal-geometry proof, FEA, or manufacturing certification.",
+  ],
 }));
 
 export const WORKSPACE_AGENT_GUIDE_TEXT = `
@@ -542,6 +594,23 @@ Component and placement rules
   and note that the human-readable text result is redacted. A configured reconstruction backend
   is required; unavailable or failed reconstruction returns an explicit error
   and never fabricates a fallback model.
+- Native photo-reconstruction outputs are retained only with explicit
+  retain_measurement_bundle:true at begin. The separate content-addressed
+  capture bundle preserves bounded OBJ/material/texture bytes, never original
+  source photos. Source units and axes remain unknown until explicitly handled;
+  a retained mesh is unverified measurement input, not a calibrated CAD solid.
+- precision-study@1.0.0 stores editable measurement geometry and its declared
+  fit controls, independent held-out checks, tolerance, regions, and uncertainty.
+  analyze_workspace_precision is read-only and returns current revision-bound
+  evidence. Its inspect report never certifies a linked CAD part. Fits use the
+  calibrated working frame, reject unknown scale, expose bounded inlier previews,
+  and distinguish fit residuals from independent accuracy. CAD proposals require
+  a normal prepared edit batch, and must be compared/validated after evaluation.
+  compare_cad evaluates the actual current cad-part definition and rejects
+  non-identity target/parent placement instead of silently ignoring transforms.
+  Neither fitting nor source-only acceptance proves a complete manufactured
+  model. Reference evidence, coverage and conservative uncertainty must match
+  the intended use; unsupported budgets and unknowns fail closed.
 - A Gaussian splat is always engineeringAuthority visual_only. It contributes
   calibrated visual bounds to SSG 3.2 but never a collider, rigid body, support
   surface, CAD solid, or feasibility result. Choose uncalibrated,
@@ -845,6 +914,7 @@ export const WORKSPACE_AGENT_GUIDE = Object.freeze({
   modeling_quickstart: WORKSPACE_MODELING_QUICKSTART,
   reality_asset_quickstart: WORKSPACE_REALITY_ASSET_QUICKSTART,
   photo_reconstruction_quickstart: WORKSPACE_PHOTO_RECONSTRUCTION_QUICKSTART,
+  precision_quickstart: WORKSPACE_PRECISION_QUICKSTART,
   create_component_schema: WORKSPACE_CREATE_COMPONENT_SCHEMA,
   workspace_command_schema: workspaceCommandSchema as unknown as JSONValue,
 }) satisfies JSONValue;

@@ -20,10 +20,14 @@ import {
   throwIfPortableProjectAborted,
 } from "./errors";
 import { samePortableRealityDescriptor } from "./manifest";
+import { defaultPrecisionEvidenceVault, verifyPrecisionEvidence, type PrecisionEvidenceVault, type PrecisionEvidenceRef } from "../../precision/evidenceVault";
+import { precisionEvidencePath } from "./precisionClosure";
+import { portableArchiveEntryBlob, verifyPortableArchiveEntryCrc } from "./archive";
 
 export type PortableProjectCommit = (project: WorkspaceProjectFile) => void | Promise<void>;
 
 export type ImportPortableProjectOptions = Readonly<{
+  evidenceVault?: PrecisionEvidenceVault;
   vault: AssetVault;
   serializer?: WorkspaceProjectSerializer;
   signal?: AbortSignal;
@@ -134,7 +138,24 @@ export async function importPortableProjectBundle(
   // No target mutation occurs until the complete project and every object have
   // passed path, CRC, SHA-256, format and replay validation.
   const inserted: string[] = [];
+  const stagedEvidence: { ref: PrecisionEvidenceRef; blob: Blob }[] = [];
+  for (const ref of bundle.manifest.precisionEvidence ?? []) {
+    throwIfPortableProjectAborted(options.signal);
+    const entry = bundle.layout.entries.find((item) => item.path === precisionEvidencePath(ref));
+    if (!entry || entry.byteLength !== ref.byteLength) throw new PortableProjectError("closure_mismatch", "Missing precision evidence bytes");
+    await verifyPortableArchiveEntryCrc(archive, entry, options.signal);
+    const blob = portableArchiveEntryBlob(archive, entry, ref.mediaType);
+    await verifyPrecisionEvidence(ref, blob);
+    stagedEvidence.push({ ref, blob });
+  }
+  const insertedEvidence: string[] = [];
+  const evidenceVault = stagedEvidence.length ? options.evidenceVault ?? defaultPrecisionEvidenceVault() : undefined;
   try {
+    for (const item of stagedEvidence) {
+      throwIfPortableProjectAborted(options.signal);
+      const result = await evidenceVault!.put(item.ref, item.blob);
+      if (result.inserted) insertedEvidence.push(item.ref.digest);
+    }
     for (const asset of staged) {
       throwIfPortableProjectAborted(options.signal);
       const result = await options.vault.put(asset.candidate, asset.blob, { signal: options.signal });
@@ -144,7 +165,12 @@ export async function importPortableProjectBundle(
     await options.commitProject?.(bundle.project);
   } catch (error) {
     try {
-      await rollbackInserted(options.vault, inserted);
+      const failures: unknown[] = [];
+      for (const digest of insertedEvidence.reverse()) {
+        try { await evidenceVault!.delete(digest); } catch (failure) { failures.push(failure); }
+      }
+      try { await rollbackInserted(options.vault, inserted); } catch (failure) { failures.push(failure); }
+      if (failures.length) throw failures[0];
     } catch (rollbackError) {
       if (rollbackError instanceof PortableProjectError) throw rollbackError;
       throw new PortableProjectError("rollback_failed", "Portable import rollback failed", { cause: rollbackError });

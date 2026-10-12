@@ -94,8 +94,15 @@ jobs:
           exit 1
       - name: Run mounted Workspace browser smoke
         run: npm run smoke:workspace
-      - name: Run Agent protocol browser smoke
-        run: npm run smoke:agent
+      - name: Run Agent and precision protocol browser smoke
+        run: npm run smoke:precision
+      - name: Preserve synthetic browser verification screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-screenshots
+          path: artifacts/*browser-smoke-*.png
+          if-no-files-found: ignore
 
   xr-windows-smoke:
     name: Windows XR smoke

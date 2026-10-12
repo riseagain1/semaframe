@@ -11,6 +11,7 @@ import { DeclarativeRecipeView } from "./DeclarativeRecipeView";
 import { VideoPlayerView } from "./VideoPlayerView";
 import { WebPanelView } from "./WebPanelView";
 import { DataPanelView } from "./DataPanelView";
+import { PrecisionStudyView } from "./WorkspacePrecisionStudy";
 
 export type WorkspaceComponentViewProps = Readonly<{
   component: WorkspaceRenderComponent;
@@ -37,6 +38,7 @@ export function WorkspaceComponentView({ component, recipe, now, onAction }: Wor
     case "video-player": return <VideoPlayerView component={component} />;
     case "web-panel": return <WebPanelView component={component} />;
     case "data-panel": return <DataPanelView component={component} />;
+    case "precision-study": return <PrecisionStudyView document={component.props.document} evidenceSources={component.props.evidenceSources} />;
     case "annotation": return <AnnotationView component={component} />;
     case "button": return <ButtonView component={component} onAction={action} />;
     case "timer": return <TimerView component={component} now={now} onAction={action} />;

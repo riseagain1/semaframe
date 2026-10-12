@@ -760,7 +760,7 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("/workspace/models/inspect");
     expect(serialized).toContain("query_layout_placement");
     expect(serialized).toContain("/workspace/layout/query");
-    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(26);
+    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(27);
     expect(payload.paths).toEqual(expect.objectContaining({
       "/assets/imports/begin": expect.any(Object),
       "/assets/imports/cancel": expect.any(Object),

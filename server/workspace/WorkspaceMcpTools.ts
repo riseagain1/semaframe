@@ -96,6 +96,7 @@ const requiredActionSchema = z.enum([
   "inspect_workspace_asset",
   "inspect_workspace_model",
   "inspect_workspace_space",
+  "analyze_workspace_precision",
   "query_spatial_placement",
   "query_layout_placement",
   "inspect_workspace_physics",
@@ -333,6 +334,7 @@ export const beginWorkspacePhotoReconstructionInputSchema = z.strictObject({
   request_id: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._~-]*$/u),
   workspace_id: reconstructionWorkspaceIdSchema,
   profile: z.enum(["preview", "balanced", "quality"]),
+  retain_measurement_bundle: z.boolean().optional().describe("Explicitly retain the native mesh/texture and provenance as a verified capture bundle; original photos are still temporary."),
   photos: z.array(workspacePhotoReconstructionPhotoInputSchema)
     .min(PHOTO_RECONSTRUCTION_LIMITS.minimumPhotoCount)
     .max(PHOTO_RECONSTRUCTION_LIMITS.maximumPhotoCount),
@@ -589,6 +591,24 @@ export function registerWorkspaceTools(
       "inspect_workspace_space",
       await backend.dispatch("inspect_workspace_space", input, clientContext({}, context, protocolEra)),
     ),
+  );
+
+  server.registerTool(
+    "analyze_workspace_precision",
+    {
+      title: "Analyze measurement precision",
+      description: "Compute an independent, scope-limited accuracy report or a geometric fit/CAD proposal from a precision-study component. Read-only; never changes geometry or certifies physical safety. Reports disclose unknown uncertainty, coverage and check/control reuse. Commit proposals through normal revisioned batches.",
+      inputSchema: z.strictObject({
+        ...sessionFields,
+        component_id: z.string().min(1).max(256),
+        action: z.enum(["inspect", "prepare_source", "fit_plane", "fit_circle", "fit_cylinder", "propose_shaft", "propose_plate", "compare_cad"]).optional(),
+        options: z.record(z.string(), z.unknown()).optional(),
+      }),
+      outputSchema: workspaceMcpResultSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (input, context) => toolResult("analyze_workspace_precision",
+      await backend.dispatch("analyze_workspace_precision", input, clientContext({}, context, protocolEra))),
   );
 
   const spatialVectorSchema = z.strictObject({
@@ -866,14 +886,15 @@ export function registerWorkspaceTools(
   server.registerTool(
     "begin_workspace_asset_import",
     {
-      title: "Begin a Reality Asset import",
-      description: "After explicit asset:import approval, mint a one-time streaming PUT grant for a user-provided PLY, SPZ, or SOG file. Bytes never enter MCP JSON. Compute the exact SHA-256 and byte length before calling this tool.",
+      title: "Begin an asset or measurement-source import",
+      description: "After explicit asset:import approval, mint a one-time streaming PUT grant. Visual imports support PLY/SPZ/SOG. For ordinary measurement OBJ/PLY/XYZ CSV set purpose=measurement_source (16 MiB cap). Bytes never enter MCP JSON. Compute exact SHA-256 and byte length first.",
       inputSchema: z.strictObject({
         ...sessionFields,
         request_id: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._~-]*$/u),
         workspace_id: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/u),
         display_name: z.string().min(1).max(255),
-        format: z.enum(["ply", "spz", "sog"]),
+        format: z.enum(["ply", "spz", "sog", "obj", "xyz-csv"]),
+        purpose: z.enum(["generic_import", "measurement_source"]).optional(),
         media_type: z.string().min(3).max(192),
         byte_length: z.number().int().positive().max(256 * 1024 * 1024),
         sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
@@ -913,7 +934,7 @@ export function registerWorkspaceTools(
     "complete_workspace_asset_import",
     {
       title: "Validate and register an uploaded Reality Asset",
-      description: "Asks the authoritative SemaFrame browser to stream, independently preflight, content-hash, store, and register a ready candidate. Returns a digest-pinned asset reference; create a gaussian-splat component in a normal prepared Workspace batch afterward.",
+      description: "Asks the browser to stream, content-hash and store a ready candidate. Visual assets return asset_ref for a gaussian-splat. Measurement sources return a precision-study component_id with retained bytes and unknown scale; use analyze_workspace_precision prepare_source with explicit working coordinates, then commit the prepared document through a normal batch.",
       inputSchema: z.strictObject({
         ...sessionFields,
         candidate_handle: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/u),

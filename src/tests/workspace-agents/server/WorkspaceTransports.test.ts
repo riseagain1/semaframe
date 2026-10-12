@@ -48,6 +48,7 @@ class RecordingMcpServer {
 }
 
 const EXPECTED_WORKSPACE_TOOLS = [
+  "analyze_workspace_precision",
   "begin_workspace_asset_import",
   "begin_workspace_photo_reconstruction",
   "begin_workspace_update",
@@ -76,7 +77,7 @@ const EXPECTED_WORKSPACE_TOOLS = [
 ];
 
 describe("composable Workspace MCP tools", () => {
-  it("registers all twenty-five Workspace tools and its guide", async () => {
+  it("registers all twenty-six Workspace tools and its guide", async () => {
     const recorder = new RecordingMcpServer();
     const dispatch = vi.fn(async (name: WorkspaceAgentToolName, input: unknown) => ({
       responseOk: true,

@@ -4,8 +4,8 @@ SemaFrame has two project artifacts with different purposes:
 
 | Artifact | Contents | Use it when |
 | --- | --- | --- |
-| `.semaframe.json` | Workspace metadata, descriptors, checkpoint, and resolved history; no Reality bytes | The destination already has the same content-addressed Reality objects, or relinking is acceptable |
-| `.semaframe-project` | The validated direct project plus the complete required Reality byte closure | Moving or archiving a project across browser profiles or machines without separate Reality relinking |
+| `.semaframe.json` | Workspace metadata, admitted measurement coordinates, descriptors, checkpoint, and resolved history; no original Reality or measurement source bytes | The destination already has the source objects, or relinking is acceptable |
+| `.semaframe-project` | The validated direct project plus required Reality and precision source-byte closures | Moving or archiving a project across browser profiles or machines without separate source relinking |
 
 The portable media type is `application/vnd.semaframe.project+zip`. Version `1.0` is a deterministic, uncompressed ZIP/ZIP64 container with this canonical layout:
 
@@ -14,6 +14,24 @@ manifest.json
 project/workspace.semaframe.json
 objects/sha256/ab/abcdef...   # one path per Reality digest
 ```
+
+The unreleased precision workflow uses manifest version `1.1` only when retained
+measurement evidence exists. It appends digest-sorted `evidence/sha256/<64 hex>`
+entries after the Reality objects. These are exact raw measurement sources or
+native capture bundles from a separate evidence vault. Projects without such
+evidence still export as `1.0`; the new reader supports both versions. Older
+readers may explicitly reject `1.1` rather than silently discard its evidence.
+Evidence needed by current studies, the checkpoint, and retained create/update
+history (including deleted studies that can be undone) is included. Each source
+is size/SHA-256 verified on export and CRC/SHA-256 verified before import commit;
+cached objects cannot conceal a damaged archive. At most 128 evidence objects
+of up to 256 MiB each can be retained, within the same 512 MiB default in-memory
+materialization limit. Missing or changed bytes fail explicitly.
+
+Persisted measurement documents are inputs, not saved acceptance certificates.
+Reports are recomputed, and report/export actions reauthenticate declared source
+attachments. File integrity does not establish physical accuracy or instrument
+calibration; see [Precision acceptance](../precision-acceptance.md).
 
 `manifest.json` is canonical JSON and must be the first entry. The direct Workspace project must be second. Asset entries are sorted by digest and use their content-addressed path. There are no archive comments, encrypted entries, compression, symlinks, extra files, duplicate or case-colliding names, absolute paths, traversal segments, drive letters, or hidden bytes between entries.
 

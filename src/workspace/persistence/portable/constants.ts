@@ -17,7 +17,7 @@ export const PORTABLE_PROJECT_LIMITS = Object.freeze({
   maximumProjectBytes: MAX_WORKSPACE_PROJECT_BYTES,
   maximumAssets: MAX_WORKSPACE_REALITY_ASSETS,
   maximumAssetBytes: REALITY_ASSET_LIMITS.maximumAssetBytes,
-  maximumEntries: MAX_WORKSPACE_REALITY_ASSETS + 2,
+  maximumEntries: MAX_WORKSPACE_REALITY_ASSETS + 128 + 2,
   maximumPathBytes: 256,
   maximumCentralDirectoryBytes: 1024 * 1024,
   ioChunkBytes: REALITY_ASSET_LIMITS.digestChunkBytes,
@@ -27,7 +27,7 @@ export const PORTABLE_PROJECT_LIMITS = Object.freeze({
    * quota check before committing bytes in their host integration.
    */
   maximumBundleBytes:
-    MAX_WORKSPACE_REALITY_ASSETS * REALITY_ASSET_LIMITS.maximumAssetBytes
+    (MAX_WORKSPACE_REALITY_ASSETS + 128) * REALITY_ASSET_LIMITS.maximumAssetBytes
     + MAX_WORKSPACE_PROJECT_BYTES
     + 2 * 1024 * 1024,
   defaultMaximumMaterializedBytes: 512 * 1024 * 1024,

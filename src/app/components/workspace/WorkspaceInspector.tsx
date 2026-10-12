@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { PrecisionStudyInspector } from "./WorkspacePrecisionStudy";
 import {
   BUILTIN_PARAMETRIC_PRIMITIVE_DEFAULTS,
   DEFAULT_COMPONENT_VISUAL_EFFECTS,
@@ -120,6 +121,9 @@ export type WorkspaceInspectorFocusRequest = Readonly<{
 }>;
 
 export type WorkspaceInspectorProps = Readonly<{
+  workspaceRevision?: number;
+  onCreatePrecisionCad?: (definition: CadPartDefinitionV1) => Promise<void>;
+  onComparePrecisionCad?: (studyId: string, targetComponentId: string) => Promise<unknown>;
   component?: WorkspaceRenderComponent;
   onAction?: (request: ComponentActionRequest) => void;
   onUpdate?: (request: WorkspaceComponentUpdateRequest) => boolean | void;
@@ -173,7 +177,10 @@ function InspectorSectionAnchor({
 }
 
 export function WorkspaceInspector({
+  workspaceRevision,
   component,
+  onCreatePrecisionCad,
+  onComparePrecisionCad,
   onAction,
   onUpdate,
   resizePolicy,
@@ -302,6 +309,19 @@ export function WorkspaceInspector({
           advanced={inspectorMode === "advanced"}
         /></InspectorSectionAnchor>
       )}
+      {component.type.typeId === "precision-study" && <PrecisionStudyInspector
+        key={component.id}
+        workspaceRevision={workspaceRevision}
+        document={component.props.document}
+        evidenceSources={component.props.evidenceSources}
+        disabled={component.locks.props || !onUpdate}
+        onUpdate={(document, evidenceSources) => onUpdate?.({ componentId: component.id, props: {
+          document: document as JSONObject | null,
+          ...(evidenceSources === undefined ? {} : { evidenceSources: evidenceSources as JSONObject[] }),
+        } })}
+        onCreateCad={onCreatePrecisionCad}
+        onCompareCad={onComparePrecisionCad ? (targetId) => onComparePrecisionCad(component.id, targetId) : undefined}
+      />}
       {component.type.typeId === "model-assembly" && (
         <InspectorSectionAnchor sectionId="assembly"><ModelAssemblyInspectorEditor component={component} onUpdate={onUpdate} advanced={inspectorMode === "advanced"} /></InspectorSectionAnchor>
       )}

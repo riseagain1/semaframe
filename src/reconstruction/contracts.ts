@@ -98,6 +98,8 @@ export type BeginPhotoReconstructionInput = Readonly<{
   requestId: string;
   workspaceId: string;
   profile: PhotoReconstructionProfile;
+  /** Explicitly retain native measurement inputs; original source photos remain excluded. */
+  retainMeasurementBundle?: boolean;
   photos: readonly PhotoReconstructionInput[];
 }>;
 
@@ -121,6 +123,15 @@ export type PhotoReconstructionResultCandidate = Readonly<{
   candidateHandle: string;
   format: "ply" | "spz" | "sog";
   mediaType: string;
+  byteLength: number;
+  sha256: `sha256:${string}`;
+  measurementBundle?: PhotoReconstructionMeasurementBundleCandidate;
+}>;
+
+export type PhotoReconstructionMeasurementBundleCandidate = Readonly<{
+  candidateHandle: string;
+  format: "capture-bundle";
+  mediaType: "application/vnd.semaframe.capture+zip";
   byteLength: number;
   sha256: `sha256:${string}`;
 }>;
@@ -198,7 +209,7 @@ export function validateBeginPhotoReconstructionInput(
 ): readonly PhotoReconstructionValidationIssue[] {
   const issues: PhotoReconstructionValidationIssue[] = [];
   if (!isRecord(value)) return [issue("$", "invalid_type", "Photo reconstruction input must be an object")];
-  const allowed = new Set(["requestId", "workspaceId", "profile", "photos"]);
+  const allowed = new Set(["requestId", "workspaceId", "profile", "photos", "retainMeasurementBundle"]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) issues.push(issue(`$.${key}`, "invalid_value", `$.${key} is not allowed`));
   }
@@ -210,6 +221,9 @@ export function validateBeginPhotoReconstructionInput(
   }
   if (typeof value.profile !== "string" || !PROFILES.has(value.profile)) {
     issues.push(issue("$.profile", "invalid_value", "profile must be preview, balanced, or quality"));
+  }
+  if (value.retainMeasurementBundle !== undefined && typeof value.retainMeasurementBundle !== "boolean") {
+    issues.push(issue("$.retainMeasurementBundle", "invalid_type", "retainMeasurementBundle must be an explicit boolean"));
   }
   if (!Array.isArray(value.photos)) {
     issues.push(issue("$.photos", "invalid_type", "photos must be an array"));
@@ -274,6 +288,7 @@ export function parseBeginPhotoReconstructionInput(value: unknown): BeginPhotoRe
     requestId: input.requestId,
     workspaceId: input.workspaceId,
     profile: input.profile,
+    ...(input.retainMeasurementBundle === undefined ? {} : { retainMeasurementBundle: input.retainMeasurementBundle }),
     photos: Object.freeze(input.photos.map((photo) => Object.freeze({ ...photo }))),
   });
 }

@@ -15,6 +15,7 @@ const ORIGIN = "http://127.0.0.1:4173";
 const PUBLIC_URL = "http://127.0.0.1:8788";
 const BROWSER_BOOTSTRAP_TOKEN = "b".repeat(43);
 const expectedTools = [
+  "analyze_workspace_precision",
   "begin_workspace_asset_import",
   "begin_workspace_photo_reconstruction",
   "begin_workspace_update",
@@ -171,7 +172,7 @@ describe("Agent MCP connection offers", () => {
       name: "semaframe-workspace-engine",
       version: "1.10.0",
     });
-    expect(expectedTools).toHaveLength(35);
+    expect(expectedTools).toHaveLength(36);
     expect(tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     expect(tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
     expect(tools.every((tool) => Boolean(tool.outputSchema))).toBe(true);

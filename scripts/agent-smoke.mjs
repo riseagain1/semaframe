@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { launchChromeForSmoke } from "./lib/chrome-smoke-launcher.mjs";
 import { spawnOwnedProcessTree, stopOwnedProcessTrees } from "./lib/owned-process-tree.mjs";
+import { runPrecisionAgentSmoke } from "./lib/precision-agent-smoke.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const artifacts = resolve("artifacts");
@@ -259,6 +260,7 @@ function sameJson(left, right) {
 }
 
 async function captureSavedProject(cdp) {
+  await poll(cdp, "Boolean(document.querySelector('button[aria-label=\"Save project\"]:not(:disabled)'))", "enabled Save project control");
   await cdp.evaluate(`(() => {
     window.__agentSmokeSavedProject = '';
     if (!window.__agentSmokeCaptureInstalled) {
@@ -353,6 +355,8 @@ for (const child of [stack]) {
 
 let cdp;
 let mcpClient;
+let smokeFailed = false;
+let cleanupFailure;
 try {
   await waitForJson(`${gatewayUrl}/healthz`);
   await waitForHttp(`http://127.0.0.1:${vitePort}/`);
@@ -605,6 +609,7 @@ try {
   const tools = await mcpClient.listTools();
   const toolNames = new Set(tools.tools.map((tool) => tool.name));
   const expectedTools = [
+    "analyze_workspace_precision",
     "get_workspace_instructions", "inspect_workspace", "inspect_workspace_component", "read_workspace_resource_snapshot", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "query_layout_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
     "undo_workspace_batch", "redo_workspace_batch", "read_workspace_events", "begin_workspace_photo_reconstruction", "start_workspace_photo_reconstruction", "inspect_workspace_photo_reconstruction", "cancel_workspace_photo_reconstruction", "finalize_workspace_photo_reconstruction",
     "inspect_voice_relay", "prepare_voice_relay_setup", "run_voice_relay_diagnostics", "request_voice_relay_arm", "inspect_xr_readiness", "prepare_xr_session", "request_enter_xr", "wait_for_xr_session_state", "request_exit_xr", "get_live_xr_context",
@@ -654,6 +659,7 @@ try {
     "workspace:write",
     "workspace:history",
     "component:create",
+    ...(process.argv.includes("--precision") ? ["component:update", "asset:import"] : []),
   ];
   const workspaceClientName = "Workspace native smoke agent";
   const approvalRequest = await callAgent(mcpClient, "get_workspace_instructions", {
@@ -1052,6 +1058,14 @@ try {
   }
 
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  if (process.argv.includes("--precision")) {
+    await runPrecisionAgentSmoke({
+      call: (name, args) => callAgent(mcpClient, name, args), session: workspaceSessionInput, cdp, captureSavedProject,
+      rememberSensitive: rememberSensitiveDiagnostic,
+    });
+    const precisionScreenshot = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    writeFileSync(join(artifacts, "precision-browser-smoke-desktop.png"), Buffer.from(precisionScreenshot.data, "base64"));
+  }
   if (!await cdp.evaluate(clickExactButton("Manage"))) throw new Error("Agent connection management control was unavailable.");
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-connected'))", "connected Agent management page");
   if (!await cdp.evaluate(clickButton("Disable agent control"))) throw new Error("Agent control could not be disabled.");
@@ -1094,12 +1108,13 @@ try {
       openApi.paths?.["/assets/imports/complete"]?.post?.operationId !== "complete_workspace_asset_import" ||
       openApi.paths?.["/reconstructions/begin"]?.post?.operationId !== "begin_workspace_photo_reconstruction" ||
       openApi.paths?.["/reconstructions/finalize"]?.post?.operationId !== "finalize_workspace_photo_reconstruction" ||
-      Object.keys(openApi.paths ?? {}).length !== 26 ||
+      Object.keys(openApi.paths ?? {}).length !== 27 ||
       /get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u.test(JSON.stringify(openApi))) {
     throw new Error("Agent OpenAPI discovery document is incomplete.");
   }
-  console.log("Agent browser smoke passed: exclusive thirty-five-tool MCP and twenty-six-route OpenAPI contract, explicit approval, exact snapshot-read and photo-reconstruction discovery, separate world3d/ui2d graphs plus layout/physics placement discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
+  console.log("Agent browser smoke passed: exclusive thirty-six-tool MCP and twenty-seven-route OpenAPI contract, explicit approval, exact snapshot-read and photo-reconstruction discovery, separate world3d/ui2d graphs plus layout/physics placement discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
 } catch (error) {
+  smokeFailed = true;
   const safeLogs = diagnosticText(processLogs.join(""));
   if (safeLogs.trim()) console.error(safeLogs.slice(-4_000));
   throw sanitizeAgentSmokeFailure(error, sensitiveDiagnosticValues);
@@ -1114,9 +1129,22 @@ try {
     const browserCloseDeadline = Date.now() + 5_000;
     while (!browserTree.closed && Date.now() < browserCloseDeadline) await delay(50);
   }
-  await stopOwnedProcessTrees([browserTree, stackTree]);
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  try {
+    await stopOwnedProcessTrees([browserTree, stackTree]);
+  } catch (error) {
+    cleanupFailure = error;
+  }
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch (error) {
+    cleanupFailure ??= error;
+  }
+  if (cleanupFailure && smokeFailed) {
+    const safeFailure = sanitizeAgentSmokeFailure(cleanupFailure, sensitiveDiagnosticValues);
+    console.error("Smoke cleanup also failed:", safeFailure.message);
+  }
 }
+if (cleanupFailure) throw sanitizeAgentSmokeFailure(cleanupFailure, sensitiveDiagnosticValues);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
