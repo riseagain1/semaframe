@@ -78,14 +78,28 @@ describe("asset ingress fail-closed boundaries", () => {
     await ready(manager);
   });
   it("expires a stalled upload even without additional chunks", async () => {
-    const { manager } = await setup({ grantTtlMs: 30 }); const grant = await manager.begin(principal, input());
+    // Keep grant validation independent of filesystem/CI scheduling; advance
+    // the upload deadline only once the body iterator is actually waiting.
+    const now = Date.now();
+    const { manager } = await setup({ grantTtlMs: 1000, now: () => now });
+    const grant = await manager.begin(principal, input());
     let settle!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
     const pending = new Promise<IteratorResult<Uint8Array>>((resolve) => { settle = () => resolve({ done: true, value: undefined }); });
-    const upload = manager.upload(grant.upload!.url.split("/").at(-1)!, grant.upload!.token, "model/spz", bytes.length, {
-      [Symbol.asyncIterator]() { return { next: () => pending }; },
-    });
-    try { await expect(upload).rejects.toMatchObject({ code: "asset_upload_cancelled" }); }
-    finally { settle(); }
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const upload = manager.upload(grant.upload!.url.split("/").at(-1)!, grant.upload!.token, "model/spz", bytes.length, {
+        [Symbol.asyncIterator]() { return { next: () => { entered(); return pending; } }; },
+      });
+      const rejection = expect(upload).rejects.toMatchObject({ code: "asset_upload_cancelled" });
+      await started;
+      await vi.advanceTimersByTimeAsync(1001);
+      await rejection;
+    } finally {
+      settle();
+      vi.useRealTimers();
+    }
   });
   it("retains cancelled cleanup failures until a repeated begin safely retries deletion", async () => {
     let refuse = true;

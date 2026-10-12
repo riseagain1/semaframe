@@ -29,7 +29,10 @@ function setup() {
   };
   const options = { allowedOrigins: [origin], publicBaseUrl: base, browserBootstrapToken: token, assetIngress: ingress as unknown as AgentAssetIngress, photoReconstruction: photo as unknown as PhotoReconstructionService };
   const handle = createAgentGatewayHttpHandler(gateway, options);
-  cleanup.push(async () => { await handle.close(); gateway.close(); });
+  cleanup.push(async () => {
+    try { await handle.close(); }
+    finally { gateway.close(); }
+  });
   return { gateway, ingress, photo, options, handle };
 }
 afterEach(async () => { await Promise.allSettled(cleanup.splice(0).map((close) => close())); vi.restoreAllMocks(); });
