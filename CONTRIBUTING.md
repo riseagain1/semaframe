@@ -26,9 +26,10 @@ npm run dev
 
 ## Required verification
 
-Run the deterministic local gate before opening a pull request:
+Run the local verification gate and current dependency advisory check before opening a pull request:
 
 ```bash
+npm run audit:dependencies
 npm run typecheck
 npm run demo:typecheck
 npm run build

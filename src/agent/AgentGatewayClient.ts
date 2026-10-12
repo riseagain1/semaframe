@@ -26,32 +26,10 @@ import {
   type SemaFrameExchangePackage,
 } from "../bridge";
 
+import { WORKSPACE_AGENT_TOOL_NAMES } from "../workspace/agents/contracts";
+
 export const AGENT_GATEWAY_COMMAND_NAMES = [
-  "get_workspace_instructions",
-  "inspect_workspace",
-  "inspect_workspace_component",
-  "read_workspace_resource_snapshot",
-  "inspect_workspace_asset",
-  "inspect_workspace_model",
-  "inspect_workspace_space",
-  "query_spatial_placement",
-  "query_layout_placement",
-  "inspect_workspace_physics",
-  "query_stable_placement",
-  "simulate_workspace_physics",
-  "begin_workspace_asset_import",
-  "cancel_workspace_asset_import",
-  "complete_workspace_asset_import",
-  "begin_workspace_photo_reconstruction",
-  "start_workspace_photo_reconstruction",
-  "inspect_workspace_photo_reconstruction",
-  "cancel_workspace_photo_reconstruction",
-  "finalize_workspace_photo_reconstruction",
-  "begin_workspace_update",
-  "submit_workspace_batch",
-  "undo_workspace_batch",
-  "redo_workspace_batch",
-  "read_workspace_events",
+  ...WORKSPACE_AGENT_TOOL_NAMES,
   ...AGENT_HOST_CONTROL_COMMAND_NAMES,
   // Host-internal attested handoff. It is never exposed as an MCP/REST tool.
   "complete_workspace_reconstruction_asset",
@@ -120,11 +98,11 @@ export type AgentAssetCandidateDescriptor = Readonly<{
   requestId: string;
   workspaceId: string;
   displayName: string;
-  format: "ply" | "spz" | "sog";
+  format: "ply" | "spz" | "sog" | "capture-bundle" | "obj" | "xyz-csv";
   mediaType: string;
   byteLength: number;
   sha256: string;
-  purpose: "generic_import" | "photo_reconstruction";
+  purpose: "generic_import" | "photo_reconstruction" | "photo_measurement" | "measurement_source";
   status: "ready";
   expiresAt: string;
 }>;
@@ -533,11 +511,17 @@ function parseAssetCandidate(value: unknown): AgentAssetCandidateDescriptor {
       typeof value.requestId !== "string" || value.requestId.length < 8 || value.requestId.length > 128 ||
       typeof value.workspaceId !== "string" || !WORKSPACE_ID_PATTERN.test(value.workspaceId) ||
       typeof value.displayName !== "string" || value.displayName.length < 1 || value.displayName.length > 255 ||
-      !["ply", "spz", "sog"].includes(String(value.format)) ||
+      !["ply", "spz", "sog", "capture-bundle", "obj", "xyz-csv"].includes(String(value.format)) ||
       typeof value.mediaType !== "string" || value.mediaType.length < 3 || value.mediaType.length > 192 ||
       !Number.isSafeInteger(value.byteLength) || Number(value.byteLength) < 1 ||
       typeof value.sha256 !== "string" || !ASSET_DIGEST_PATTERN.test(value.sha256) ||
-      !["generic_import", "photo_reconstruction"].includes(String(value.purpose)) ||
+      !["generic_import", "photo_reconstruction", "photo_measurement", "measurement_source"].includes(String(value.purpose)) ||
+      ((value.format === "capture-bundle") !== (value.purpose === "photo_measurement")) ||
+      (value.purpose === "measurement_source" && (!["obj", "ply", "xyz-csv"].includes(String(value.format)) || Number(value.byteLength) > 16 * 1024 * 1024)) ||
+      (["obj", "xyz-csv"].includes(String(value.format)) && value.purpose !== "measurement_source") ||
+      (value.format === "obj" && !["model/obj", "text/plain", "application/octet-stream"].includes(String(value.mediaType))) ||
+      (value.format === "xyz-csv" && !["text/csv", "text/plain", "application/octet-stream"].includes(String(value.mediaType))) ||
+      (value.purpose === "measurement_source" && value.format === "ply" && !["application/ply", "model/ply", "application/octet-stream"].includes(String(value.mediaType))) ||
       value.status !== "ready" || typeof value.expiresAt !== "string") {
     throw new AgentGatewayError("invalid_response", "The agent gateway returned an invalid asset candidate.");
   }
@@ -551,11 +535,11 @@ function parseAssetCandidate(value: unknown): AgentAssetCandidateDescriptor {
     requestId: value.requestId,
     workspaceId: value.workspaceId,
     displayName: value.displayName,
-    format: value.format as "ply" | "spz" | "sog",
+    format: value.format as AgentAssetCandidateDescriptor["format"],
     mediaType: value.mediaType,
     byteLength: Number(value.byteLength),
     sha256: value.sha256,
-    purpose: value.purpose as "generic_import" | "photo_reconstruction",
+    purpose: value.purpose as AgentAssetCandidateDescriptor["purpose"],
     status: "ready",
     expiresAt: value.expiresAt,
   });
@@ -585,7 +569,7 @@ function isCanonicalIsoDate(value: unknown): value is string {
 }
 
 function parsePhotoReconstructionCandidate(value: unknown): PhotoReconstructionResultCandidate {
-  if (!isRecord(value) || !exactKeys(value, ["candidateHandle", "format", "mediaType", "byteLength", "sha256"]) ||
+  if (!isRecord(value) || !exactKeys(value, ["candidateHandle", "format", "mediaType", "byteLength", "sha256", "measurementBundle"]) ||
       typeof value.candidateHandle !== "string" || !ASSET_CANDIDATE_HANDLE_PATTERN.test(value.candidateHandle) ||
       !["ply", "spz", "sog"].includes(String(value.format)) ||
       typeof value.mediaType !== "string" || value.mediaType.length < 3 || value.mediaType.length > 192 ||
@@ -593,12 +577,26 @@ function parsePhotoReconstructionCandidate(value: unknown): PhotoReconstructionR
       typeof value.sha256 !== "string" || !ASSET_DIGEST_PATTERN.test(value.sha256)) {
     throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid output candidate.");
   }
+  let measurementBundle: PhotoReconstructionResultCandidate["measurementBundle"];
+  if (value.measurementBundle !== undefined) {
+    const bundle = value.measurementBundle;
+    if (!isRecord(bundle) || !exactKeys(bundle, ["candidateHandle", "format", "mediaType", "byteLength", "sha256"]) ||
+        typeof bundle.candidateHandle !== "string" || !ASSET_CANDIDATE_HANDLE_PATTERN.test(bundle.candidateHandle) ||
+        bundle.format !== "capture-bundle" || bundle.mediaType !== "application/vnd.semaframe.capture+zip" ||
+        !Number.isSafeInteger(bundle.byteLength) || Number(bundle.byteLength) < 1 || Number(bundle.byteLength) > 256 * 1024 * 1024 ||
+        typeof bundle.sha256 !== "string" || !ASSET_DIGEST_PATTERN.test(bundle.sha256)) {
+      throw new AgentGatewayError("invalid_response", "The reconstruction gateway returned an invalid measurement bundle.");
+    }
+    measurementBundle = Object.freeze({ candidateHandle: bundle.candidateHandle, format: "capture-bundle",
+      mediaType: "application/vnd.semaframe.capture+zip", byteLength: Number(bundle.byteLength), sha256: bundle.sha256 as `sha256:${string}` });
+  }
   return Object.freeze({
     candidateHandle: value.candidateHandle,
     format: value.format as "ply" | "spz" | "sog",
     mediaType: value.mediaType,
     byteLength: Number(value.byteLength),
     sha256: value.sha256 as `sha256:${string}`,
+    ...(measurementBundle ? { measurementBundle } : {}),
   });
 }
 

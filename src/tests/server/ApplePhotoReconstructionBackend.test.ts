@@ -9,6 +9,8 @@ import type {
 } from "../../../server/reconstruction/ReconstructionBackend";
 import { ReconstructionBackendError } from "../../../server/reconstruction/ReconstructionBackend";
 import { inspectRealityAsset } from "../../workspace/assets";
+import { inspectCaptureBundle } from "../../reconstruction/captureBundle";
+import { readPortableBlobRange } from "../../workspace/persistence/portable/crc32";
 
 const temporaryDirectories: string[] = [];
 
@@ -95,6 +97,7 @@ describe("ApplePhotoReconstructionBackend", () => {
         "source_coordinates_unknown",
       ],
     });
+    expect(result).not.toHaveProperty("measurementBundlePath");
     expect(updates.map((update) => update.phase)).toEqual([
       "camera_solving",
       "camera_solving",
@@ -106,6 +109,31 @@ describe("ApplePhotoReconstructionBackend", () => {
     await expect(inspectRealityAsset(new Blob([new Uint8Array(bytes)]))).resolves.toMatchObject({
       descriptor: { format: "ply", splatCount: 32, engineeringAuthority: "visual_only" },
     });
+  });
+
+  it("preserves the original native mesh only with explicit retained-bundle consent", async () => {
+    const root = await temporaryDirectory();
+    const inputDirectory = join(root, "input");
+    const outputDirectory = join(root, "output");
+    await mkdir(inputDirectory);
+    const backend = new ApplePhotoReconstructionBackend({
+      objectCaptureBackend: new FakeObjectCaptureBackend(), profileSplatCounts: { balanced: 32 },
+    });
+    const result = await backend.run({
+      jobId: "job", workspaceId: "workspace", profile: "balanced", retainMeasurementBundle: true,
+      inputDirectory, outputDirectory, aggregatePixelCount: 20,
+      photos: [
+        { photoId: "a", mediaType: "image/jpeg", byteLength: 1, sha256: `sha256:${"a".repeat(64)}`, path: join(inputDirectory, "a.jpg") },
+        { photoId: "b", mediaType: "image/jpeg", byteLength: 1, sha256: `sha256:${"b".repeat(64)}`, path: join(inputDirectory, "b.jpg") },
+      ],
+      signal: new AbortController().signal, onProgress: () => undefined,
+    });
+    expect(result.measurementBundlePath).toBe(join(outputDirectory, "measurement.capture.zip"));
+    const parsed = await inspectCaptureBundle(new Blob([new Uint8Array(await readFile(result.measurementBundlePath!))]));
+    expect(parsed.manifest).toMatchObject({ units: "unknown", sourcePhotosRetained: false,
+      engineeringAuthority: "unverified_measurement", inputPhotoCount: 2, registeredPhotoCount: 1 });
+    expect(new TextDecoder().decode(await readPortableBlobRange(parsed.mesh, 0, parsed.mesh.size)))
+      .toBe(await readFile(join(outputDirectory, "capture.obj"), "utf8"));
   });
 
   it("reports the underlying local capability without leaking implementation paths", async () => {

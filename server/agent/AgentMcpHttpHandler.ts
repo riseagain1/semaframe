@@ -162,6 +162,7 @@ export function createAgentMcpHttpHandler(
                 workspaceId: body.workspace_id,
                 displayName: body.display_name,
                 format: body.format,
+                ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
                 mediaType: body.media_type,
                 byteLength: body.byte_length,
                 sha256: body.sha256,
@@ -211,6 +212,7 @@ export function createAgentMcpHttpHandler(
                 requestId: input.request_id,
                 workspaceId: input.workspace_id,
                 profile: input.profile,
+                ...(input.retain_measurement_bundle === undefined ? {} : { retainMeasurementBundle: input.retain_measurement_bundle }),
                 photos: input.photos.map((photo) => ({
                   photoId: photo.photo_id,
                   mediaType: photo.media_type,
@@ -311,6 +313,7 @@ export function createAgentMcpHttpHandler(
                 {
                   candidate_handle: candidate.candidateHandle,
                   workspace_id: input.workspace_id,
+                  ...(candidate.measurementBundle ? { measurement_bundle: candidate.measurementBundle } : {}),
                 },
                 client,
               );
@@ -434,6 +437,7 @@ type AssetImportMcpInput = Readonly<{
   workspace_id: string;
   display_name: string;
   format: AgentAssetFormat;
+  purpose?: "generic_import" | "measurement_source";
   media_type: string;
   byte_length: number;
   sha256: string;
@@ -488,11 +492,15 @@ function approvedPhotoReconstructionPrincipal(
 
 function assetImportInput(value: unknown): AssetImportMcpInput {
   const record = value as Record<string, unknown>;
+  if (record.purpose !== undefined && record.purpose !== "generic_import" && record.purpose !== "measurement_source") {
+    throw new AgentAssetIngressError(400, "invalid_request", "Public imports cannot mint service-owned purposes.");
+  }
   return {
     request_id: String(record.request_id),
     workspace_id: String(record.workspace_id),
     display_name: String(record.display_name),
     format: record.format as AgentAssetFormat,
+    ...(record.purpose === undefined ? {} : { purpose: record.purpose }),
     media_type: String(record.media_type),
     byte_length: Number(record.byte_length),
     sha256: String(record.sha256),

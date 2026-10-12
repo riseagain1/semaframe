@@ -1442,6 +1442,26 @@ const RESIZE_ADAPTED_LEGACY_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManif
   }),
 );
 
+const precisionStudy = modernManifest({
+  typeId: "precision-study",
+  version: "1.0.0",
+  displayName: "Precision Study",
+  allowedPlacements: ["canvas2d", "viewport"],
+  resizePolicy: boxPolicy(["canvas2d", "viewport"], { width: 520, height: 420 }, { width: 280, height: 200 }),
+  propsSchema: objectSchema({
+    document: { anyOf: [{ type: "null" }, { type: "object" }] },
+    evidenceSources: { type: "array", maxItems: 32, items: { type: "object" } },
+  }, ["document"]),
+  durableStateSchema: emptyObjectSchema,
+  defaultProps: { document: null, evidenceSources: [] },
+  defaultDurableState: {},
+  writableProps: ["document", "evidenceSources"],
+  // Live bindings must never replace a frozen measurement/check set.
+  bindableProps: [],
+  actions: {},
+  events: {},
+});
+
 export const BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.freeze([
   ...RESIZE_ADAPTED_LEGACY_BUILTIN_COMPONENT_MANIFESTS,
   ...RESIZE_AWARE_BUILTIN_COMPONENT_MANIFESTS,
@@ -1451,6 +1471,7 @@ export const BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.
   ...SWITCHABLE_PHYSICS_BUILTIN_COMPONENT_MANIFESTS,
   ...MOVABLE_SPATIAL_BUILTIN_COMPONENT_MANIFESTS,
   ...MODELING_BUILTIN_COMPONENT_MANIFESTS,
+  precisionStudy,
 ]);
 
 export const BUILTIN_COMPONENT_TYPE_IDS = Object.freeze(

@@ -62,6 +62,9 @@ import type {
 export type WorkspacePanel = "library" | "inspector" | "models" | "reality" | "sources" | "validation" | null;
 
 export type WorkspaceChromeProps = Readonly<{
+  workspaceRevision?: number;
+  onCreatePrecisionCad?: (definition: import("../../../workspace/modeling/cad").CadPartDefinitionV1) => Promise<void>;
+  onComparePrecisionCad?: (studyId: string, targetComponentId: string) => Promise<unknown>;
   catalog: readonly ComponentLibraryItem[];
   selected?: WorkspaceRenderComponent;
   selectedPhysicsReport?: PhysicsBodyReport;
@@ -111,6 +114,8 @@ export type WorkspaceChromeProps = Readonly<{
   realityReconstructionJob?: PhotoReconstructionJobView;
   realityReconstructionBusy?: boolean;
   realityReconstructionStatus?: string;
+  retainMeasurementBundle?: boolean;
+  onRetainMeasurementBundle?: (retain: boolean) => void;
   onImportRealityAsset?: () => void;
   onReconstructRealityFromPhotos?: () => void;
   onRealityReconstructionProfile?: (profile: PhotoReconstructionProfile) => void;
@@ -132,6 +137,7 @@ export type WorkspaceChromeProps = Readonly<{
 
 /** Human controls for the same component surface exposed to external clients. */
 export function WorkspaceChrome({
+  workspaceRevision,
   catalog,
   selected,
   selectedPhysicsReport,
@@ -177,6 +183,10 @@ export function WorkspaceChrome({
   realityReconstructionJob,
   realityReconstructionBusy,
   realityReconstructionStatus,
+  retainMeasurementBundle,
+  onCreatePrecisionCad,
+  onComparePrecisionCad,
+  onRetainMeasurementBundle,
   onImportRealityAsset,
   onReconstructRealityFromPhotos,
   onRealityReconstructionProfile,
@@ -323,6 +333,9 @@ export function WorkspaceChrome({
             {panel === "library" && <WorkspaceComponentLibrary items={catalog} onCreate={createFromLibrary} />}
             {panel === "inspector" && (
               <WorkspaceInspector
+                workspaceRevision={workspaceRevision}
+                onCreatePrecisionCad={onCreatePrecisionCad}
+                onComparePrecisionCad={onComparePrecisionCad}
                 component={selected}
                 onAction={onAction}
                 onUpdate={onUpdate}
@@ -372,6 +385,8 @@ export function WorkspaceChrome({
               reconstructionJob={realityReconstructionJob}
               reconstructionBusy={realityReconstructionBusy}
               reconstructionStatus={realityReconstructionStatus}
+              retainMeasurementBundle={retainMeasurementBundle}
+              onRetainMeasurementBundle={onRetainMeasurementBundle}
               onImport={onImportRealityAsset}
               onReconstruct={onReconstructRealityFromPhotos}
               onReconstructionProfile={onRealityReconstructionProfile}

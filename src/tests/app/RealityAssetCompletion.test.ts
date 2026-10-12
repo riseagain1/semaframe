@@ -8,6 +8,10 @@ import {
 } from "../../app/realityAssetCompletion";
 
 describe("RealityAssetCompletionLedger", () => {
+  it("rejects native measurement candidates at both visual completion boundaries", () => {
+    expect(() => assertRealityAssetCandidatePurpose("measurement_source", "agent")).toThrow(RealityAssetCandidatePurposeError);
+    expect(() => assertRealityAssetCandidatePurpose("measurement_source", "photo-reconstruction")).toThrow(RealityAssetCandidatePurposeError);
+  });
   it("retains a locally committed import after a lost response and resolves an identical retry", async () => {
     const ledger = new RealityAssetCompletionLedger<{ assetId: string }>();
     const lostResponse = Object.assign(new Error("connection reset"), { code: "request_failed" });

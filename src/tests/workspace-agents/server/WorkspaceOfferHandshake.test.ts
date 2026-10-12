@@ -190,6 +190,7 @@ describe("Workspace MCP connection offer", () => {
     );
 
     expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
+      "analyze_workspace_precision",
       "begin_workspace_asset_import",
       "begin_workspace_photo_reconstruction",
       "begin_workspace_update",

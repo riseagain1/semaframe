@@ -108,8 +108,9 @@ afterEach(() => {
 });
 
 describe("AgentGatewayClient", () => {
-  it("accepts all 35 public commands plus the reconstruction-only internal completion command", () => {
-    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(36);
+  it("accepts all 36 public commands plus the reconstruction-only internal completion command", () => {
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(37);
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("analyze_workspace_precision");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("read_workspace_resource_snapshot");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("begin_workspace_photo_reconstruction");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("finalize_workspace_photo_reconstruction");
@@ -580,6 +581,28 @@ describe("AgentGatewayClient", () => {
       message: "feed response contains unsupported field unexpected",
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([["obj", "model/obj"], ["xyz-csv", "text/csv"], ["ply", "application/ply"]] as const)("accepts purpose-bound measurement %s descriptors without treating them as visual assets", async (format, mediaType) => {
+    const candidate = assetCandidate({ format, mediaType, purpose: "measurement_source" });
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(config({ enabled: true }))).mockResolvedValueOnce(jsonResponse(candidate));
+    const client = new AgentGatewayClient({ origin: "https://scene.test", clientInstanceId: "measurement-candidate-test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    await expect(client.inspectAssetCandidate(assetCandidateHandle, "workspace_main")).resolves.toEqual(candidate);
+  });
+
+  it.each([
+    { format: "obj", mediaType: "model/obj", purpose: "generic_import" },
+    { format: "xyz-csv", mediaType: "text/csv", purpose: "photo_reconstruction" },
+    { format: "spz", purpose: "measurement_source" },
+    { format: "capture-bundle", purpose: "measurement_source" },
+    { format: "obj", mediaType: "text/html", purpose: "measurement_source" },
+    { format: "ply", mediaType: "model/spz", purpose: "measurement_source" },
+    { format: "ply", purpose: "measurement_source", byteLength: 16 * 1024 * 1024 + 1 },
+  ])("rejects ambiguous or oversized measurement descriptors: %s", async (override) => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(config({ enabled: true }))).mockResolvedValueOnce(jsonResponse(assetCandidate(override)));
+    const client = new AgentGatewayClient({ origin: "https://scene.test", clientInstanceId: "measurement-candidate-test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    await expect(client.inspectAssetCandidate(assetCandidateHandle, "workspace_main")).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("streams an inspected opaque asset candidate and completes it only after the caller persists it", async () => {

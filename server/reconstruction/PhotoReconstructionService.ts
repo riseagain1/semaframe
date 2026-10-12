@@ -34,6 +34,7 @@ import {
   type PhotoReconstructionPhase,
   type PhotoReconstructionProfile,
   type PhotoReconstructionResultCandidate,
+  type PhotoReconstructionMeasurementBundleCandidate,
   type PhotoReconstructionWarningCode,
   type PhotoUploadGrant,
 } from "../../src/reconstruction/contracts";
@@ -41,7 +42,6 @@ import {
   AgentAssetIngress,
   AgentAssetIngressError,
   MAX_AGENT_ASSET_RESERVATION_TTL_MS,
-  type AgentAssetFormat,
   type ApprovedAssetImporter,
 } from "../agent/AgentAssetIngress";
 
@@ -56,6 +56,7 @@ export type PhotoReconstructionBackendRequest = Readonly<{
   jobId: string;
   workspaceId: string;
   profile: PhotoReconstructionProfile;
+  retainMeasurementBundle?: boolean;
   inputDirectory: string;
   outputDirectory: string;
   aggregatePixelCount: number;
@@ -72,7 +73,8 @@ export type PhotoReconstructionBackendRequest = Readonly<{
 
 export type PhotoReconstructionBackendResult = Readonly<{
   outputPath: string;
-  format: AgentAssetFormat;
+  format: "ply" | "spz" | "sog";
+  measurementBundlePath?: string;
   registeredPhotoCount?: number;
   warnings?: readonly PhotoReconstructionWarningCode[];
 }>;
@@ -165,6 +167,8 @@ type JobRecord = {
   abortController: AbortController;
   activeUploads: Set<Promise<unknown>>;
   result?: PhotoReconstructionResultCandidate;
+  /** Tracked before staging succeeds so cancellation never loses a partial capability. */
+  measurementBundle?: PhotoReconstructionMeasurementBundleCandidate;
   error?: PhotoReconstructionFailure;
   execution?: Promise<void>;
   finalizationLeaseUntil?: number;
@@ -188,15 +192,18 @@ const MAX_ORPHAN_REMOVALS_PER_PASS = 32;
 const OWNER_MARKER_NAME = ".semaframe-owner-v1.json";
 const OWNER_HEARTBEAT_MS = 60_000;
 const PROCESS_STARTED_AT = Math.round(Date.now() - process.uptime() * 1_000);
-const MEDIA_TYPE_BY_OUTPUT: Readonly<Record<AgentAssetFormat, string>> = Object.freeze({
+type ReconstructionStagedFormat = "ply" | "spz" | "sog" | "capture-bundle";
+const MEDIA_TYPE_BY_OUTPUT: Readonly<Record<ReconstructionStagedFormat, string>> = Object.freeze({
   ply: "application/ply",
   spz: "application/x-spz",
   sog: "model/vnd.sog",
+  "capture-bundle": "application/vnd.semaframe.capture+zip",
 });
-const OUTPUT_EXTENSION: Readonly<Record<AgentAssetFormat, string>> = Object.freeze({
+const OUTPUT_EXTENSION: Readonly<Record<ReconstructionStagedFormat, string>> = Object.freeze({
   ply: "ply",
   spz: "spz",
   sog: "sog",
+  "capture-bundle": "capture.zip",
 });
 const PHASE_RANK: Readonly<Record<PhotoReconstructionPhase, number>> = Object.freeze({
   awaiting_upload: 0,
@@ -312,6 +319,7 @@ function canonicalInput(input: BeginPhotoReconstructionInput): string {
     requestId: input.requestId,
     workspaceId: input.workspaceId,
     profile: input.profile,
+    retainMeasurementBundle: input.retainMeasurementBundle === true,
     photos: [...input.photos]
       .map((photo) => ({ ...photo }))
       .sort((left, right) => left.photoId.localeCompare(right.photoId)),
@@ -1129,9 +1137,17 @@ export class PhotoReconstructionService {
           Math.max(1, job.finalizationLeaseUntil - now + 60_000),
         ),
       );
+      if (job.measurementBundle) {
+        await this.#assetIngress.reserveCandidate(
+          job.measurementBundle.candidateHandle,
+          job.principal.authorizationId,
+          job.input.workspaceId,
+          Math.min(MAX_AGENT_ASSET_RESERVATION_TTL_MS, Math.max(1, job.finalizationLeaseUntil - now + 60_000)),
+        );
+      }
     } catch (error) {
       if (error instanceof AgentAssetIngressError && error.code === "asset_candidate_not_found") {
-        job.result = undefined;
+        await this.#cleanupJobCandidate(job);
         job.status = "failed";
         job.error = Object.freeze({
           code: "photo_reconstruction_output_expired",
@@ -1359,6 +1375,7 @@ export class PhotoReconstructionService {
         jobId: job.jobId,
         workspaceId: job.input.workspaceId,
         profile: job.input.profile,
+        retainMeasurementBundle: job.input.retainMeasurementBundle === true,
         inputDirectory: job.inputDirectory,
         outputDirectory: job.outputDirectory,
         aggregatePixelCount: job.verifiedPixelCount,
@@ -1397,7 +1414,17 @@ export class PhotoReconstructionService {
       for (const warning of result.warnings ?? []) {
         if (isWarningCode(warning)) job.warnings.add(warning);
       }
-      const candidate = await this.#stageOutput(job, result.outputPath, result.format);
+      if ((job.input.retainMeasurementBundle === true) !== (result.measurementBundlePath !== undefined)) {
+        throw new PhotoReconstructionBackendError("output_invalid");
+      }
+      const visualCandidate = await this.#stageOutput(job, result.outputPath, result.format);
+      if (result.measurementBundlePath !== undefined) {
+        await this.#stageOutput(job, result.measurementBundlePath, "capture-bundle");
+      }
+      const candidate: PhotoReconstructionResultCandidate = Object.freeze({
+        ...visualCandidate,
+        ...(job.measurementBundle ? { measurementBundle: job.measurementBundle } : {}),
+      });
       if (job.abortController.signal.aborted || jobIsCancelled(job)) {
         if (jobIsCancelled(job)) {
           try {
@@ -1435,6 +1462,15 @@ export class PhotoReconstructionService {
             this.#readyTtlMs + PHOTO_RECONSTRUCTION_LIMITS.defaultFinalizationLeaseMs + 60_000,
           ),
         );
+        if (job.measurementBundle) {
+          await this.#assetIngress.reserveCandidate(
+            job.measurementBundle.candidateHandle,
+            job.principal.authorizationId,
+            job.input.workspaceId,
+            Math.min(MAX_AGENT_ASSET_RESERVATION_TTL_MS,
+              this.#readyTtlMs + PHOTO_RECONSTRUCTION_LIMITS.defaultFinalizationLeaseMs + 60_000),
+          );
+        }
       } catch (error) {
         if (error instanceof AgentAssetIngressError && error.code === "asset_candidate_not_found") {
           await this.#failJob(
@@ -1486,11 +1522,13 @@ export class PhotoReconstructionService {
     job.registeredPhotoCount = Math.max(job.registeredPhotoCount ?? 0, value);
   }
 
+  async #stageOutput(job: JobRecord, outputPath: string, format: "ply" | "spz" | "sog"): Promise<PhotoReconstructionResultCandidate>;
+  async #stageOutput(job: JobRecord, outputPath: string, format: "capture-bundle"): Promise<PhotoReconstructionMeasurementBundleCandidate>;
   async #stageOutput(
     job: JobRecord,
     outputPath: string,
-    format: AgentAssetFormat,
-  ): Promise<PhotoReconstructionResultCandidate> {
+    format: ReconstructionStagedFormat,
+  ): Promise<PhotoReconstructionResultCandidate | PhotoReconstructionMeasurementBundleCandidate> {
     let canonicalOutputPath: string;
     let file: Awaited<ReturnType<typeof lstat>>;
     try {
@@ -1517,7 +1555,7 @@ export class PhotoReconstructionService {
       digest.update(chunk);
     }
     const sha256 = `sha256:${digest.digest("hex")}` as const;
-    const requestId = `reconstruction-${job.jobId}`;
+    const requestId = `${format === "capture-bundle" ? "measurement" : "reconstruction"}-${job.jobId}`;
     const mediaType = MEDIA_TYPE_BY_OUTPUT[format];
     const grant = await this.#assetIngress.begin(job.principal, {
       requestId,
@@ -1527,7 +1565,7 @@ export class PhotoReconstructionService {
       mediaType,
       byteLength: file.size,
       sha256,
-      purpose: "photo_reconstruction",
+      purpose: format === "capture-bundle" ? "photo_measurement" : "photo_reconstruction",
     });
     const candidate = Object.freeze({
       candidateHandle: grant.candidateHandle,
@@ -1535,11 +1573,12 @@ export class PhotoReconstructionService {
       mediaType,
       byteLength: file.size,
       sha256,
-    });
+    }) as PhotoReconstructionResultCandidate | PhotoReconstructionMeasurementBundleCandidate;
     // Track the capability immediately after ingress creates it. It remains
     // internal until the job is ready, but a failed upload/cancel can now be
     // retried without losing the only handle that can delete staged bytes.
-    job.result = candidate;
+    if (candidate.format === "capture-bundle") job.measurementBundle = candidate;
+    else job.result = candidate;
     try {
       let ready = grant;
       if (grant.status !== "ready") {
@@ -1692,22 +1731,25 @@ export class PhotoReconstructionService {
   }
 
   async #cleanupJobCandidate(job: JobRecord): Promise<void> {
-    const candidate = job.result;
-    if (!candidate) return;
-    try {
-      await this.#assetIngress.cancelFromAgent(
-        candidate.candidateHandle,
-        job.principal.authorizationId,
-      );
-    } catch (error) {
-      // Browser completion consumes the candidate before this service learns
-      // about it. A scoped not-found therefore also proves there are no staged
-      // bytes left for this capability; every other error stays retryable.
-      if (!(error instanceof AgentAssetIngressError && error.code === "asset_candidate_not_found")) {
-        throw new PhotoReconstructionCandidateCleanupError({ cause: error });
+    const failures: unknown[] = [];
+    for (const candidate of [job.result, job.measurementBundle]) {
+      if (!candidate) continue;
+      try {
+        await this.#assetIngress.cancelFromAgent(candidate.candidateHandle, job.principal.authorizationId);
+      } catch (error) {
+        // A consumed or expired capability has no staged bytes; any other
+        // failure retains that exact handle for the next cleanup attempt.
+        if (!(error instanceof AgentAssetIngressError && error.code === "asset_candidate_not_found")) {
+          failures.push(error);
+          continue;
+        }
       }
+      if (job.result?.candidateHandle === candidate.candidateHandle) job.result = undefined;
+      if (job.measurementBundle?.candidateHandle === candidate.candidateHandle) job.measurementBundle = undefined;
     }
-    if (job.result?.candidateHandle === candidate.candidateHandle) job.result = undefined;
+    if (failures.length) throw new PhotoReconstructionCandidateCleanupError({
+      cause: failures.length === 1 ? failures[0] : new AggregateError(failures, "Capture candidate cleanup failed."),
+    });
   }
 
   async #cleanupJobResources(job: JobRecord): Promise<void> {

@@ -11,6 +11,8 @@ import {
   portableRealityObjectPath,
 } from "./constants";
 import { PortableProjectError } from "./errors";
+import { parsePrecisionEvidenceRef, type PrecisionEvidenceRef } from "../../precision/evidenceVault";
+import { precisionEvidencePath } from "./precisionClosure";
 
 export type PortableProjectAssetManifestEntry = Readonly<{
   assetId: string;
@@ -24,7 +26,7 @@ export type PortableProjectAssetManifestEntry = Readonly<{
 
 export type PortableProjectManifest = Readonly<{
   format: typeof PORTABLE_PROJECT_FORMAT;
-  version: typeof PORTABLE_PROJECT_FORMAT_VERSION;
+  version: typeof PORTABLE_PROJECT_FORMAT_VERSION | "1.1";
   project: Readonly<{
     path: typeof PORTABLE_PROJECT_WORKSPACE_PATH;
     digest: string;
@@ -35,6 +37,7 @@ export type PortableProjectManifest = Readonly<{
     workspaceSchemaVersion: string;
   }>;
   assets: readonly PortableProjectAssetManifestEntry[];
+  precisionEvidence?: readonly PrecisionEvidenceRef[];
 }>;
 
 const MANIFEST_KEYS = ["assets", "format", "project", "version"] as const;
@@ -90,6 +93,7 @@ export function createPortableProjectManifest(
   projectDigest: string,
   projectByteLength: number,
   descriptors: readonly RealityAssetDescriptor[],
+  precisionEvidence: readonly PrecisionEvidenceRef[] = [],
 ): PortableProjectManifest {
   const assets = [...descriptors]
     .sort((left, right) => left.digest < right.digest ? -1 : left.digest > right.digest ? 1 : 0)
@@ -104,7 +108,7 @@ export function createPortableProjectManifest(
     }));
   return Object.freeze({
     format: PORTABLE_PROJECT_FORMAT,
-    version: PORTABLE_PROJECT_FORMAT_VERSION,
+    version: precisionEvidence.length ? "1.1" : PORTABLE_PROJECT_FORMAT_VERSION,
     project: Object.freeze({
       path: PORTABLE_PROJECT_WORKSPACE_PATH,
       digest: projectDigest,
@@ -115,16 +119,17 @@ export function createPortableProjectManifest(
       workspaceSchemaVersion: project.workspaceSchemaVersion,
     }),
     assets: Object.freeze(assets),
+    ...(precisionEvidence.length ? { precisionEvidence: structuredClone(precisionEvidence) } : {}),
   });
 }
 
 export function parsePortableProjectManifest(value: unknown): PortableProjectManifest {
   const manifest = object(value, "Portable manifest");
-  exactKeys(manifest, MANIFEST_KEYS, "Portable manifest");
+  exactKeys(manifest, manifest.version === "1.1" ? [...MANIFEST_KEYS, "precisionEvidence"] : MANIFEST_KEYS, "Portable manifest");
   if (manifest.format !== PORTABLE_PROJECT_FORMAT) {
     throw new PortableProjectError("invalid_manifest", "File is not a SemaFrame portable project");
   }
-  if (manifest.version !== PORTABLE_PROJECT_FORMAT_VERSION) {
+  if (manifest.version !== PORTABLE_PROJECT_FORMAT_VERSION && manifest.version !== "1.1") {
     throw new PortableProjectError("unsupported_version", `Portable project version ${String(manifest.version)} is not supported`);
   }
   const projectValue = object(manifest.project, "Portable manifest project");
@@ -197,11 +202,22 @@ export function parsePortableProjectManifest(value: unknown): PortableProjectMan
       descriptor: structuredClone(descriptor),
     });
   });
+  let precisionEvidence: PrecisionEvidenceRef[] | undefined;
+  if (manifest.version === "1.1") {
+    if (!Array.isArray(manifest.precisionEvidence) || manifest.precisionEvidence.length < 1 || manifest.precisionEvidence.length > 128) {
+      throw new PortableProjectError("invalid_manifest", "Invalid precision evidence catalog");
+    }
+    precisionEvidence = manifest.precisionEvidence.map(parsePrecisionEvidenceRef);
+    if (precisionEvidence.some((ref, index) => index > 0 && precisionEvidence![index - 1]!.digest >= ref.digest)) {
+      throw new PortableProjectError("invalid_manifest", "Precision evidence must have unique sorted digests");
+    }
+  }
   return Object.freeze({
     format: PORTABLE_PROJECT_FORMAT,
-    version: PORTABLE_PROJECT_FORMAT_VERSION,
+    version: manifest.version,
     project,
     assets: Object.freeze(assets),
+    ...(precisionEvidence ? { precisionEvidence } : {}),
   });
 }
 
@@ -248,6 +264,7 @@ export function portableManifestEntryPaths(manifest: PortableProjectManifest): r
     PORTABLE_PROJECT_MANIFEST_PATH,
     PORTABLE_PROJECT_WORKSPACE_PATH,
     ...manifest.assets.map((asset) => asset.objectPath),
+    ...(manifest.precisionEvidence ?? []).map(precisionEvidencePath),
   ]);
 }
 

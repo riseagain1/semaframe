@@ -20,6 +20,9 @@ import {
 } from "./archive";
 import { canonicalJsonBytes } from "./canonicalJson";
 import { collectPortableRealityAssetClosure } from "./closure";
+import { collectPortablePrecisionEvidence, precisionEvidencePath } from "./precisionClosure";
+import { defaultPrecisionEvidenceVault, verifyPrecisionEvidence, type PrecisionEvidenceVault } from "../../precision/evidenceVault";
+import { canonicalJson } from "./canonicalJson";
 import {
   PORTABLE_PROJECT_LIMITS,
   PORTABLE_PROJECT_MANIFEST_PATH,
@@ -41,6 +44,7 @@ import {
 } from "./manifest";
 
 export type CreatePortableProjectBundleOptions = Readonly<{
+  evidenceVault?: PrecisionEvidenceVault;
   serializer?: WorkspaceProjectSerializer;
   signal?: AbortSignal;
   verifyProject?: PortableProjectVerifier;
@@ -161,7 +165,15 @@ export async function createPortableProjectBundle(
   for (const descriptor of closure) {
     verifiedAssets.set(descriptor.assetId, await openVerifiedSourceAsset(vault, descriptor, options.signal));
   }
-  const manifest = createPortableProjectManifest(project, projectDigest, projectBlob.size, closure);
+  const evidence = collectPortablePrecisionEvidence(project);
+  const evidenceEntries = [];
+  for (const ref of evidence) {
+    throwIfPortableProjectAborted(options.signal);
+    const blob = await (options.evidenceVault ?? defaultPrecisionEvidenceVault()).open(ref);
+    await verifyPrecisionEvidence(ref, blob);
+    evidenceEntries.push({ path: precisionEvidencePath(ref), blob, crc32: await crc32Blob(blob, { signal: options.signal }) });
+  }
+  const manifest = createPortableProjectManifest(project, projectDigest, projectBlob.size, closure, evidence);
   const manifestBytes = canonicalJsonBytes(manifest);
   if (manifestBytes.byteLength > PORTABLE_PROJECT_LIMITS.maximumManifestBytes) {
     throw new PortableProjectError("size_limit_exceeded", "Portable manifest exceeds its size limit");
@@ -191,6 +203,7 @@ export async function createPortableProjectBundle(
       }
       return { path: asset.objectPath, blob: verified.blob, crc32: verified.crc32 };
     }),
+    ...evidenceEntries,
   ];
   const plan: PortableArchivePlan = planPortableArchive(sourceEntries);
   return Object.freeze({
@@ -232,6 +245,9 @@ function assertManifestClosure(
   manifest: PortableProjectManifest,
   project: WorkspaceProjectFile,
 ): void {
+  if (canonicalJson(collectPortablePrecisionEvidence(project)) !== canonicalJson(manifest.precisionEvidence ?? [])) {
+    throw new PortableProjectError("closure_mismatch", "Portable precision evidence does not match replay history");
+  }
   const closure = collectPortableRealityAssetClosure(project);
   if (closure.length !== manifest.assets.length) {
     throw new PortableProjectError("closure_mismatch", "Portable manifest does not contain the complete Reality replay closure");

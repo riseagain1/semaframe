@@ -118,6 +118,16 @@ import {
   type WorkspaceStateView,
 } from "./contracts";
 import { stableJson } from "./guide";
+import { analyzePrecisionDocument, compactPrecisionReport, parsePrecisionCadComparisonOptions, parsePrecisionSourceOptions, precisionInspectionSummary, PrecisionWorkspaceAnalysisError } from "../precision/workspaceAnalysis";
+import { compareMeasurementToCad } from "../precision/cadComparison";
+import { createPrecisionStudy, parsePrecisionStudy } from "../precision/validation";
+import { PRECISION_LIMITS, type MeasurementGeometry, type PrecisionTriangle, type PrecisionVec3 } from "../precision/types";
+import { sha256DigestBytes } from "../assets/digest";
+import { defaultPrecisionEvidenceVault, parsePrecisionEvidenceRef, type PrecisionEvidenceVault } from "../precision/evidenceVault";
+import { authenticatePrecisionEvidence, PrecisionEvidenceAuthenticationError } from "../precision/evidenceAuthentication";
+import { importMeasurementGeometry, MEASUREMENT_IMPORT_LIMITS, MeasurementImportError } from "../precision/geometryImport";
+import { inspectCaptureBundle } from "../../reconstruction/captureBundle";
+import { readPortableBlobRange } from "../persistence/portable/crc32";
 
 const MAX_SUMMARY_COMPONENTS = 60;
 const MAX_SUMMARY_RESOURCES = 20;
@@ -183,6 +193,8 @@ export type WorkspaceStoreEngineAdapterOptions = Readonly<{
   maxResourceSnapshotBytes?: number;
   /** Test/controlled-host seam. Production browser CAD uses a disposable Worker. */
   cadKernelFactory?: () => Promise<CadKernel>;
+  /** Storage seam for controlled hosts/tests; production uses the browser's verified CAS. */
+  precisionEvidenceVault?: PrecisionEvidenceVault;
 }>;
 
 type StoredPreparation = {
@@ -1520,6 +1532,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
   private readonly maxModelInspectionBytes: number;
   private readonly maxResourceSnapshotBytes: number;
   private readonly cadKernelFactory: (() => Promise<CadKernel>) | undefined;
+  private readonly precisionEvidenceVault: PrecisionEvidenceVault;
 
   constructor(
     readonly store: WorkspaceStore,
@@ -1537,6 +1550,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     this.maxResourceSnapshotBytes = options.maxResourceSnapshotBytes
       ?? WORKSPACE_RESOURCE_SNAPSHOT_MAX_BYTES;
     this.cadKernelFactory = options.cadKernelFactory;
+    this.precisionEvidenceVault = options.precisionEvidenceVault ?? defaultPrecisionEvidenceVault();
     for (const [name, value] of [
       ["maxSummaryComponents", this.maxSummaryComponents],
       ["maxSummaryResources", this.maxSummaryResources],
@@ -1708,7 +1722,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     componentId: string,
     principal: WorkspaceAgentPrincipal,
   ): Promise<WorkspaceComponentStateView> {
-    return this.runSerialized(() => {
+    return this.runSerialized(async () => {
       requireAgentScope(principal, "workspace:read");
       const state = this.store.getState();
       const component = state.components.get(componentId);
@@ -1742,6 +1756,21 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         } : {}),
       });
       const publicState = redactedComponentState(component);
+      let precisionSummary: (ReturnType<typeof precisionInspectionSummary> & { evidence: Awaited<ReturnType<typeof authenticatePrecisionEvidence>> }) | undefined;
+      if (component.type.typeId === "precision-study") {
+        try {
+          const evidence = await authenticatePrecisionEvidence(component.props.document, component.props.evidenceSources, this.precisionEvidenceVault);
+          precisionSummary = { ...precisionInspectionSummary(component.props.document), evidence };
+          const current = this.store.getState();
+          if (current.workspaceId !== state.workspaceId || current.revision !== state.revision || current.registryDigest !== state.registryDigest) {
+            throw new WorkspaceEngineError("stale_workspace_revision", "Workspace changed during precision evidence verification. Reinspect and retry.", { retryable: true });
+          }
+        } catch (cause) {
+          if (cause instanceof WorkspaceEngineError) throw cause;
+          if (cause instanceof PrecisionEvidenceAuthenticationError) throw new WorkspaceEngineError(cause.code, cause.message);
+          throw new WorkspaceEngineError("invalid_precision_study", cause instanceof Error ? cause.message : "Precision study is invalid.");
+        }
+      }
       let publicProps = publicState.props;
       let publicDurableState = publicState.durableState;
       const pinnedManifest = manifestForAgent(manifest);
@@ -1791,7 +1820,8 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         pinnedManifest,
         interactionCompatibility,
         eventConnections: asJSON(publicEventConnections),
-        currentGeometry: currentGeometry(component, policy),
+        currentGeometry: precisionSummary === undefined ? currentGeometry(component, policy)
+          : asJSON({ ...(currentGeometry(component, policy) as Record<string, JSONValue>), precision: precisionSummary }),
         activeResizePolicy: asJSON(policy),
         currentVisualEffects: asJSON(component.visualEffects ?? DEFAULT_COMPONENT_VISUAL_EFFECTS),
         visualEffectsPolicy: asJSON({
@@ -1895,6 +1925,155 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         );
       }
       return structuredClone(inspection);
+    });
+  }
+
+  analyzePrecision(
+    componentId: string,
+    action: string,
+    options: unknown,
+    principal: WorkspaceAgentPrincipal,
+  ): Promise<JSONValue> {
+    return this.runSerialized(async () => {
+      requireAgentScope(principal, "workspace:read");
+      const state = this.store.getState();
+      const component = state.components.get(componentId);
+      if (!component) throw new WorkspaceEngineError("component_not_found", `Workspace component ${componentId} does not exist`);
+      if (component.type.typeId !== "precision-study") {
+        throw new WorkspaceEngineError("invalid_precision_study", "Precision analysis requires a precision-study component.");
+      }
+      try {
+        const evidence = action === "prepare_source" ? undefined
+          : await authenticatePrecisionEvidence(component.props.document, component.props.evidenceSources, this.precisionEvidenceVault);
+        const afterEvidence = this.store.getState();
+        if (afterEvidence.workspaceId !== state.workspaceId || afterEvidence.revision !== state.revision || afterEvidence.registryDigest !== state.registryDigest) {
+          throw new WorkspaceEngineError("stale_workspace_revision", "Workspace changed during precision evidence verification. Reinspect and retry.", { retryable: true });
+        }
+        if (action === "inspect" && component.props.document === null) {
+          if (!options || typeof options !== "object" || Array.isArray(options) || Object.keys(options).length) {
+            throw new WorkspaceEngineError("invalid_precision_options", "inspect accepts an empty options object only.");
+          }
+          return asJSON({ workspace_id: state.workspaceId, workspace_revision: state.revision, registry_digest: state.registryDigest,
+            component_id: componentId, action, analysis: { ...precisionInspectionSummary(null), evidence },
+            evidence_sources: (Array.isArray(component.props.evidenceSources) ? component.props.evidenceSources : []).map(parsePrecisionEvidenceRef) });
+        }
+        if (action === "prepare_source") {
+          const input = parsePrecisionSourceOptions(options);
+          const references = (Array.isArray(component.props.evidenceSources) ? component.props.evidenceSources : [])
+            .map(parsePrecisionEvidenceRef);
+          const ref = references.find((source) => source.digest === input.sourceDigest);
+          if (!ref) throw new WorkspaceEngineError("precision_source_not_registered", "The requested source digest is not registered on this precision study.");
+          let blob: Blob;
+          try { blob = await this.precisionEvidenceVault.open(ref); } catch {
+            throw new WorkspaceEngineError("precision_source_unavailable", "The approved evidence bytes are missing or failed digest verification. Relink the exact source bytes before retrying.");
+          }
+          if (ref.kind === "capture-bundle") {
+            if (input.format !== "obj") throw new WorkspaceEngineError("invalid_precision_options", "A native capture bundle provides an OBJ measurement mesh.");
+            blob = (await inspectCaptureBundle(blob, { expectedSha256: ref.digest })).mesh;
+          }
+          if (blob.size > MEASUREMENT_IMPORT_LIMITS.maximumBytes) {
+            throw new WorkspaceEngineError("precision_source_capacity_exceeded", "Source geometry exceeds the bounded parser byte limit. The complete source remains retained; no implicit downsampling was performed.");
+          }
+          const geometry = importMeasurementGeometry({
+            data: await readPortableBlobRange(blob, 0, blob.size), format: input.format,
+            geometryId: `measurement_${ref.digest.slice(7, 31)}`, units: input.units ?? "unknown",
+            coordinateBasis: input.coordinateBasis, provenance: input.provenance,
+          });
+          const document = createPrecisionStudy(geometry);
+          const preparedEvidence = await authenticatePrecisionEvidence(document, component.props.evidenceSources, this.precisionEvidenceVault);
+          if (encodedBytes(document) > 900_000) {
+            throw new WorkspaceEngineError("precision_source_capacity_exceeded", "Normalized measurement geometry exceeds the safe prepared-batch response budget. Original evidence remains retained; no implicit sampling was performed.");
+          }
+          const current = this.store.getState();
+          if (current.workspaceId !== state.workspaceId || current.revision !== state.revision || current.registryDigest !== state.registryDigest) {
+            throw new WorkspaceEngineError("stale_workspace_revision", "Workspace changed during source preparation. Reinspect and retry.", { retryable: true });
+          }
+          return asJSON({ workspace_id: state.workspaceId, workspace_revision: state.revision, registry_digest: state.registryDigest,
+            component_id: componentId, action, source: ref, document,
+            analysis: { ...analyzePrecisionDocument(document), evidence: preparedEvidence },
+            commit: { mutated: false, requiredWorkflow: "begin_workspace_update_then_submit_workspace_batch",
+              guidance: "Apply the returned document to this precision-study's props.document through a normal prepared update. Unknown source scale stays unverified; source evidence remains byte-preserved separately." } });
+        }
+        if (action === "compare_cad") {
+          const { targetComponentId } = parsePrecisionCadComparisonOptions(options);
+          const target = state.components.get(targetComponentId);
+          if (!target || target.type.typeId !== "cad-part") {
+            throw new WorkspaceEngineError("invalid_precision_target", "compare_cad requires an existing cad-part target.");
+          }
+          let ancestor: Readonly<ComponentInstance> | undefined = target;
+          const visited = new Set<string>();
+          while (ancestor) {
+            const placement = ancestor.placement;
+            if (visited.has(ancestor.id) || placement.space !== "world3d"
+              || Object.values(placement.position).some((value) => value !== 0)
+              || Object.values(placement.rotation).some((value) => value !== 0)
+              || Object.values(placement.scale).some((value) => value !== 1)) {
+              throw new WorkspaceEngineError("precision_frame_mismatch", "CAD comparison currently requires identity placement for the target and every parent. Register geometry in the same working frame; transformed targets are not silently compared in local coordinates.");
+            }
+            visited.add(ancestor.id);
+            if (ancestor.parentId !== undefined && !state.components.has(ancestor.parentId)) {
+              throw new WorkspaceEngineError("precision_frame_mismatch", "The CAD target parent frame is missing.");
+            }
+            ancestor = ancestor.parentId === undefined ? undefined : state.components.get(ancestor.parentId);
+          }
+          const study = parsePrecisionStudy(component.props.document);
+          const definition = parseCadPartDefinition(target.props.definition);
+          const definitionDigest = cadPartDefinitionDigest(definition);
+          const kernel = await openCadEvaluationKernel(this.cadKernelFactory);
+          let evaluated;
+          try {
+            evaluated = await kernel.evaluatePart(definition, { linearDeflectionM: 0.0005,
+              angularDeflectionRad: 0.15, includeMeshes: true, budgetMs: MAX_AGENT_CAD_EVALUATION_OPERATION_MS });
+          } finally { await kernel.dispose(); }
+          const positions: PrecisionVec3[] = [];
+          const triangles: PrecisionTriangle[] = [];
+          let maxMagnitude = 1;
+          for (const { mesh } of evaluated.meshes) {
+            if (positions.length + mesh.positions.length / 3 > PRECISION_LIMITS.maximumVertices
+              || triangles.length + mesh.indices.length / 3 > PRECISION_LIMITS.maximumTriangles) {
+              throw new WorkspaceEngineError("precision_comparison_capacity_exceeded", "The evaluated CAD mesh exceeds the bounded precision geometry capacity. No implicit downsampling was performed.");
+            }
+            const offset = positions.length;
+            for (let index = 0; index < mesh.positions.length; index += 3) {
+              const point: PrecisionVec3 = [mesh.positions[index]!, mesh.positions[index + 1]!, mesh.positions[index + 2]!];
+              maxMagnitude = Math.max(maxMagnitude, ...point.map(Math.abs));
+              positions.push(point);
+            }
+            for (let index = 0; index < mesh.indices.length; index += 3) {
+              triangles.push([mesh.indices[index]! + offset, mesh.indices[index + 1]! + offset, mesh.indices[index + 2]! + offset]);
+            }
+          }
+          const targetGeometry: MeasurementGeometry = {
+            geometryId: `cad:${targetComponentId}`, units: "metre", coordinateBasis: "RUB", positions, triangles,
+            source: { format: "host-evaluated-occt-tessellation", provenance: "Host evaluation of current CAD definition in the explicit shared identity working frame",
+              sha256: sha256DigestBytes(new TextEncoder().encode(JSON.stringify({ definitionDigest, positions, triangles }))) },
+          };
+          // CAD rendering buffers are Float32. Account for their rounding as
+          // well as OCCT's requested tessellation deviation, especially far from origin.
+          const bufferRoundingBoundM = Math.sqrt(3) * maxMagnitude * 2 ** -23;
+          const comparison = compareMeasurementToCad(study, targetGeometry, {
+            targetDefinitionDigest: definitionDigest, tessellationBoundM: 0.0005 + bufferRoundingBoundM,
+          });
+          const current = this.store.getState();
+          if (current.workspaceId !== state.workspaceId || current.revision !== state.revision || current.registryDigest !== state.registryDigest) {
+            throw new WorkspaceEngineError("stale_workspace_revision", "Workspace changed during CAD comparison. Reinspect and retry against the current revision.", { retryable: true });
+          }
+          return asJSON({ workspace_id: state.workspaceId, workspace_revision: state.revision,
+            registry_digest: state.registryDigest, component_id: componentId, action,
+            target_component_id: targetComponentId, target_definition_digest: definitionDigest,
+            comparison_frame: "shared_identity_working_frame_not_geodetic", buffer_rounding_bound_m: bufferRoundingBoundM,
+            analysis: { ...analyzePrecisionDocument(study), evidence }, comparison: { ...comparison, sourceReport: compactPrecisionReport(comparison.sourceReport) } });
+        }
+        const analysis = analyzePrecisionDocument(component.props.document, action, options);
+        return asJSON({ workspace_id: state.workspaceId, workspace_revision: state.revision,
+          registry_digest: state.registryDigest, component_id: componentId, action, analysis: { ...analysis, evidence } });
+      } catch (cause) {
+        if (cause instanceof WorkspaceEngineError) throw cause;
+        if (cause instanceof PrecisionEvidenceAuthenticationError) throw new WorkspaceEngineError(cause.code, cause.message);
+        if (cause instanceof PrecisionWorkspaceAnalysisError) throw new WorkspaceEngineError(cause.code, cause.message);
+        if (cause instanceof MeasurementImportError) throw new WorkspaceEngineError(`precision_source_${cause.code}`, cause.message);
+        throw new WorkspaceEngineError("precision_analysis_failed", "The bounded precision analysis could not be completed.");
+      }
     });
   }
 

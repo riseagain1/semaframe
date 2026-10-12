@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { spawnOwnedProcessTree } from "./owned-process-tree.mjs";
 
@@ -57,32 +58,55 @@ function startupFailure(message, diagnostics) {
   return new Error(`${message}${safeDiagnostics ? ` Chrome diagnostics: ${safeDiagnostics}` : " Chrome produced no safe diagnostics."}`);
 }
 
+function stderrTail(path) {
+  let descriptor;
+  try {
+    descriptor = openSync(path, "r");
+    const size = fstatSync(descriptor).size;
+    const buffer = Buffer.alloc(Math.min(size, MAX_STDERR_CHARS));
+    const bytesRead = readSync(descriptor, buffer, 0, buffer.length, Math.max(0, size - buffer.length));
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
 export async function launchChromeForSmoke({
   executable,
   profile,
   extraArgs = [],
   timeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
 }) {
-  const browserTree = spawnOwnedProcessTree(
-    executable,
-    [
-      ...extraArgs,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--remote-debugging-address=127.0.0.1",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profile}`,
-      "about:blank",
-    ],
-    { stdio: ["ignore", "ignore", "pipe"] },
-    { termGraceMs: 5_000, forceGraceMs: 5_000 },
-  );
+  // Chrome can give detached helpers inherited stderr handles. A pipe would
+  // keep ChildProcess's "close" pending after Browser.close and after its PGID
+  // disappears. Keep diagnostics in this disposable, private profile instead;
+  // never weaken the owned-tree guard or signal a vanished/reused PGID.
+  const stderrPath = join(profile, ".semaframe-smoke-stderr.log");
+  const stderrDescriptor = openSync(stderrPath, "wx+", 0o600);
+  let browserTree;
+  try {
+    browserTree = spawnOwnedProcessTree(
+      executable,
+      [
+        ...extraArgs,
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profile}`,
+        "about:blank",
+      ],
+      { stdio: ["ignore", "ignore", stderrDescriptor] },
+      { termGraceMs: 5_000, forceGraceMs: 5_000 },
+    );
+  } finally {
+    closeSync(stderrDescriptor);
+  }
   const { child: browser } = browserTree;
 
-  let stderr = "";
-  browser.stderr.on("data", (chunk) => {
-    stderr = `${stderr}${String(chunk)}`.slice(-MAX_STDERR_CHARS);
-  });
+  const diagnosticText = () => sanitizeChromeSmokeDiagnostic(stderrTail(stderrPath));
 
   let exitState;
   let spawnFailed = false;
@@ -98,6 +122,7 @@ export async function launchChromeForSmoke({
   const started = Date.now();
   try {
     while (Date.now() - started < timeoutMs) {
+      const stderr = stderrTail(stderrPath);
       if (spawnFailed) {
         throw startupFailure("Chrome could not be started.", stderr);
       }
@@ -113,12 +138,12 @@ export async function launchChromeForSmoke({
           browser,
           browserTree,
           cdpPort: port,
-          diagnosticText: () => sanitizeChromeSmokeDiagnostic(stderr),
+          diagnosticText,
         };
       }
       await delay(50);
     }
-    throw startupFailure("Chrome did not expose DevTools within the startup deadline.", stderr);
+    throw startupFailure("Chrome did not expose DevTools within the startup deadline.", stderrTail(stderrPath));
   } catch (error) {
     browser.off("exit", recordExit);
     browser.off("error", recordSpawnError);

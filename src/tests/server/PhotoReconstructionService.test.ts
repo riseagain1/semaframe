@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentAssetIngress, AgentAssetIngressError } from "../../../server/agent/AgentAssetIngress";
+import { createCaptureBundle } from "../../../server/reconstruction/createCaptureBundle";
+import { inspectCaptureBundle } from "../../reconstruction/captureBundle";
+import { readPortableBlobRange } from "../../workspace/persistence/portable/crc32";
 import {
   PhotoReconstructionService,
   type PhotoReconstructionBackend,
@@ -123,6 +126,24 @@ class HangingBackend implements PhotoReconstructionBackend {
   }
 }
 
+class RetainingBackend extends SuccessfulBackend {
+  override async run(request: PhotoReconstructionBackendRequest) {
+    const visual = await super.run(request);
+    if (!request.retainMeasurementBundle) return visual;
+    const objPath = join(request.outputDirectory, "capture.obj");
+    await writeFile(objPath, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    const measurementBundlePath = join(request.outputDirectory, "capture.zip");
+    await createCaptureBundle({
+      outputDirectory: request.outputDirectory,
+      objPath, artifacts: [objPath], outputPath: measurementBundlePath,
+      visualPath: visual.outputPath, backend: this.identity,
+      profile: request.profile, inputPhotoCount: request.photos.length,
+      signal: request.signal, reserveOutputBytes: async () => undefined,
+    });
+    return { ...visual, measurementBundlePath };
+  }
+}
+
 class SlowAbortBackend implements PhotoReconstructionBackend {
   readonly identity = Object.freeze({ id: "test-slow-abort", version: "1.0.0" });
   request?: PhotoReconstructionBackendRequest;
@@ -237,6 +258,115 @@ afterEach(async () => {
 });
 
 describe("PhotoReconstructionService", () => {
+  it("retains an opt-in native bundle after visual completion while deleting temporary source photos", async () => {
+    const backend = new RetainingBackend();
+    const { service, assetIngress } = await setup(backend);
+    const photos: SourcePhoto[] = [
+      { id: "front", mediaType: "image/png", bytes: png(0) },
+      { id: "rear", mediaType: "image/png", bytes: png(1) },
+    ];
+    const input = reconstructionInput(photos, { retainMeasurementBundle: true });
+    const begun = await service.begin(principal, input);
+    await expect(service.begin(principal, { ...input, retainMeasurementBundle: false })).rejects.toMatchObject({ status: 409 });
+    await uploadAll(service, photos, begun);
+    await service.start(begun.job.jobId, principal.authorizationId);
+    const ready = await waitForTerminal(service, begun.job.jobId);
+    expect(ready.status).toBe("ready");
+    const bundle = ready.result!.measurementBundle!;
+    expect(bundle).toMatchObject({ format: "capture-bundle", mediaType: "application/vnd.semaframe.capture+zip" });
+    for (const source of backend.requests[0]!.photos) await expect(lstat(source.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await service.finalize(begun.job.jobId, principal, { expectedOutputSha256: ready.result!.sha256 });
+    await assetIngress.complete(ready.result!.candidateHandle, "workspace_main");
+    await expect(assetIngress.inspect(bundle.candidateHandle, "wrong_workspace")).rejects.toMatchObject({ status: 404 });
+    const opened = await assetIngress.open(bundle.candidateHandle, "workspace_main");
+    const verified = await inspectCaptureBundle(await new Response(opened.body).blob(), {
+      expectedSha256: bundle.sha256, expectedVisualSha256: ready.result!.sha256,
+    });
+    expect(verified.manifest.sourcePhotosRetained).toBe(false);
+    expect(new TextDecoder().decode(await readPortableBlobRange(verified.mesh, 0, verified.mesh.size))).toContain("f 1 2 3");
+    opened.release();
+    // Replay preserves both identities after the visual half has been acknowledged.
+    expect(await service.finalize(begun.job.jobId, principal, { expectedOutputSha256: ready.result!.sha256 })).toEqual(ready.result);
+    await assetIngress.complete(bundle.candidateHandle, "workspace_main");
+  });
+
+  it("rolls back both candidates if retained capture staging fails", async () => {
+    const { service, assetIngress } = await setup(new RetainingBackend());
+    const photos: SourcePhoto[] = [{ id: "front", mediaType: "image/png", bytes: png(0) },
+      { id: "rear", mediaType: "image/png", bytes: png(1) }];
+    const begun = await service.begin(principal, reconstructionInput(photos, { retainMeasurementBundle: true }));
+    await uploadAll(service, photos, begun);
+    const begin = vi.spyOn(assetIngress, "begin");
+    const originalUpload = assetIngress.upload.bind(assetIngress);
+    vi.spyOn(assetIngress, "upload").mockImplementation(async (...args) => {
+      if (args[2] === "application/vnd.semaframe.capture+zip") {
+        throw new AgentAssetIngressError(507, "asset_upload_storage_exhausted", "capture reserve depleted");
+      }
+      return originalUpload(...args);
+    });
+    await service.start(begun.job.jobId, principal.authorizationId);
+    expect(await waitForTerminal(service, begun.job.jobId)).toMatchObject({ status: "failed", error: { code: "resource_exhausted" } });
+    expect(begin).toHaveBeenCalledTimes(2);
+    for (const invocation of begin.mock.results) {
+      const grant = await invocation.value;
+      await expect(assetIngress.inspect(grant.candidateHandle, "workspace_main")).rejects.toMatchObject({ status: 404 });
+    }
+  });
+
+  it("cancellation removes both ready candidates and unrequested retention fails closed", async () => {
+    const backend = new RetainingBackend();
+    const { service, assetIngress } = await setup(backend);
+    const photos: SourcePhoto[] = [{ id: "front", mediaType: "image/png", bytes: png(0) },
+      { id: "rear", mediaType: "image/png", bytes: png(1) }];
+    const begun = await service.begin(principal, reconstructionInput(photos, { retainMeasurementBundle: true }));
+    await uploadAll(service, photos, begun);
+    await service.start(begun.job.jobId, principal.authorizationId);
+    const ready = await waitForTerminal(service, begun.job.jobId);
+    await service.cancel(begun.job.jobId, principal.authorizationId);
+    for (const handle of [ready.result!.candidateHandle, ready.result!.measurementBundle!.candidateHandle]) {
+      await expect(assetIngress.inspect(handle, "workspace_main")).rejects.toMatchObject({ status: 404 });
+    }
+    const { service: unrequested } = await setup({
+      identity: backend.identity,
+      run: (request) => backend.run({ ...request, retainMeasurementBundle: true }),
+    });
+    const defaultJob = await unrequested.begin(principal, reconstructionInput(photos));
+    await uploadAll(unrequested, photos, defaultJob);
+    await unrequested.start(defaultJob.job.jobId, principal.authorizationId);
+    expect(await waitForTerminal(unrequested, defaultJob.job.jobId)).toMatchObject({ status: "failed", error: { code: "output_invalid" } });
+  });
+
+  it("retains a failed second-candidate cleanup handle for retry, and expiry removes both outputs", async () => {
+    let now = Date.now();
+    const { service, assetIngress } = await setup(new RetainingBackend(), { now: () => now, readyTtlMs: 1_000 });
+    const photos: SourcePhoto[] = [{ id: "front", mediaType: "image/png", bytes: png(0) },
+      { id: "rear", mediaType: "image/png", bytes: png(1) }];
+    const begun = await service.begin(principal, reconstructionInput(photos, { retainMeasurementBundle: true }));
+    await uploadAll(service, photos, begun);
+    await service.start(begun.job.jobId, principal.authorizationId);
+    const ready = await waitForTerminal(service, begun.job.jobId);
+    const handle = ready.result!.measurementBundle!.candidateHandle;
+    const originalCancel = assetIngress.cancelFromAgent.bind(assetIngress);
+    let refuse = true;
+    vi.spyOn(assetIngress, "cancelFromAgent").mockImplementation(async (...args) => {
+      if (args[0] === handle && refuse) { refuse = false; throw new Error("temporary delete failure"); }
+      return originalCancel(...args);
+    });
+    await expect(service.cancel(begun.job.jobId, principal.authorizationId)).rejects.toMatchObject({ code: "photo_reconstruction_cleanup_failed" });
+    await expect(assetIngress.inspect(handle, "workspace_main")).resolves.toMatchObject({ status: "ready" });
+    await expect(service.cancel(begun.job.jobId, principal.authorizationId)).resolves.toMatchObject({ cancelled: true });
+    await expect(assetIngress.inspect(handle, "workspace_main")).rejects.toMatchObject({ status: 404 });
+    const next = await service.begin(principal, reconstructionInput(photos, { retainMeasurementBundle: true, requestId: "retained-expiry-request" }));
+    await uploadAll(service, photos, next);
+    await service.start(next.job.jobId, principal.authorizationId);
+    const expiring = await waitForTerminal(service, next.job.jobId);
+    now += 1_001;
+    await service.sweepExpired();
+    for (const candidate of [expiring.result!, expiring.result!.measurementBundle!]) {
+      await expect(assetIngress.inspect(candidate.candidateHandle, "workspace_main")).rejects.toMatchObject({ status: 404 });
+    }
+  });
+
   it("coalesces parallel backend capability probes and serves the bounded cache", async () => {
     const backend = new SuccessfulBackend();
     const probe = vi.spyOn(backend, "probe");

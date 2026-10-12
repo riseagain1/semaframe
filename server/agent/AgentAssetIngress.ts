@@ -10,9 +10,10 @@ export const DEFAULT_AGENT_ASSET_MAX_BYTES = 256 * 1024 * 1024;
 export const DEFAULT_AGENT_ASSET_STAGED_BYTES = 512 * 1024 * 1024;
 export const DEFAULT_AGENT_ASSET_MINIMUM_FREE_RESERVE_BYTES = 512 * 1024 * 1024;
 export const MAX_AGENT_ASSET_RESERVATION_TTL_MS = 30 * 60_000;
+export const MAX_AGENT_MEASUREMENT_SOURCE_BYTES = 16 * 1024 * 1024;
 
-export type AgentAssetFormat = "ply" | "spz" | "sog";
-export type AgentAssetPurpose = "generic_import" | "photo_reconstruction";
+export type AgentAssetFormat = "ply" | "spz" | "sog" | "capture-bundle" | "obj" | "xyz-csv";
+export type AgentAssetPurpose = "generic_import" | "photo_reconstruction" | "photo_measurement" | "measurement_source";
 
 export type AgentAssetUploadStoragePolicy = Readonly<{
   /** Free bytes that must remain after the complete pending upload is staged. */
@@ -200,6 +201,9 @@ const SAFE_MEDIA_TYPES: Readonly<Record<AgentAssetFormat, ReadonlySet<string>>> 
   ply: new Set(["application/octet-stream", "application/ply", "model/ply"]),
   spz: new Set(["application/octet-stream", "application/x-spz", "application/vnd.google.spz", "model/spz", "model/vnd.spz"]),
   sog: new Set(["application/octet-stream", "application/zip", "application/vnd.playcanvas.sog", "model/sog", "model/vnd.sog"]),
+  "capture-bundle": new Set(["application/vnd.semaframe.capture+zip"]),
+  obj: new Set(["model/obj", "text/plain", "application/octet-stream"]),
+  "xyz-csv": new Set(["text/csv", "text/plain", "application/octet-stream"]),
 };
 const ASSET_ROOT_PREFIX = "semaframe-agent-assets-";
 const ASSET_QUARANTINE_PREFIX = "semaframe-agent-assets-quarantine-";
@@ -307,8 +311,8 @@ function normalizeInput(input: BeginAgentAssetImportInput, maxBytes: number): Be
   if (!WORKSPACE_ID_PATTERN.test(input.workspaceId)) {
     throw new AgentAssetIngressError(400, "invalid_request", "workspace_id must be a valid Workspace identifier.");
   }
-  if (!(["ply", "spz", "sog"] as const).includes(input.format)) {
-    throw new AgentAssetIngressError(415, "unsupported_asset_format", "format must be ply, spz, or sog.");
+  if (!(Object.keys(SAFE_MEDIA_TYPES) as AgentAssetFormat[]).includes(input.format)) {
+    throw new AgentAssetIngressError(415, "unsupported_asset_format", "Unsupported asset format.");
   }
   const mediaType = input.mediaType.toLowerCase();
   if (!MEDIA_TYPE_PATTERN.test(mediaType) || !SAFE_MEDIA_TYPES[input.format].has(mediaType)) {
@@ -325,12 +329,22 @@ function normalizeInput(input: BeginAgentAssetImportInput, maxBytes: number): Be
     throw new AgentAssetIngressError(400, "invalid_request", "sha256 must use the sha256:<64 lowercase hex> form.");
   }
   const purpose = input.purpose ?? "generic_import";
-  if (purpose !== "generic_import" && purpose !== "photo_reconstruction") {
+  if (purpose !== "generic_import" && purpose !== "photo_reconstruction" && purpose !== "photo_measurement" && purpose !== "measurement_source") {
     throw new AgentAssetIngressError(
       400,
       "invalid_request",
-      "purpose must be generic_import or photo_reconstruction.",
+      "Unsupported asset purpose.",
     );
+  }
+  if ((input.format === "capture-bundle") !== (purpose === "photo_measurement")) {
+    throw new AgentAssetIngressError(400, "invalid_request", "Capture bundles require the dedicated photo_measurement purpose.");
+  }
+  if ((purpose === "measurement_source" && !["obj", "ply", "xyz-csv"].includes(input.format))
+    || (["obj", "xyz-csv"].includes(input.format) && purpose !== "measurement_source")) {
+    throw new AgentAssetIngressError(400, "invalid_request", "OBJ and XYZ CSV require measurement_source; measurement sources accept only OBJ, ordinary PLY or XYZ CSV.");
+  }
+  if (purpose === "measurement_source" && input.byteLength > MAX_AGENT_MEASUREMENT_SOURCE_BYTES) {
+    throw new AgentAssetIngressError(413, "asset_too_large", "Measurement sources exceed the bounded 16 MiB import limit; no automatic downsampling is performed.");
   }
   return Object.freeze({
     requestId: input.requestId,

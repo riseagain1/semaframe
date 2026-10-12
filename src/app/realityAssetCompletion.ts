@@ -106,7 +106,7 @@ export class RealityAssetCompletionLedger<T> {
 
 export type RealityAssetCompletionSource = "agent" | "photo-reconstruction";
 
-export type RealityAssetCandidatePurpose = "generic_import" | "photo_reconstruction";
+export type RealityAssetCandidatePurpose = "generic_import" | "photo_reconstruction" | "photo_measurement" | "measurement_source";
 
 /**
  * Signals that a completion attempt was rejected without consuming its staged

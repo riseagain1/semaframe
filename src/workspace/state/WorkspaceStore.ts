@@ -1,5 +1,7 @@
 import type { ValidateFunction } from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
+import { parsePrecisionStudy } from "../precision/validation";
+import { parsePrecisionEvidenceRef } from "../precision/evidenceVault";
 import { DEFAULT_ASSET_REGISTRY } from "../../assets/AssetRegistry";
 import {
   parseRealityAssetCalibration,
@@ -2908,6 +2910,14 @@ export class WorkspaceStore {
       assertSpatialAssetProps(manifest, component.props);
       assertCadPartProps(manifest, component.props);
       assertRealityAssetComponentProps(state, manifest, component.id, component.props);
+      if (component.type.typeId === "precision-study") {
+        try {
+          if (component.props.document !== null) parsePrecisionStudy(component.props.document);
+          for (const ref of (component.props.evidenceSources ?? []) as unknown[]) parsePrecisionEvidenceRef(ref);
+        } catch (cause) {
+          throw new WorkspaceStoreError(cause instanceof Error ? cause.message : String(cause), "invalid_precision_study");
+        }
+      }
       if (component.type.typeId === "spatial-entity") {
         if (component.props.collision !== undefined && !spatialCollisionConfigFromProps(component.props)) {
           throw new WorkspaceStoreError(

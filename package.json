@@ -32,6 +32,7 @@
     "docs/ecosystem/",
     "docs/extensions/",
     "docs/hardware-support.md",
+    "docs/precision-acceptance.md",
     "docs/release-v0.4.0-rc.2.md",
     "examples/diagnostics/",
     "index.html",
@@ -92,6 +93,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "audit:dependencies": "npm audit --audit-level=moderate",
     "lint": "eslint src server scripts vite.config.ts vite.xr.config.ts vite.shared.ts eslint.config.js",
     "test:xr:launcher": "node --test scripts/npm-launcher.test.mjs scripts/owned-process-tree.test.mjs scripts/root-env.test.mjs",
     "smoke:xr:launcher": "node scripts/xr-launcher-smoke.mjs",
@@ -110,6 +112,7 @@
     "test:p2:ecosystem": "npm run test:extensions && npm run test:ecosystem && npm run test:providers && npm run test:portable-project && npm run test:scene-exchange && npm run test:bridge:adapters",
     "smoke:workspace": "node scripts/workspace-smoke.mjs",
     "smoke:agent": "node scripts/agent-smoke.mjs",
+    "smoke:precision": "node scripts/agent-smoke.mjs --precision",
     "benchmark:workspace": "tsx scripts/workspace-performance-benchmark.ts",
     "test:performance:workspace": "vitest run src/tests/performance/WorkspacePerformanceBenchmark.test.ts",
     "demo:capture": "node scripts/demo-video-capture.mjs",
@@ -183,9 +186,9 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.2.0",
     "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.2.0",
     "@monogrid/gainmap-js": "^3.1.0",
     "@sparkjsdev/spark": "2.1.0",
     "@vitejs/plugin-react": "^4.7.0",
@@ -198,7 +201,7 @@
     "replicad": "1.0.0",
     "replicad-opencascadejs": "1.0.0",
     "saxes": "^6.0.0",
-    "sharp": "^0.35.0",
+    "sharp": "^0.35.5",
     "three": "0.180.0",
     "tsx": "^4.23.12",
     "vite": "^7.1.2",
@@ -217,7 +220,7 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@types/three": "0.180.0",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9.39.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.4.0",
@@ -225,6 +228,6 @@
     "remotion": "^4.0.512",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.68.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   }
 }

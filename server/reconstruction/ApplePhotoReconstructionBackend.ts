@@ -16,6 +16,7 @@ import type {
   PhotoReconstructionBackendResult,
 } from "./PhotoReconstructionService";
 import { AppleObjectCaptureBackend } from "./AppleObjectCaptureBackend";
+import { createCaptureBundle } from "./createCaptureBundle";
 import {
   RECONSTRUCTION_DETAILS,
   ReconstructionBackendError,
@@ -304,11 +305,36 @@ export class ApplePhotoReconstructionBackend implements PhotoReconstructionBacke
       });
       await boundedOutputTreeBytes(request.outputDirectory, maximumTreeBytes);
       await reserveOutputBytes(0);
+      let measurementBundlePath: string | undefined;
+      if (request.retainMeasurementBundle === true) {
+        measurementBundlePath = join(request.outputDirectory, "measurement.capture.zip");
+        await createCaptureBundle({
+          outputDirectory: request.outputDirectory,
+          objPath: mesh.objPath,
+          artifacts: mesh.artifacts,
+          outputPath: measurementBundlePath,
+          visualPath: outputPath,
+          backend: this.identity,
+          profile: request.profile,
+          inputPhotoCount: request.photos.length,
+          registeredPhotoCount,
+          signal: request.signal,
+          reserveOutputBytes: async (remainingBytes) => {
+            const treeBytes = await boundedOutputTreeBytes(request.outputDirectory, maximumTreeBytes);
+            const availableBytes = await checkedAvailableOutputBytes(request.outputDirectory, this.#availableOutputBytes);
+            if (treeBytes + remainingBytes > maximumTreeBytes || availableBytes < BigInt(remainingBytes)
+              + BigInt(PHOTO_RECONSTRUCTION_LIMITS.objectCaptureMinimumFreeReserveBytes)) {
+              throw new PhotoReconstructionBackendError("resource_exhausted", true);
+            }
+          },
+        });
+      }
       request.onProgress({ phase: "packing", progress: 0.94, registeredPhotoCount });
 
       return Object.freeze({
         outputPath,
         format: "ply",
+        ...(measurementBundlePath ? { measurementBundlePath } : {}),
         registeredPhotoCount,
         warnings: Object.freeze([
           ...partialWarning,

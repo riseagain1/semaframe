@@ -11,7 +11,7 @@ describe("universal component registry", () => {
     expect(BUILTIN_COMPONENT_TYPE_IDS).toEqual([
       "stage-3d", "spatial-entity", "group", "panel", "text", "image",
       "video-player", "web-panel", "data-panel", "annotation", "timer", "checklist", "chart", "table", "document", "button",
-      "spatial-primitive", "model-assembly", "cad-part", "gaussian-splat",
+      "spatial-primitive", "model-assembly", "cad-part", "gaussian-splat", "precision-study",
     ]);
     const rebuilt = new ComponentRegistry([...DEFAULT_COMPONENT_REGISTRY.list()].reverse());
     expect(rebuilt.digest).toBe(DEFAULT_COMPONENT_REGISTRY.digest);
@@ -22,7 +22,7 @@ describe("universal component registry", () => {
     // while spatial-entity adds collision-aware 1.3, physics-aware 1.4,
     // master-switch 1.5, and movable 1.6 contracts. Exact primitives and
     // model assemblies gain move_to in pinned 1.1 contracts.
-    expect(rebuilt.list()).toHaveLength(57);
+    expect(rebuilt.list()).toHaveLength(58);
     for (const typeId of BUILTIN_COMPONENT_TYPE_IDS) {
       const expectedVersion = typeId === "spatial-entity"
         ? "1.6.0"
@@ -32,7 +32,7 @@ describe("universal component registry", () => {
           ? "1.1.0"
           : typeId === "cad-part"
             ? "1.0.0"
-          : typeId === "gaussian-splat"
+          : typeId === "gaussian-splat" || typeId === "precision-study"
           ? "1.0.0"
           : "1.2.0";
       expect(rebuilt.require(typeId).version).toBe(expectedVersion);

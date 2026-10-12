@@ -32,6 +32,8 @@ export type WorkspaceRealityAssetsProps = Readonly<{
   reconstructionJob?: PhotoReconstructionJobView;
   reconstructionBusy?: boolean;
   reconstructionStatus?: string;
+  retainMeasurementBundle?: boolean;
+  onRetainMeasurementBundle?: (retain: boolean) => void;
   onImport?: () => void;
   onReconstruct?: () => void;
   onReconstructionProfile?: (profile: PhotoReconstructionProfile) => void;
@@ -77,6 +79,8 @@ export function WorkspaceRealityAssets({
   reconstructionJob,
   reconstructionBusy = false,
   reconstructionStatus,
+  retainMeasurementBundle = false,
+  onRetainMeasurementBundle,
   onImport,
   onReconstruct,
   onReconstructionProfile,
@@ -127,6 +131,12 @@ export function WorkspaceRealityAssets({
               : `${reconstructionCapability.backend.id} is ready.`}
           </p>
         )}
+        <label>
+          <input type="checkbox" checked={retainMeasurementBundle}
+            disabled={disabled || reconstructionBusy || !onRetainMeasurementBundle}
+            onChange={(event) => onRetainMeasurementBundle?.(event.target.checked)} />
+          Keep native mesh and measurement evidence (original photos remain temporary)
+        </label>
         <button
           type="button"
           disabled={disabled || importBusy || reconstructionBusy || !onReconstruct ||

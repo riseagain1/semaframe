@@ -833,6 +833,29 @@ export class WorkspaceAgentController {
     }
   }
 
+  async analyzeWorkspacePrecision(input: unknown): Promise<WorkspaceAgentResult<JSONValue>> {
+    try {
+      const body = exactRecord(input,
+        ["session_token", "instruction_digest", "component_id", "action", "options"],
+        ["session_token", "instruction_digest", "component_id"]);
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["workspace:read"]);
+      if (typeof body.component_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u.test(body.component_id)) {
+        throw new WorkspaceEngineError("invalid_input", "component_id must identify a Precision Study.");
+      }
+      const action = body.action ?? "inspect";
+      if (typeof action !== "string" || !["inspect", "prepare_source", "fit_plane", "fit_circle", "fit_cylinder", "propose_shaft", "propose_plate", "compare_cad"].includes(action)) {
+        throw new WorkspaceEngineError("invalid_input", "Unknown precision analysis action.");
+      }
+      if (!this.engine.analyzePrecision) {
+        throw new WorkspaceEngineError("precision_unavailable", "This host does not provide precision analysis.");
+      }
+      return ok(await this.engine.analyzePrecision(body.component_id, action, body.options ?? {}, principal(session)));
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
   async inspectWorkspaceSpace(input: unknown): Promise<WorkspaceAgentResult<InspectWorkspaceSpaceData>> {
     try {
       const body = exactRecord(
@@ -1059,11 +1082,14 @@ export class WorkspaceAgentController {
       this.purgeExpired();
       const body = exactRecord(input, [
         "session_token", "instruction_digest", "request_id", "workspace_id", "display_name",
-        "format", "media_type", "byte_length", "sha256",
+        "format", "media_type", "byte_length", "sha256", "purpose",
       ], []);
       const session = this.requireSession(body.session_token, body.instruction_digest);
       this.requireScopes(session, ["asset:import"]);
       const workspaceId = requiredString(body.workspace_id, "workspace_id", 1, 256);
+      if (body.purpose !== undefined && !["generic_import", "measurement_source"].includes(String(body.purpose))) {
+        throw new WorkspaceEngineError("invalid_request", "Public imports cannot mint service-owned reconstruction purposes.", { retryable: false });
+      }
       const state = await this.engine.getState();
       if (state.workspaceId !== workspaceId) {
         throw new WorkspaceEngineError(
@@ -1150,7 +1176,7 @@ export class WorkspaceAgentController {
     input: unknown,
   ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
     return this.authorizeWorkspacePhotoReconstruction(input, [
-      "session_token", "instruction_digest", "request_id", "workspace_id", "profile", "photos",
+      "session_token", "instruction_digest", "request_id", "workspace_id", "profile", "photos", "retain_measurement_bundle",
     ]);
   }
 
@@ -1335,6 +1361,8 @@ export class WorkspaceAgentController {
         return this.inspectWorkspaceModel(input);
       case "inspect_workspace_space":
         return this.inspectWorkspaceSpace(input);
+      case "analyze_workspace_precision":
+        return this.analyzeWorkspacePrecision(input);
       case "query_spatial_placement":
         return this.querySpatialPlacement(input);
       case "query_layout_placement":
@@ -1393,7 +1421,10 @@ export class WorkspaceAgentController {
   ): Promise<WorkspaceAgentResult<WorkspacePhotoReconstructionAuthorizationData>> {
     try {
       this.purgeExpired();
-      const body = exactRecord(input, allowedFields, allowedFields);
+      const body = exactRecord(input, allowedFields, allowedFields.filter((field) => field !== "retain_measurement_bundle"));
+      if (body.retain_measurement_bundle !== undefined && typeof body.retain_measurement_bundle !== "boolean") {
+        throw new WorkspaceEngineError("invalid_request", "retain_measurement_bundle must be boolean");
+      }
       const session = this.requireSession(body.session_token, body.instruction_digest);
       this.requireScopes(session, ["asset:reconstruct"]);
       const workspaceId = requiredString(body.workspace_id, "workspace_id", 1, 256);

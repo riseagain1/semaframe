@@ -1,0 +1,42 @@
+.precision-study { box-sizing: border-box; min-width: 0; padding: 12px; color: var(--text-primary, #e5eaf0); font-size: 12px; line-height: 1.45; overflow: auto; }
+.precision-study header { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; }
+.precision-study header strong { overflow-wrap: anywhere; }
+.precision-study p { margin: 8px 0; }
+.precision-study__status { padding: 3px 7px; border: 1px solid #798393; border-radius: 5px; font-size: 11px; }
+.precision-study__status.is-pass_for_scope { border-color: #58b88b; color: #79d4aa; }
+.precision-study__status.is-fail { border-color: #e58a89; color: #f3aaa7; }
+.precision-study__status.is-inconclusive { border-color: #e0bb6c; color: #e6c589; }
+.precision-study__preview { margin: 10px 0; padding: 8px; border: 1px solid #384354; border-radius: 6px; background: #15202b; }
+.precision-study__preview svg { width: 100%; max-height: 190px; display: block; }
+.precision-study__preview figcaption { color: #aab7c6; font-size: 10px; }
+.precision-study__webgl { position: relative; height: 0; overflow: hidden; }
+.precision-study__webgl.is-ready { height: 210px; }
+/* This is a nested preview, not the outer .viewport-canvas renderer. */
+.precision-study .precision-study__webgl > canvas { position: static; inset: auto; display: block; width: 100%; height: 100%; touch-action: none; }
+.precision-study__control { fill: #c399ff; stroke: #14202a; stroke-width: 1; }
+.precision-study__legend { font-size: 10px; color: #becbdd; }
+.precision-study__comparison pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10px; }
+.precision-study__point { fill: #80bceb; opacity: .8; }
+.precision-study__check { fill: #e0bb6c; stroke: #14202a; stroke-width: 1; }
+.precision-study__check.is-pass { fill: #67daa2; }
+.precision-study__check.is-fail { fill: #fa7d7d; }
+.precision-study__facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 8px 0; }
+.precision-study__facts div { padding: 6px; background: #ffffff08; border-radius: 4px; }
+.precision-study__facts dt { color: #aab7c6; font-size: 10px; }
+.precision-study__facts dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+.precision-study__table { max-height: 220px; overflow: auto; }
+.precision-study table { width: 100%; border-collapse: collapse; font-size: 10px; }
+.precision-study th, .precision-study td { text-align: left; padding: 5px; border-bottom: 1px solid #ffffff1c; overflow-wrap: anywhere; }
+.precision-study ul { padding-left: 18px; margin: 7px 0; }
+.precision-study details { border-top: 1px solid #ffffff22; padding-top: 9px; margin-top: 9px; }
+.precision-study summary { cursor: pointer; font-weight: 600; }
+.precision-study--inspector > .precision-study { padding: 0; }
+.precision-study label { display: flex; flex-direction: column; gap: 4px; margin: 9px 0; }
+.precision-study label.precision-study__checkbox { display: flex; flex-direction: row; align-items: flex-start; }
+.precision-study input, .precision-study select, .precision-study textarea { box-sizing: border-box; min-width: 0; max-width: 100%; padding: 6px; color: inherit; background: #111a24; border: 1px solid #465466; border-radius: 4px; }
+.precision-study textarea { width: 100%; resize: vertical; font: 10px/1.45 monospace; }
+.precision-study button { margin: 3px 5px 3px 0; padding: 6px 8px; border: 1px solid #53657b; border-radius: 4px; color: inherit; background: #263a50; white-space: normal; }
+.precision-study button:disabled { opacity: .45; cursor: not-allowed; }
+.precision-study__proposal { border-left: 2px solid #c8a867; padding: 8px; margin-top: 8px; background: #ffffff08; }
+.precision-study__actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+.precision-study__message { padding: 8px; background: #ffffff0a; border-radius: 4px; overflow-wrap: anywhere; }
