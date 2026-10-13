@@ -334,7 +334,8 @@ try {
   const installedRoot = join(temporaryRoot, "node_modules", "semaframe");
   const manifest = JSON.parse(await readFile(join(installedRoot, "package.json"), "utf8"));
   assert.equal(manifest.private, false);
-  assert.deepEqual(manifest.publishConfig, { access: "public", tag: "next" });
+  const expectedDistTag = /^\d+\.\d+\.\d+-/u.test(manifest.version) ? "next" : "latest";
+  assert.deepEqual(manifest.publishConfig, { access: "public", tag: expectedDistTag });
   assert.equal(manifest.bin.semaframe, "bin/semaframe.mjs");
   for (const runtimeDependency of [
     "vite",
