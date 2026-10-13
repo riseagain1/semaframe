@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml"><img src="https://github.com/riseagain1/semaframe/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <a href="https://github.com/riseagain1/semaframe/releases/latest"><img src="https://img.shields.io/github/v/release/riseagain1/semaframe?display_name=tag" alt="Latest release" /></a>
-  <a href="https://www.npmjs.com/package/semaframe"><img src="https://img.shields.io/npm/v/semaframe/next?label=npm%20next" alt="npm next version" /></a>
+  <a href="https://www.npmjs.com/package/semaframe"><img src="https://img.shields.io/npm/v/semaframe?label=npm" alt="npm stable version" /></a>
 </p>
 
 > **Build spaces agents can understand.**
@@ -47,9 +47,9 @@ These three silent-first English films show the product through ordinary-languag
 
 The rooms, city, and feeds are deterministic synthetic evidence—not field scans, live infrastructure, or engineering certification. Video binaries live in the [Demo Gallery release](https://github.com/riseagain1/semaframe/releases/tag/demo-gallery-v1); Remotion source, captions, contracts, and captured evidence remain reviewable in [`video/`](./video/README.md). The [original 78-second launch tour](https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4) remains available in the [v0.2.0 release](https://github.com/riseagain1/semaframe/releases/tag/v0.2.0).
 
-## What's new in v0.4 RC
+## What's new in v0.4
 
-The current release candidate is `v0.4.0-rc.3`. It keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring, measurement-driven modeling and a production-oriented CAD handoff, and closes the next operational loops:
+The current stable release is `v0.4.0`. It keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring, measurement-driven modeling and a production-oriented CAD handoff, and closes the next operational loops:
 
 | Capability | What it adds |
 | --- | --- |
@@ -67,13 +67,13 @@ The current release candidate is `v0.4.0-rc.3`. It keeps the v0.3 modeling and R
 | **Extension and host services** | Versioned connector/importer/exporter/bridge contracts, digest/signature verification, Workspace-bound grants, an owned framed-stdio host, immutable connector registries, and bounded asynchronous artifact jobs |
 | **Community ecosystem** | A signed static project/model template catalog with proposal-only installation plus explicitly opt-in, previewable anonymous performance diagnostics with no bundled vendor endpoint |
 
-The source surface is Workspace Protocol 1.3 with project schema 1.4, 26 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. Measurement precision additions are included from `v0.4.0-rc.3`, together with dependency security updates and expanded regression coverage. This candidate uses the GitHub prerelease channel and npm `next`; use the pinned version below or `semaframe@next`, not the legacy npm `latest` tag.
+The source surface is Workspace Protocol 1.3 with project schema 1.4, 26 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The stable `v0.4.0` release includes the measurement precision workflow, dependency security updates, and expanded regression coverage validated in `v0.4.0-rc.3`. It uses npm's default `latest` channel and GitHub's Latest release. Stable denotes the supported release channel, not certification of physical accuracy or every hardware combination.
 
-The v0.4 release candidate also hardens the product surface around those
+The v0.4 release also hardens the product surface around those
 contracts: explicit Agent states, direct Agent-first Workspace entry, a unified Checks center, Basic/Advanced
 inspection, one atomic Sources Wizard, an outcome-aware Export Center, an XR
 Setup Assistant, verified IndexedDB recovery, enforced CI coverage, and a
-packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0-rc.3 notes](./docs/release-v0.4.0-rc.3.md).
+packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0 release notes](./docs/release-v0.4.0.md).
 
 The ecosystem contracts are documented separately in the [ecosystem layer guide](./docs/ecosystem/README.md). They preserve the same central invariant: neither an extension, template, artifact provider, nor downstream 3D application can bypass `WorkspaceStore`.
 
@@ -189,15 +189,19 @@ If that optional Apple Object Capture requirement is unavailable, SemaFrame repo
 
 ### Install and run
 
-The release-candidate CLI can be tried in one line from npm. The exact version
-keeps the install reproducible; `semaframe@next` follows the newest candidate.
+The stable CLI can be run directly from npm. The default `latest` channel
+selects the stable release; no prerelease tag is required.
 It checks the Node version, required package files, and local ports before it
 starts anything:
 
 ```bash
-npm exec --yes --package=semaframe@0.4.0-rc.3 -- semaframe doctor
-npm exec --yes --package=semaframe@0.4.0-rc.3 -- semaframe start
+npm exec --yes --package=semaframe -- semaframe doctor
+npm exec --yes --package=semaframe -- semaframe start
 ```
+
+For a reproducible installation, replace `--package=semaframe` with
+`--package=semaframe@0.4.0`. Older candidates remain available by exact version;
+`next` is not required for this stable release.
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
 renderer. A remote headset still needs a trusted HTTPS URL reachable on the

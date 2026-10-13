@@ -6,6 +6,20 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 No changes yet.
 
+## [0.4.0] - 2026-10-13
+
+### Stable release
+
+- Promote the validated v0.4.0-rc.3 application to the stable release channel without changing its modeling, precision, Agent, or XR behavior.
+- Make `semaframe@0.4.0` the default npm `latest` installation and publish `v0.4.0` as the non-prerelease GitHub Latest release.
+- Update installation instructions, packaged release notes, and the package verification gate so stable releases require `latest` while prereleases require `next`.
+- Include the complete v0.4 candidate feature set below: editable CAD and verified handoff, independent 2D layout, measurement-driven modeling and scoped verification, cross-platform XR, portable evidence-bearing projects, review-only Scene Bridges, and dependency/security hardening.
+
+### Boundaries
+
+- Stable is a release-channel designation, not a claim of zero bugs, industrial certification, independently proven reconstruction accuracy, or universal headset compatibility. Existing scope, format, resource, and physical-acceptance limits remain in force.
+- Workspace Protocol 1.3, project schema 1.4, and portable manifest 1.0/1.1 behavior remain unchanged from v0.4.0-rc.3. Earlier release candidates remain available as immutable historical versions.
+
 ## [0.4.0-rc.3] - 2026-10-13
 
 ### Added
@@ -113,7 +127,8 @@ No changes yet.
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.3...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.3...v0.4.0
 [0.4.0-rc.3]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.2...v0.4.0-rc.3
 [0.4.0-rc.2]: https://github.com/riseagain1/semaframe/compare/v0.3.0...v0.4.0-rc.2
 [0.3.0]: https://github.com/riseagain1/semaframe/compare/v0.2.0...v0.3.0
