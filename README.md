@@ -49,7 +49,7 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## What's new in v0.4 RC
 
-The current source candidate is `v0.4.0-rc.2`. It keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring and a production-oriented CAD handoff, and closes the next operational loops:
+The current release candidate is `v0.4.0-rc.3`. It keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring, measurement-driven modeling and a production-oriented CAD handoff, and closes the next operational loops:
 
 | Capability | What it adds |
 | --- | --- |
@@ -60,20 +60,20 @@ The current source candidate is `v0.4.0-rc.2`. It keeps the v0.3 modeling and Re
 | **Routed spatial movement** | A typed `move_to` action for entities, exact primitives, CAD parts, and assemblies, with scale preservation, atomic event fan-out, endpoint collision and enforced-physics validation, and ordinary renderer transitions |
 | **Registry-drift recovery** | Verified replay rebases registry-derived command and history digests when append-only built-in manifests advance, so valid project-schema 1.3 files reopen without weakening history validation |
 | **Photo-set Reality reconstruction** | Human and approval-gated Agent flows for digest-bound photo upload, explicit local reconstruction, bounded progress/cancellation, browser-authoritative preflight, and content-addressed Reality registration |
-| **Measurement-driven modeling (unreleased)** | Retained native capture mesh/material/texture evidence, ordinary OBJ/PLY/XYZ import, multi-point metric registration, independent scoped checks, robust geometric fitting, editable CAD proposals, and host-evaluated scan-to-CAD comparison |
+| **Measurement-driven modeling** | Retained native capture mesh/material/texture evidence, ordinary OBJ/PLY/XYZ import, multi-point metric registration, independent scoped checks, robust geometric fitting, editable CAD proposals, and host-evaluated scan-to-CAD comparison |
 | **Cross-platform XR renderer** | A separately paired WebXR client with revisioned Workspace replication, collision-safe teleport, renderer-neutral live panels, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, fresh authenticated spatial context, renderer-only build reveals, resumable Reality assets, reconnect, and a fail-closed Windows PCVR Ultra gate |
 | **Portable projects** | A streamed `.semaframe-project` ZIP/ZIP64 bundle containing the replay-verified Workspace plus the complete content-addressed Reality byte closure required by current state, checkpoint, and retained undo/replay |
 | **Scene Exchange and bridges** | A sanitized `.semaframe-exchange` with semantic manifest, fidelity report, OpenUSD, self-contained GLB, optional exact STEP, stable IDs, expiring pull sessions, and review-only downstream change proposals |
 | **Extension and host services** | Versioned connector/importer/exporter/bridge contracts, digest/signature verification, Workspace-bound grants, an owned framed-stdio host, immutable connector registries, and bounded asynchronous artifact jobs |
 | **Community ecosystem** | A signed static project/model template catalog with proposal-only installation plus explicitly opt-in, previewable anonymous performance diagnostics with no bundled vendor endpoint |
 
-The source surface is Workspace Protocol 1.3 with project schema 1.4, 26 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. Measurement precision additions are unreleased; installing the published `v0.4.0-rc.2` package does not yet include them. This candidate uses the GitHub prerelease channel and npm `next`.
+The source surface is Workspace Protocol 1.3 with project schema 1.4, 26 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. Measurement precision additions are included from `v0.4.0-rc.3`, together with dependency security updates and expanded regression coverage. This candidate uses the GitHub prerelease channel and npm `next`; use the pinned version below or `semaframe@next`, not the legacy npm `latest` tag.
 
 The v0.4 release candidate also hardens the product surface around those
 contracts: explicit Agent states, direct Agent-first Workspace entry, a unified Checks center, Basic/Advanced
 inspection, one atomic Sources Wizard, an outcome-aware Export Center, an XR
 Setup Assistant, verified IndexedDB recovery, enforced CI coverage, and a
-packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0-rc.2 notes](./docs/release-v0.4.0-rc.2.md).
+packaged `semaframe doctor/start/xr` CLI. [Read the v0.4.0-rc.3 notes](./docs/release-v0.4.0-rc.3.md).
 
 The ecosystem contracts are documented separately in the [ecosystem layer guide](./docs/ecosystem/README.md). They preserve the same central invariant: neither an extension, template, artifact provider, nor downstream 3D application can bypass `WorkspaceStore`.
 
@@ -195,8 +195,8 @@ It checks the Node version, required package files, and local ports before it
 starts anything:
 
 ```bash
-npm exec --yes --package=semaframe@0.4.0-rc.2 -- semaframe doctor
-npm exec --yes --package=semaframe@0.4.0-rc.2 -- semaframe start
+npm exec --yes --package=semaframe@0.4.0-rc.3 -- semaframe doctor
+npm exec --yes --package=semaframe@0.4.0-rc.3 -- semaframe start
 ```
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
@@ -516,7 +516,7 @@ This makes SemaFrame useful for accurate blockouts, rooms, furniture, fixtures, 
 
 ## Measurement-driven modeling and verification
 
-This unreleased workflow separates **visual appearance**, **measurement geometry**, and **editable CAD**. A realistic splat is not a measurement surface, a small fitting residual is not independent accuracy, and a successful STEP export is not manufacturing certification.
+This workflow separates **visual appearance**, **measurement geometry**, and **editable CAD**. A realistic splat is not a measurement surface, a small fitting residual is not independent accuracy, and a successful STEP export is not manufacturing certification.
 
 1. **Retain evidence.** Photo reconstruction can opt into `retain_measurement_bundle: true` (or **Keep native mesh and measurement evidence** in the Reality panel). The original native OBJ, materials, and textures are retained byte-for-byte alongside the visual splat. Source photos remain temporary. Alternatively, an Agent can stream an ordinary OBJ, PLY, or XYZ CSV through `begin_workspace_asset_import` with `purpose: "measurement_source"`; completion creates an unverified `precision-study` containing the source reference.
 2. **Admit and calibrate geometry.** `analyze_workspace_precision` with `action: "prepare_source"` parses a component-owned source and returns a document for a normal prepared Workspace update. Declare source units and the RUB working basis explicitly; they are not inferred from appearance or file names. Unknown-scale geometry needs measured similarity registration. Rigid registration does not silently rescale, and registration never introduces nonuniform scaling. The human Inspector exposes the same import, study editing, inspection, and export workflow without an opening wizard.
@@ -686,7 +686,7 @@ SemaFrame's ecosystem layer expands file portability, data/provider integration,
 
 ### Portable Workspace artifacts
 
-`.semaframe-project` is a deterministic stored ZIP/ZIP64 archive. It contains the normal replay-verified Workspace JSON plus every content-addressed Reality object required by current state, checkpoint, and retained undo/replay history. The unreleased precision workflow uses manifest `1.1` when measurement evidence is included; projects without it retain `1.0`. Export verifies each source object before streaming. Import verifies exact paths, entry order, CRC, SHA-256, Reality format, project replay, and closure before staging any bytes; a failed atomic project replacement rolls back newly inserted objects.
+`.semaframe-project` is a deterministic stored ZIP/ZIP64 archive. It contains the normal replay-verified Workspace JSON plus every content-addressed Reality object required by current state, checkpoint, and retained undo/replay history. The precision workflow uses manifest `1.1` when measurement evidence is included; projects without it retain `1.0`. Export verifies each source object before streaming. Import verifies exact paths, entry order, CRC, SHA-256, Reality format, project replay, and closure before staging any bytes; a failed atomic project replacement rolls back newly inserted objects.
 
 The direct `.semaframe.json` format remains useful when small metadata-only files and digest relinking are preferred. See [Portable projects](./docs/ecosystem/portable-projects.md) for the format and trust boundary.
 
