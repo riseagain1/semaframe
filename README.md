@@ -95,7 +95,7 @@ Together, these capabilities support one inspectable workflow: import captured c
 ## Contents
 
 - [See SemaFrame in action](#see-semaframe-in-action)
-- [What's new in v0.4 RC](#whats-new-in-v04-rc)
+- [What's new in v0.4](#whats-new-in-v04)
 - [What's new in v0.3](#whats-new-in-v03)
 - [Why SemaFrame](#why-semaframe)
 - [A practical Jarvis-like workspace](#a-practical-jarvis-like-workspace)
