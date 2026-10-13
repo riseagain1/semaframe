@@ -6,6 +6,31 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 No changes yet.
 
+## [0.4.0-rc.3] - 2026-10-13
+
+### Added
+
+- An editable `precision-study` component and approval-gated Agent import of bounded OBJ, PLY, and XYZ measurement sources, with original-byte retention, SHA-256 identity, declared units, and double-precision measurement coordinates.
+- Optional retention of native photo-reconstruction mesh, material, and texture evidence alongside visual Reality assets.
+- Rigid or uniform-similarity metric registration, separate fit controls and independent checks, explicit tolerance/uncertainty/region policies, and dependency-bound reports that distinguish unverified, inconclusive, failed, and scope-limited passing results.
+- Robust plane, circle, and cylinder fitting; editable shaft and measured-plate CAD proposals; and bounded, host-evaluated bidirectional sampled scan-to-CAD comparison.
+- Read-only `analyze_workspace_precision` Agent analysis, human-editable study controls and geometry previews, metric OBJ/PLY exports, and a documented physical-acceptance protocol.
+- Portable precision evidence closure through current state, checkpoint, undo/redo, and save/reopen. Evidence-bearing bundles use manifest 1.1; bundles without precision evidence retain 1.0, and the reader accepts both. Older readers may reject 1.1.
+
+### Security and reliability
+
+- Updated MCP, image-processing, and transitive dependencies to address reported advisories; upgraded Vitest and V8 coverage to 4.1.11.
+- Added a runtime-and-development dependency audit to CI, preserving the existing core coverage thresholds.
+- Expanded regression coverage for Gateway and MCP authorization, asset ingress, feed boundaries, recovery, portable archives, and precision evidence authentication.
+- Hardened browser-smoke owned-process cleanup and kept browser command acceptance aligned with the canonical tool surface.
+- Package verification now checks the release notes matching the packed version and the precision acceptance guide.
+
+### Boundaries
+
+- This is a precision modeling and validation workflow, not field-validated millimetre reconstruction. Synthetic fixtures and software checks do not establish physical accuracy, reference-instrument calibration, manufacturing fitness, or engineering certification.
+- Scan-to-CAD comparison is bounded sampled-vertex-to-surface evidence, not continuous whole-surface certification. Photorealistic splats remain visual evidence, not measurement or CAD authority.
+- This release remains an npm `next` / GitHub prerelease candidate. Use the pinned version or `semaframe@next` to receive these changes.
+
 ## [0.4.0-rc.2] - 2026-08-28
 
 ### Added
@@ -88,6 +113,7 @@ No changes yet.
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.2...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.3...HEAD
+[0.4.0-rc.3]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.2...v0.4.0-rc.3
 [0.4.0-rc.2]: https://github.com/riseagain1/semaframe/compare/v0.3.0...v0.4.0-rc.2
 [0.3.0]: https://github.com/riseagain1/semaframe/compare/v0.2.0...v0.3.0

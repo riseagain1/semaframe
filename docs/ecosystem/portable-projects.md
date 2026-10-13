@@ -15,7 +15,7 @@ project/workspace.semaframe.json
 objects/sha256/ab/abcdef...   # one path per Reality digest
 ```
 
-The unreleased precision workflow uses manifest version `1.1` only when retained
+The precision workflow (available from v0.4.0-rc.3) uses manifest version `1.1` only when retained
 measurement evidence exists. It appends digest-sorted `evidence/sha256/<64 hex>`
 entries after the Reality objects. These are exact raw measurement sources or
 native capture bundles from a separate evidence vault. Projects without such

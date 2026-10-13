@@ -1,7 +1,7 @@
 {
   "name": "semaframe",
   "private": false,
-  "version": "0.4.0-rc.2",
+  "version": "0.4.0-rc.3",
   "license": "MIT",
   "description": "A semantic spatial workspace for AI agents.",
   "repository": {
@@ -33,7 +33,7 @@
     "docs/extensions/",
     "docs/hardware-support.md",
     "docs/precision-acceptance.md",
-    "docs/release-v0.4.0-rc.2.md",
+    "docs/release-v0.4.0-rc.3.md",
     "examples/diagnostics/",
     "index.html",
     "xr.html",

@@ -308,7 +308,8 @@ try {
   assert.ok(packReport.files.some(({ path }) => path === "src/main.tsx"));
   assert.ok(packReport.files.some(({ path }) => path === "xr.html"));
   assert.ok(packReport.files.some(({ path }) => path === ".env.agent.example"));
-  assert.ok(packReport.files.some(({ path }) => path === "docs/release-v0.4.0-rc.2.md"));
+  assert.ok(packReport.files.some(({ path }) => path === `docs/release-v${packReport.version}.md`));
+  assert.ok(packReport.files.some(({ path }) => path === "docs/precision-acceptance.md"));
   assert.ok(!packReport.files.some(({ path }) => path.startsWith("src/tests/") || path.endsWith(".test.mjs")));
   assert.ok(!packReport.files.some(({ path }) => /native\/voice-relay\/(?:macos|windows)\/build\//u.test(path)));
   assert.ok(packReport.entryCount <= 700, `Package contains an unexpected ${packReport.entryCount} files.`);
