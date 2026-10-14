@@ -18,6 +18,9 @@ import type {
   WorkspaceAgentResult,
   WorkspaceAgentToolName,
   WorkspacePermissionScope,
+  WorkspaceSpaceInspectionOptions,
+  WorkspaceLayoutQueryOptions,
+  WorkspacePrepareOptions,
 } from "../agents/contracts";
 
 export interface WorkspaceToolTransport {
@@ -45,6 +48,8 @@ export type RealtimeAgentFinalUpdateInput = Readonly<{
   utteranceId: string;
   intent: string;
   requestedComponentIds?: number;
+  layoutFrame?: WorkspacePrepareOptions["layoutFrame"];
+  viewGuard?: WorkspacePrepareOptions["viewGuard"];
   buildBatch(
     preparation: BeginWorkspaceUpdateData,
     context: Readonly<{ signal: AbortSignal }>,
@@ -193,12 +198,14 @@ export class RealtimeAgentWorkspaceClient {
 
   async inspectSpace(
     sinceRevision?: number,
+    options: WorkspaceSpaceInspectionOptions = {},
   ): Promise<WorkspaceAgentResult<InspectWorkspaceSpaceData>> {
     const session = sessionInput(this.session);
     if ("ok" in session) return session;
     return this.transport.call<InspectWorkspaceSpaceData>("inspect_workspace_space", {
       ...session,
       ...(sinceRevision === undefined ? {} : { since_revision: sinceRevision }),
+      ...(options.viewDetail === undefined ? {} : { view_detail: options.viewDetail }),
     });
   }
 
@@ -215,12 +222,15 @@ export class RealtimeAgentWorkspaceClient {
 
   async queryLayoutPlacement(
     candidate: unknown,
+    options: WorkspaceLayoutQueryOptions = {},
   ): Promise<WorkspaceAgentResult<QueryLayoutPlacementData>> {
     const session = sessionInput(this.session);
     if ("ok" in session) return session;
     return this.transport.call<QueryLayoutPlacementData>("query_layout_placement", {
       ...session,
       candidate,
+      ...(options.frame === undefined ? {} : { frame: options.frame }),
+      ...(options.viewGuard === undefined ? {} : { view_guard: options.viewGuard }),
     });
   }
 
@@ -309,6 +319,8 @@ export class RealtimeAgentWorkspaceClient {
         {
           ...session,
           intent: input.intent.trim(),
+          ...(input.layoutFrame === undefined ? {} : { layout_frame: input.layoutFrame }),
+          ...(input.viewGuard === undefined ? {} : { view_guard: input.viewGuard }),
           ...(input.requestedComponentIds === undefined
             ? {}
             : { requested_component_ids: input.requestedComponentIds }),

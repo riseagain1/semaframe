@@ -201,6 +201,7 @@ export const Viewport = forwardRef<HTMLDivElement, ViewportProps>(function Viewp
       ref={shellRef}
       className={`viewport-shell${interactionDisabled ? " is-interaction-disabled" : ""}${isImmersive ? " is-immersive" : ""}${fullscreenMode === "fallback" ? " is-fullscreen-fallback" : ""}`}
       data-fullscreen-mode={fullscreenMode}
+      data-workspace-runtime-immersive={isImmersive ? "true" : undefined}
       aria-hidden={interactionDisabled || undefined}
       inert={interactionDisabled || undefined}
     >
@@ -215,14 +216,14 @@ export const Viewport = forwardRef<HTMLDivElement, ViewportProps>(function Viewp
         aria-describedby="viewport-instructions"
       >{children}</div>
       <p id="viewport-instructions" className="sr-only">Select a 3D object with one click. Activate its configured interaction with a double-click, or select it and press Enter or Space. A text alternative describing the environment, components, and relations is available in the Workspace component tree.</p>
-      <div className="viewport-topline">
+      <div className="viewport-topline" data-workspace-runtime-region="viewport-status" data-workspace-runtime-children="true">
         <StatusPill status={status} />
         {agentControlStatus && <span className="agent-control-chip" role="status"><span aria-hidden="true" />Agent · {agentControlStatus}</span>}
         <div className="scene-stat" aria-label={`${entityCount} components, workspace revision ${revision}`}>
           <span>{entityCount} {entityCount === 1 ? "component" : "components"}</span><i /> <span>rev {revision}</span>
         </div>
       </div>
-      <div className="viewport-tools" aria-label="Camera controls">
+      <div className="viewport-tools" aria-label="Camera controls" data-workspace-runtime-region="camera-controls">
         <button type="button" onClick={onFrameAll} title="Frame all (F)" aria-label="Frame all"><Crosshair size={17} /></button>
         {onZoomIn && <button type="button" onClick={onZoomIn} title="Zoom in (+)" aria-label="Zoom in"><ZoomIn size={17} /></button>}
         {onZoomOut && <button type="button" onClick={onZoomOut} title="Zoom out (-)" aria-label="Zoom out"><ZoomOut size={17} /></button>}
@@ -242,7 +243,7 @@ export const Viewport = forwardRef<HTMLDivElement, ViewportProps>(function Viewp
         </button>
       </div>
       {showHelp && (
-        <div id="viewport-help" className="viewport-help" role="dialog" aria-label="Camera controls" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); closeHelp(); } }}>
+        <div id="viewport-help" className="viewport-help" role="dialog" aria-label="Camera controls" data-workspace-runtime-region="camera-help" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); closeHelp(); } }}>
           <button ref={helpCloseRef} type="button" className="icon-close" onClick={closeHelp} aria-label="Close camera help"><X size={15} /></button>
           <p className="eyebrow">Explore the stage</p>
           <dl>

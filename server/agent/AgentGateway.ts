@@ -59,6 +59,8 @@ export type AgentGatewayOptions = Readonly<{
   browserTtlMs?: number;
   offerTtlMs?: number;
   approvalTtlMs?: number;
+  /** Bounded instruction redemption window, beginning at human approval. */
+  approvedHandshakeTtlMs?: number;
   now?: () => number;
 }>;
 
@@ -106,6 +108,21 @@ export type AgentPendingApproval = Readonly<{
   expiresAt: string;
 }>;
 
+export type AgentApprovedHandshake = Readonly<{
+  clientId?: string;
+  clientName?: string;
+  scopes: readonly string[];
+  fingerprint: string;
+  approvedAt: string;
+  expiresAt: string;
+  status: "waiting" | "in_flight";
+}>;
+
+export type AgentConnectionNotice = Readonly<{
+  reason: "approval_expired" | "handshake_expired" | "offer_expired";
+  occurredAt: string;
+}>;
+
 export type AgentConnectionOffer = Readonly<{
   connectionUrl: string;
   offerExpiresAt: string;
@@ -122,6 +139,8 @@ type ApprovalClaim = {
   grantedScopes?: readonly string[];
   requestedAt: number;
   expiresAt: number;
+  approvedAt?: number;
+  handshakeExpiresAt?: number;
   decision: "pending" | "approved" | "denied";
   instructionsSucceeded: boolean;
 };
@@ -149,6 +168,8 @@ export type AgentGatewayConfig = Readonly<{
   offerExpiresAt?: string;
   offerStatus?: AgentOfferStatus;
   pendingApproval?: AgentPendingApproval;
+  approvedHandshake?: AgentApprovedHandshake;
+  connectionNotice?: AgentConnectionNotice;
 }>;
 
 export type PairingReveal = Readonly<{
@@ -253,6 +274,7 @@ function safeInstructionInput(name: AgentCommandName, input: unknown): unknown {
     ...(clientId ? { client_id: clientId } : {}),
     ...(clientName ? { client_name: clientName } : {}),
     ...(requestedScopes ? { requested_scopes: requestedScopes } : {}),
+    ...(body.detail === undefined ? {} : { detail: body.detail }),
   };
 }
 
@@ -266,6 +288,7 @@ export class AgentGateway {
   readonly #browserTtlMs: number;
   readonly #offerTtlMs: number;
   readonly #approvalTtlMs: number;
+  readonly #approvedHandshakeTtlMs: number;
   readonly #now: () => number;
   readonly #csrfToken = secret();
   readonly #gatewayInstanceId = randomUUID();
@@ -278,6 +301,7 @@ export class AgentGateway {
   #lastClientSeenAt?: number;
   #lastClientSource?: "legacy" | "offer";
   #offer?: ConnectionOffer;
+  #connectionNotice?: AgentConnectionNotice;
   #configRevision = 0;
   #lastConfigFingerprint?: string;
   #configWakePending = false;
@@ -310,6 +334,7 @@ export class AgentGateway {
     this.#browserTtlMs = options.browserTtlMs ?? 65_000;
     this.#offerTtlMs = options.offerTtlMs ?? 10 * 60_000;
     this.#approvalTtlMs = options.approvalTtlMs ?? 2 * 60_000;
+    this.#approvedHandshakeTtlMs = options.approvedHandshakeTtlMs ?? 10 * 60_000;
     this.#now = options.now ?? Date.now;
     for (const [name, value] of [
       ["commandTimeoutMs", this.#commandTimeoutMs],
@@ -317,6 +342,7 @@ export class AgentGateway {
       ["browserTtlMs", this.#browserTtlMs],
       ["offerTtlMs", this.#offerTtlMs],
       ["approvalTtlMs", this.#approvalTtlMs],
+      ["approvedHandshakeTtlMs", this.#approvedHandshakeTtlMs],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive integer.`);
     }
@@ -336,6 +362,7 @@ export class AgentGateway {
       : this.#offer;
     const offer = this.#offerView(currentOffer);
     const pendingApproval = this.#pendingApprovalView();
+    const approvedHandshake = this.#approvedHandshakeView();
     const approvedScopes = currentOffer?.claim?.instructionsSucceeded
       ? [...(currentOffer.claim.grantedScopes ?? currentOffer.claim.scopes)]
       : undefined;
@@ -351,6 +378,8 @@ export class AgentGateway {
       csrfToken: this.#csrfToken,
       ...(offer ?? {}),
       ...(pendingApproval ? { pendingApproval } : {}),
+      ...(approvedHandshake ? { approvedHandshake } : {}),
+      ...(this.#connectionNotice ? { connectionNotice: this.#connectionNotice } : {}),
     } as const;
     const fingerprint = JSON.stringify(snapshot);
     if (fingerprint !== this.#lastConfigFingerprint) {
@@ -472,6 +501,7 @@ export class AgentGateway {
     this.#lastClientName = undefined;
     this.#lastClientSource = undefined;
     this.#offer = this.#newOffer();
+    this.#connectionNotice = undefined;
     this.#markConfigChanged();
     this.#rejectPending(new AgentGatewayError(
       "pairing_rotated",
@@ -490,6 +520,7 @@ export class AgentGateway {
       return { enabled };
     }
     this.#enabled = enabled;
+    this.#connectionNotice = undefined;
     if (enabled) {
       this.#offer = this.#newOffer();
     } else {
@@ -511,6 +542,7 @@ export class AgentGateway {
     this.#assertEnabled();
     const replacedClaimId = this.#offer?.claim?.id;
     this.#offer = this.#newOffer();
+    this.#connectionNotice = undefined;
     if (replacedClaimId && this.#pendingCommand?.offerClaimId === replacedClaimId) {
       this.#rejectPending(new AgentGatewayError(
         "connection_invalid",
@@ -531,7 +563,15 @@ export class AgentGateway {
     if (claim.decision === "denied") {
       throw new AgentGatewayError("approval_denied", "This connection request was already denied.");
     }
+    if (claim.decision === "approved") return { approved: true };
+    const approvedAt = this.#now();
+    claim.approvedAt = approvedAt;
+    claim.handshakeExpiresAt = approvedAt + this.#approvedHandshakeTtlMs;
     claim.decision = "approved";
+    // Approval starts a fresh bounded redemption window. A near-expiry offer
+    // must not shorten it, and a duplicate approval must never renew it.
+    if (this.#offer) this.#offer.expiresAt = Math.max(this.#offer.expiresAt, claim.handshakeExpiresAt);
+    this.#connectionNotice = undefined;
     this.#markConfigChanged();
     return { approved: true };
   }
@@ -587,6 +627,7 @@ export class AgentGateway {
       // Identity shown to the approving user is the identity the core sees.
       // Retry arguments cannot silently replace the approved provenance.
       const approvedInput = {
+        ...(body.detail === undefined ? {} : { detail: body.detail }),
         ...(offer.claim?.clientId ? { client_id: offer.claim.clientId } : {}),
         ...(offer.claim?.clientName ? { client_name: offer.claim.clientName } : {}),
         ...(offer.claim ? { requested_scopes: [...offer.claim.scopes] } : {}),
@@ -813,6 +854,7 @@ export class AgentGateway {
     if (this.#closed) return;
     this.#closed = true;
     this.#offer = undefined;
+    this.#connectionNotice = undefined;
     this.#revokeBrowser(new AgentGatewayError("gateway_closed", "The agent gateway stopped."));
   }
 
@@ -849,7 +891,7 @@ export class AgentGateway {
     if (!current) {
       this.#offer = this.#newOffer();
     } else if (this.#offerNeedsRefresh(current)) {
-      this.#replaceIncompleteOffer(current, "The incomplete connection offer expired before the instruction handshake completed.");
+      this.#replaceIncompleteOffer(current, "The incomplete connection offer expired before the instruction handshake completed.", this.#expirationReason(current));
     }
     return this.#offer as ConnectionOffer;
   }
@@ -866,13 +908,34 @@ export class AgentGateway {
       return false;
     }
     const now = this.#now();
-    return now >= offer.expiresAt || Boolean(offer.claim && now >= offer.claim.expiresAt);
+    const claimDeadline = offer.claim?.decision === "approved"
+      ? offer.claim.handshakeExpiresAt ?? offer.claim.expiresAt
+      : offer.claim?.expiresAt;
+    return now >= offer.expiresAt || (claimDeadline !== undefined && now >= claimDeadline);
   }
 
-  #replaceIncompleteOffer(offer: ConnectionOffer, message: string): boolean {
+  #expirationReason(offer: ConnectionOffer): AgentConnectionNotice["reason"] {
+    if (offer.claim?.decision === "approved") return "handshake_expired";
+    if (offer.claim?.decision === "pending") return "approval_expired";
+    return "offer_expired";
+  }
+
+  #replaceIncompleteOffer(
+    offer: ConnectionOffer,
+    message: string,
+    expirationReason?: AgentConnectionNotice["reason"],
+  ): boolean {
     if (this.#offer !== offer || this.#offerHandshakeCompleted(offer)) return false;
     const replacedClaimId = offer.claim?.id;
     this.#offer = this.#newOffer();
+    // Keep the first unresolved expiry visible even if a later unclaimed
+    // offer also rotates. New explicit setup/claim actions clear the notice.
+    if (expirationReason && !this.#connectionNotice) {
+      this.#connectionNotice = Object.freeze({
+        reason: expirationReason,
+        occurredAt: new Date(this.#now()).toISOString(),
+      });
+    }
     if (replacedClaimId && this.#pendingCommand?.offerClaimId === replacedClaimId) {
       this.#rejectPending(new AgentGatewayError("connection_invalid", message));
     }
@@ -923,6 +986,23 @@ export class AgentGateway {
     });
   }
 
+  #approvedHandshakeView(): AgentApprovedHandshake | undefined {
+    const claim = this.#offer?.claim;
+    if (!claim || claim.decision !== "approved" || claim.instructionsSucceeded
+      || claim.approvedAt === undefined || claim.handshakeExpiresAt === undefined) return undefined;
+    const inFlight = this.#pendingCommand?.offerClaimId === claim.id
+      && isInstructionCommand(this.#pendingCommand.command.name);
+    return Object.freeze({
+      ...(claim.clientId ? { clientId: claim.clientId } : {}),
+      ...(claim.clientName ? { clientName: claim.clientName } : {}),
+      scopes: Object.freeze([...claim.scopes]),
+      fingerprint: claim.fingerprint,
+      approvedAt: new Date(claim.approvedAt).toISOString(),
+      expiresAt: new Date(claim.handshakeExpiresAt).toISOString(),
+      status: inFlight ? "in_flight" : "waiting",
+    });
+  }
+
   #requireOfferPath(pathname: string): ConnectionOffer {
     this.#assertOpen();
     this.#assertEnabled();
@@ -934,6 +1014,7 @@ export class AgentGateway {
       this.#replaceIncompleteOffer(
         offer,
         "The incomplete connection offer expired before the instruction handshake completed.",
+        this.#expirationReason(offer),
       );
       throw new AgentGatewayError("connection_offer_expired", "This connection offer expired. Create a fresh link in SemaFrame.");
     }
@@ -951,6 +1032,7 @@ export class AgentGateway {
       this.#replaceIncompleteOffer(
         offer,
         "The incomplete connection offer expired before the instruction handshake completed.",
+        this.#expirationReason(offer),
       );
     }
     if (!this.#offer || !this.#offer.claim || this.#offer.claim.id !== claimId) {
@@ -989,6 +1071,7 @@ export class AgentGateway {
         instructionsSucceeded: false,
       };
       offer.claim = claim;
+      this.#connectionNotice = undefined;
       // Wake the browser bridge immediately so it fetches config and can show
       // the approval card instead of waiting for the long-poll timeout.
       this.#markConfigChanged();

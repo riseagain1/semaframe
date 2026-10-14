@@ -1333,6 +1333,7 @@ export async function captureEmergencyCityDemo() {
     const begin = async (intent, count = 0) => {
       const prepared = await callAgent(client, "begin_workspace_update", {
         ...session,
+        capability_detail: "full",
         intent,
         ...(count ? { requested_component_ids: count } : {}),
       });

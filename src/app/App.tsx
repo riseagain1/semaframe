@@ -1389,7 +1389,9 @@ export default function App() {
 
   const installWorkspaceAgentController = useCallback((store: WorkspaceStore) => {
     workspaceAgentControllerRef.current?.revokeAll();
-    const adapter = new WorkspaceStoreEngineAdapter(store);
+    const adapter = new WorkspaceStoreEngineAdapter(store, {
+      getRuntimeView: () => hybridCanvasRef.current?.getRenderer()?.getRuntimeViewContext() ?? null,
+    });
     workspaceEngineAdapterRef.current = adapter;
     const controller = new WorkspaceAgentController(adapter, {
       grantScopes: ({ requestedScopes }) => requestedScopes.filter((scope) => {
@@ -5535,7 +5537,12 @@ export default function App() {
   } satisfies Omit<AgentConnectionPageProps, "onClose">;
 
   return <Suspense fallback={<main className="agent-connection-gate" aria-label="Loading Workspace">Loading Workspace…</main>}>
-  <div className={`app-shell${externalControlActive ? "" : " is-agent-gated"}`}>
+  <div
+    className={`app-shell${externalControlActive ? "" : " is-agent-gated"}`}
+    data-workspace-runtime-root="true"
+    data-workspace-runtime-blocked={!externalControlActive || agentManageOpen || confirm !== null
+      || voiceRelaySettingsOpen || sceneBridgeOpen || Boolean(hostActionPrompt) ? "true" : undefined}
+  >
     {externalControlActive && <ProjectBar
       projectName={projectName}
       dirty={dirty}
@@ -5629,7 +5636,10 @@ export default function App() {
           ref={hybridCanvasRef}
           state={workspaceSnapshot}
           commit={workspaceRenderCommit}
-          rendererOptions={{ threeOptions: { openRealityAsset } }}
+          rendererOptions={{
+            threeOptions: { openRealityAsset },
+            isRemoteXRPresenting: () => headsetXrStateRef.current.phase === "active",
+          }}
           selectedId={selectedComponentId}
           onSelect={setSelectedComponentId}
           onActivate={activateWorkspaceComponent}
@@ -5731,7 +5741,7 @@ export default function App() {
         {...agentConnectionPageProps}
         onClose={() => setAgentManageOpen(false)}
       />}
-      <AgentWorkspaceControls
+      <div style={{ display: "contents" }} data-workspace-runtime-region="agent-controls" data-workspace-runtime-children="true"><AgentWorkspaceControls
         status={agentStatus === "applying" ? "applying" : externalControlActive ? "connected" : "disconnected"}
         clientName={agentConfig?.clientName || "Agent"}
         historyCount={entries.length}
@@ -5739,10 +5749,10 @@ export default function App() {
         manageExpanded={agentManageOpen}
         onHistory={() => { setAgentHistoryOpen((value) => !value); setAgentManageOpen(false); }}
         onManage={() => { setAgentManageOpen((value) => !value); setAgentHistoryOpen(false); }}
-      />
-      <AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} />
+      /></div>
+      <div style={{ display: "contents" }} data-workspace-runtime-region="agent-history" data-workspace-runtime-children="true"><AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} /></div>
     </AgentWorkspaceGate>
-    {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => void dismissRecovery()}>Dismiss</button></div>}
+    {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery" data-workspace-runtime-region="project-recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => void dismissRecovery()}>Dismiss</button></div>}
     <input ref={fileRef} hidden type="file" accept=".semaframe-project,.json,.semaframe.json,application/vnd.semaframe.project+zip,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
     <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />
@@ -5777,7 +5787,7 @@ export default function App() {
       onCloseSession={closeSceneBridgeSession}
     />
     <HostActionPrompt request={externalControlActive ? hostActionPrompt : undefined} onConfirm={confirmHostAction} onCancel={cancelHostAction} />
-    <div className="toast-stack">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>
+    <div className="toast-stack" data-workspace-runtime-region="notifications" data-workspace-runtime-children="true">{notices.map((item) => <div key={item.id} className={`toast tone-${item.tone}`} role={item.tone === "error" ? "alert" : "status"}>{item.message}</div>)}</div>
     <div className="sr-status" role={status === "failed" ? "alert" : "status"} aria-live={status === "failed" ? "assertive" : "polite"} aria-atomic="true">{statusLabel(status)}</div>
   </div>
   </Suspense>;

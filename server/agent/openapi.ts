@@ -42,6 +42,7 @@ const agentControlErrorSchema = {
       enum: [
         "get_workspace_instructions",
         "inspect_workspace",
+        "inspect_workspace_capabilities",
         "inspect_workspace_component",
         "read_workspace_resource_snapshot",
         "inspect_workspace_asset",
@@ -915,13 +916,14 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/instructions": {
         post: {
           operationId: "get_workspace_instructions",
-          summary: "Receive the required universal Workspace guide and open a scoped client session.",
+          summary: "Receive the compact mandatory Workspace guide and open a scoped client session; request detail full for the complete reference.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
             properties: {
               client_id: { type: "string", minLength: 1, maxLength: 128 },
               client_name: { type: "string", minLength: 1, maxLength: 160 },
+              detail: { enum: ["core", "full"] },
               requested_scopes: {
                 type: "array",
                 maxItems: WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT,
@@ -936,8 +938,34 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/inspect": {
         post: {
           operationId: "inspect_workspace",
-          summary: "Inspect bounded authoritative component, resource, and capability state.",
-          requestBody: jsonBody({ $ref: "#/components/schemas/WorkspaceSession" }),
+          summary: "Inspect bounded state and a compact exact type catalog; full schemas are opt-in.",
+          requestBody: jsonBody({
+            type: "object", additionalProperties: false, required: ["session_token", "instruction_digest"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              capability_detail: { enum: ["catalog", "full"] },
+            },
+          }),
+          responses: successResponses,
+        },
+      },
+      "/workspace/capabilities/inspect": {
+        post: {
+          operationId: "inspect_workspace_capabilities",
+          summary: "Discover exact selected public manifests, guide topics, and standalone canonical operation schemas without mutation.",
+          requestBody: jsonBody({
+            type: "object", additionalProperties: false, required: ["session_token", "instruction_digest"],
+            properties: {
+              session_token: { type: "string", minLength: 8, maxLength: 256 },
+              instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              component_type_ids: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", minLength: 1, maxLength: 128 } },
+              guide_topics: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", minLength: 1, maxLength: 128 } },
+              operation_names: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 128 } },
+              include_connectors: { type: "boolean" },
+              include_asset_library: { type: "boolean" },
+            },
+          }),
           responses: successResponses,
         },
       },
@@ -1057,7 +1085,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/space/inspect": {
         post: {
           operationId: "inspect_workspace_space",
-          summary: "Inspect the independent world3d Spatial Graph and ui2d Layout Graph at one Workspace revision.",
+          summary: "Inspect independent world3d spatial, canonical ui2d layout, and ephemeral runtime view graphs.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
@@ -1066,6 +1094,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
               session_token: { type: "string", minLength: 8, maxLength: 256 },
               instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
               since_revision: { type: "integer", minimum: 0 },
+              view_detail: { enum: ["summary", "full"] },
             },
           }),
           responses: successResponses,
@@ -1091,7 +1120,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/layout/query": {
         post: {
           operationId: "query_layout_placement",
-          summary: "Preflight an explicit-size canvas2d or viewport placement against only the ui2d overlap domain without mutation.",
+          summary: "Preflight ui2d placement in the current host view (unknown is not success) or explicit canonical layout.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
@@ -1099,12 +1128,22 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
             properties: {
               session_token: { type: "string", minLength: 8, maxLength: 256 },
               instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
+              frame: { enum: ["current_view", "canonical"] },
+              view_guard: { $ref: "#/components/schemas/WorkspaceViewGuard" },
               candidate: {
                 type: "object",
                 additionalProperties: false,
                 required: ["placement"],
                 properties: {
                   component_id: { type: "string", minLength: 1, maxLength: 256 },
+                  component_type: {
+                    type: "object", additionalProperties: false, required: ["typeId", "version", "digest"],
+                    properties: {
+                      typeId: { type: "string", minLength: 1, maxLength: 256 },
+                      version: { type: "string", minLength: 1, maxLength: 64 },
+                      digest: { type: "string", minLength: 1, maxLength: 256 },
+                    },
+                  },
                   placement: {
                     oneOf: [
                       {
@@ -1196,7 +1235,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
       "/workspace/updates/begin": {
         post: {
           operationId: "begin_workspace_update",
-          summary: "Prepare one revision- and registry-bound Workspace transaction.",
+          summary: "Prepare one revision- and registry-bound transaction, optionally guarded by the current runtime view epoch.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
@@ -1206,6 +1245,9 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
               instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
               intent: { type: "string", minLength: 1, maxLength: 4_000 },
               requested_component_ids: { type: "integer", minimum: 1, maximum: 100 },
+              capability_detail: { enum: ["catalog", "full"] },
+              layout_frame: { enum: ["current_view", "canonical"] },
+              view_guard: { $ref: "#/components/schemas/WorkspaceViewGuard" },
             },
           }),
           responses: successResponses,
@@ -1380,6 +1422,13 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
           properties: {
             width: { type: "number", minimum: 1, maximum: 4_096 },
             height: { type: "number", minimum: 1, maximum: 4_096 },
+          },
+        },
+        WorkspaceViewGuard: {
+          type: "object", additionalProperties: false, required: ["view_id", "view_epoch"],
+          properties: {
+            view_id: { type: "string", minLength: 1, maxLength: 256 },
+            view_epoch: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
           },
         },
         WorkspaceSession: {

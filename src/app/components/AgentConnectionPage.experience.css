@@ -43,6 +43,12 @@
 .agent-handshake-progress strong { color: #3f4d43; font-size: 10.5px; }
 .agent-handshake-progress small { color: #748078; font-size: 9.5px; line-height: 1.4; }
 .agent-approved-note { margin: 12px 0 0; color: #5f7065; font-size: 10px; line-height: 1.5; }
+.agent-approved-identity { display: block; margin-top: 8px; color: #5f7065; font-size: 10px; overflow-wrap: anywhere; }
+.agent-approval-deadline { margin-top: 12px; padding: 9px 11px; border: 1px solid #cbd8cd; border-radius: 7px; background: rgba(255, 255, 255, .57); }
+.agent-approval-deadline p { margin: 3px 0; color: #5f7065; font-size: 10px; line-height: 1.5; }
+.agent-approval-deadline [role="timer"] { font-weight: 750; font-variant-numeric: tabular-nums; }
+.agent-approval-deadline.is-expired { border-color: #d3bf94; background: #f5eddc; }
+.agent-approval-deadline.is-expired p { color: #8a672e; }
 
 .agent-installations {
   padding: 16px;
@@ -120,6 +126,16 @@
 .agent-installation-notice { margin: 12px 0 0; display: flex; align-items: center; gap: 7px; color: #647268; font-size: 9.5px; line-height: 1.45; }
 .agent-installations-unavailable { color: #8a514a; }
 .agent-installation-notice { padding: 8px 10px; border-radius: 7px; background: #e8f0e8; color: #4d6c56; }
+
+.agent-dsh-setup { min-width: 0; padding: 16px; border: 1px solid #c7beb1; border-radius: 11px; background: rgba(255, 252, 247, .72); }
+.agent-dsh-setup .eyebrow { margin: 0 0 4px; }
+.agent-dsh-setup h2 { margin: 0; color: #37352f; font: 500 17px/1.2 Georgia, "Times New Roman", serif; }
+.agent-dsh-setup p:not(.eyebrow) { margin: 8px 0; color: #746d62; font-size: 10px; line-height: 1.5; }
+.agent-dsh-command { display: block; min-width: 0; margin: 8px 0; padding: 9px 10px; border-radius: 6px; background: #f1ece3; color: #514c44; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.agent-dsh-manual { margin-top: 12px; padding-top: 4px; border-top: 1px solid #ded6ca; font-size: 10px; }
+.agent-dsh-manual button { min-height: 36px; padding: 0 11px; border: 1px solid #c9c0b4; border-radius: 7px; display: inline-flex; align-items: center; gap: 6px; background: #fff; color: #4e4941; font-size: 10px; font-weight: 720; cursor: pointer; }
+.agent-dsh-manual button:disabled { opacity: .55; cursor: not-allowed; }
+.agent-dsh-setup p.agent-dsh-approval-note { margin-bottom: 0; color: #5f7065; }
 
 .agent-approval-card .agent-scope-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .agent-approval-card .agent-scope-list li { min-width: 0; display: grid; gap: 3px; }

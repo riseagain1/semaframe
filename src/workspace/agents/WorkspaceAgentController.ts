@@ -1,6 +1,7 @@
 import {
   DEFAULT_WORKSPACE_AGENT_SCOPES,
   WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES,
+  WORKSPACE_CAPABILITY_DISCOVERY_MAX_BYTES,
   WORKSPACE_MODEL_INSPECTION_MAX_BYTES,
   WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT,
   WORKSPACE_PROTOCOL_VERSION,
@@ -21,6 +22,8 @@ import {
   type WorkspacePhotoReconstructionAuthorizationData,
   type WorkspacePreparedEnvelope,
   type WorkspacePreparedUpdate,
+  type WorkspaceViewGuard,
+  type WorkspaceLayoutFrame,
   type WorkspaceRealityAssetView,
   type WorkspaceResourceSnapshotView,
   type WorkspaceStateView,
@@ -29,9 +32,13 @@ import {
 } from "./contracts";
 import {
   WORKSPACE_AGENT_GUIDE,
+  WORKSPACE_AGENT_CORE_GUIDE,
+  WORKSPACE_AGENT_GUIDE_TOPICS,
+  WORKSPACE_AGENT_OPERATION_SCHEMAS,
   digestWorkspaceAgentValue,
   getWorkspaceAgentGuideDigest,
 } from "./guide";
+import { capabilityDetail, discoveryNames, optionalCapabilitySection, selectComponentManifests, selectDiscoveryEntries, workspaceCapabilityCatalog } from "./capabilityDiscovery";
 
 const DEFAULT_SESSION_TTL_MS = 30 * 60_000;
 const DEFAULT_TRANSACTION_TTL_MS = 2 * 60_000;
@@ -93,7 +100,8 @@ export type WorkspaceInstructionsData = Readonly<{
   session_token: string;
   session_expires_at: string;
   guide_digest: string;
-  guide: typeof WORKSPACE_AGENT_GUIDE;
+  guide: Partial<typeof WORKSPACE_AGENT_GUIDE> & Pick<typeof WORKSPACE_AGENT_GUIDE, "guide_version" | "protocol_version" | "instructions" | "default_requested_scopes">;
+  guide_detail: "core" | "full";
   client_id: string;
   client_name?: string;
   requested_scopes: readonly WorkspacePermissionScope[];
@@ -193,6 +201,7 @@ export type InspectWorkspaceSpaceData = Readonly<{
   registry_digest: string;
   spatial_graph: JSONValue;
   layout_graph: JSONValue;
+  view_graph: JSONValue;
 }>;
 
 export type QuerySpatialPlacementData = Readonly<{
@@ -251,6 +260,8 @@ export type BeginWorkspaceUpdateData = Readonly<{
   workspace_summary: JSONValue;
   capability_manifest: JSONValue;
   reserved_component_ids: readonly string[];
+  layout_frame?: WorkspaceLayoutFrame;
+  view_guard?: WorkspaceViewGuard;
 }>;
 
 export type SubmitWorkspaceBatchData = Readonly<{
@@ -344,6 +355,21 @@ function exactRecord(
     );
   }
   return record;
+}
+
+function layoutFrame(value: unknown): WorkspaceLayoutFrame | undefined {
+  if (value === undefined) return undefined;
+  if (value === "current_view" || value === "canonical") return value;
+  throw new WorkspaceEngineError("invalid_request", "frame must be current_view or canonical", { retryable: true });
+}
+
+function viewGuard(value: unknown): WorkspaceViewGuard | undefined {
+  if (value === undefined) return undefined;
+  const record = exactRecord(value, ["view_id", "view_epoch"]);
+  return {
+    view_id: requiredString(record.view_id, "view_id", 1, 256),
+    view_epoch: safeInteger(record.view_epoch, "view_epoch", 0, Number.MAX_SAFE_INTEGER),
+  };
 }
 
 function safeIdentity(value: unknown, maximum: number): string | undefined {
@@ -522,6 +548,12 @@ function toSafeDetail(value: unknown): JSONValue {
 }
 
 function validPrepared(prepared: WorkspacePreparedUpdate): boolean {
+  try {
+    viewGuard(prepared?.view_guard);
+    layoutFrame(prepared?.layout_frame);
+  } catch {
+    return false;
+  }
   const envelope = prepared?.envelope;
   return Boolean(
     envelope &&
@@ -570,7 +602,10 @@ export class WorkspaceAgentController {
   async getWorkspaceInstructions(input: unknown = {}): Promise<WorkspaceAgentResult<WorkspaceInstructionsData>> {
     try {
       this.purgeExpired();
-      const body = exactRecord(input, ["client_id", "client_name", "requested_scopes"], []);
+      const body = exactRecord(input, ["client_id", "client_name", "requested_scopes", "detail"], []);
+      if (body.detail !== undefined && body.detail !== "core" && body.detail !== "full") {
+        throw new WorkspaceEngineError("invalid_request", "detail must be core or full", { retryable: true });
+      }
       const requested = requestedScopes(body.requested_scopes);
       const clientId = safeIdentity(body.client_id, 128) ?? this.randomToken("workspace_client").slice(0, 128);
       const clientName = safeIdentity(body.client_name, 160);
@@ -600,7 +635,8 @@ export class WorkspaceAgentController {
         session_token: token,
         session_expires_at: new Date(expiresAt).toISOString(),
         guide_digest: digest,
-        guide: structuredClone(WORKSPACE_AGENT_GUIDE),
+        guide: structuredClone(body.detail === "full" ? WORKSPACE_AGENT_GUIDE : WORKSPACE_AGENT_CORE_GUIDE),
+        guide_detail: body.detail === "full" ? "full" : "core",
         requested_scopes: requested,
         granted_scopes: granted,
         denied_scopes: requested.filter((scope) => !granted.includes(scope)),
@@ -615,19 +651,57 @@ export class WorkspaceAgentController {
       // Let the capability check, rather than shape validation, explain a
       // missing session. External agents need an actionable instruction-first
       // recovery path even when they call a later tool with an empty object.
-      const body = exactRecord(input, ["session_token", "instruction_digest"], []);
+      const body = exactRecord(input, ["session_token", "instruction_digest", "capability_detail"], []);
       const session = this.requireSession(body.session_token, body.instruction_digest);
       this.requireScopes(session, ["workspace:read"]);
+      const detail = capabilityDetail(body.capability_detail);
       const snapshot = await this.consistentState();
-      const registryDigest = await this.engine.getRegistryDigest();
       return ok({
         ...publicIdentity(session),
         workspace_id: snapshot.workspaceId,
         workspace_revision: snapshot.revision,
-        registry_digest: registryDigest,
+        registry_digest: snapshot.registryDigest,
         workspace_summary: structuredClone(snapshot.summary),
-        capability_manifest: structuredClone(snapshot.capabilityManifest),
+        capability_manifest: detail === "full" ? structuredClone(snapshot.capabilityManifest) : workspaceCapabilityCatalog(snapshot.capabilityManifest),
       });
+    } catch (cause) {
+      return fail(this.mapError(cause));
+    }
+  }
+
+  async inspectWorkspaceCapabilities(input: unknown): Promise<WorkspaceAgentResult<JSONValue>> {
+    try {
+      const body = exactRecord(input, ["session_token", "instruction_digest", "component_type_ids", "guide_topics", "operation_names", "include_connectors", "include_asset_library"], []);
+      const session = this.requireSession(body.session_token, body.instruction_digest);
+      this.requireScopes(session, ["workspace:read"]);
+      const componentTypes = discoveryNames(body.component_type_ids, "component_type_ids", 4);
+      const topics = discoveryNames(body.guide_topics, "guide_topics", 4);
+      const operations = discoveryNames(body.operation_names, "operation_names", 8);
+      for (const field of ["include_connectors", "include_asset_library"] as const) {
+        if (body[field] !== undefined && typeof body[field] !== "boolean") throw new WorkspaceEngineError("invalid_request", `${field} must be boolean`, { retryable: true });
+      }
+      if (!componentTypes.length && !topics.length && !operations.length && !body.include_connectors && !body.include_asset_library) {
+        throw new WorkspaceEngineError("invalid_request", "Choose component_type_ids, guide_topics, operation_names, include_connectors, or include_asset_library; inspect_workspace returns the compact catalog.", { retryable: true });
+      }
+      const snapshot = await this.consistentState();
+      const result = ok({
+        ...publicIdentity(session),
+        workspace_id: snapshot.workspaceId,
+        workspace_revision: snapshot.revision,
+        registry_digest: snapshot.registryDigest,
+        guide_digest: session.digest,
+        component_types: selectComponentManifests(snapshot.capabilityManifest, componentTypes),
+        guide_topics: selectDiscoveryEntries(WORKSPACE_AGENT_GUIDE_TOPICS, topics, "guide topic"),
+        operation_schemas: selectDiscoveryEntries(WORKSPACE_AGENT_OPERATION_SCHEMAS, operations, "operation name"),
+        ...(body.include_connectors ? { connector_types: optionalCapabilitySection(snapshot.capabilityManifest, "connector_types") } : {}),
+        ...(body.include_asset_library ? { asset_library: optionalCapabilitySection(snapshot.capabilityManifest, "asset_library") } : {}),
+      });
+      if (encodedBytes(result) > WORKSPACE_CAPABILITY_DISCOVERY_MAX_BYTES) {
+        throw new WorkspaceEngineError("capability_discovery_too_large", `Selected discovery exceeds ${WORKSPACE_CAPABILITY_DISCOVERY_MAX_BYTES} encoded bytes. Request fewer types, topics, or operations in separate calls. A single inherently large manifest is available via inspect_workspace with capability_detail full; the complete guide is available as workspace://instructions/v1 or detail full during instructions. Nothing was truncated.`, {
+          retryable: true, requiredAction: "inspect_workspace_capabilities",
+        });
+      }
+      return result;
     } catch (cause) {
       return fail(this.mapError(cause));
     }
@@ -860,7 +934,7 @@ export class WorkspaceAgentController {
     try {
       const body = exactRecord(
         input,
-        ["session_token", "instruction_digest", "since_revision"],
+        ["session_token", "instruction_digest", "since_revision", "view_detail"],
         [],
       );
       const session = this.requireSession(body.session_token, body.instruction_digest);
@@ -868,7 +942,12 @@ export class WorkspaceAgentController {
       const sinceRevision = body.since_revision === undefined
         ? undefined
         : safeInteger(body.since_revision, "since_revision", 0, Number.MAX_SAFE_INTEGER);
-      const result = await this.engine.inspectSpace(sinceRevision, principal(session));
+      if (body.view_detail !== undefined && body.view_detail !== "summary" && body.view_detail !== "full") {
+        throw new WorkspaceEngineError("invalid_request", "view_detail must be summary or full", { retryable: true });
+      }
+      const result = await this.engine.inspectSpace(sinceRevision, principal(session), {
+        viewDetail: body.view_detail ?? "summary",
+      });
       return ok({
         ...publicIdentity(session),
         workspace_id: result.workspaceId,
@@ -876,6 +955,16 @@ export class WorkspaceAgentController {
         registry_digest: result.registryDigest,
         spatial_graph: structuredClone(result.spatialGraph),
         layout_graph: structuredClone(result.layoutGraph),
+        view_graph: structuredClone(result.viewGraph ?? {
+          format: "semaframe-runtime-view-graph", version: "1.0", dimension_domain: "ui2d",
+          collision_domain: "overlay2d:runtime",
+          ephemeral: true, status: "unavailable", reason: "runtime_view_unavailable",
+          view_id: null, view_epoch: null, workspace_id: result.workspaceId,
+          workspace_revision: result.revision, sampled_at: null,
+          coordinate_system: { units: "css_px", origin: "viewport_top_left" }, viewport: null,
+          node_count: 0, issue_count: 0, blocking_issue_count: 0, current_view_valid: null,
+          issues: [], issues_truncated: false,
+        }),
       });
     } catch (cause) {
       return fail(this.mapError(cause));
@@ -911,7 +1000,7 @@ export class WorkspaceAgentController {
     try {
       const body = exactRecord(
         input,
-        ["session_token", "instruction_digest", "candidate"],
+        ["session_token", "instruction_digest", "candidate", "frame", "view_guard"],
         [],
       );
       const session = this.requireSession(body.session_token, body.instruction_digest);
@@ -919,7 +1008,10 @@ export class WorkspaceAgentController {
       if (!Object.hasOwn(body, "candidate")) {
         throw new WorkspaceEngineError("invalid_request", "candidate is required", { retryable: true });
       }
-      const result = await this.engine.queryLayoutPlacement(body.candidate, principal(session));
+      const result = await this.engine.queryLayoutPlacement(body.candidate, principal(session), {
+        frame: layoutFrame(body.frame) ?? "current_view",
+        viewGuard: viewGuard(body.view_guard),
+      });
       return ok({
         ...publicIdentity(session),
         workspace_id: result.workspaceId,
@@ -1024,19 +1116,30 @@ export class WorkspaceAgentController {
       this.purgeExpired();
       const body = exactRecord(
         input,
-        ["session_token", "instruction_digest", "intent", "requested_component_ids"],
+        ["session_token", "instruction_digest", "intent", "requested_component_ids", "capability_detail", "layout_frame", "view_guard"],
         [],
       );
       const session = this.requireSession(body.session_token, body.instruction_digest);
       this.requireScopes(session, ["workspace:write"]);
+      const detail = capabilityDetail(body.capability_detail);
       const intent = requiredString(body.intent, "intent", 1, MAX_INTENT_LENGTH).trim();
       if (!intent) throw new WorkspaceEngineError("invalid_request", "intent cannot be blank", { retryable: true });
       const requestedIds = body.requested_component_ids === undefined
         ? DEFAULT_RESERVED_ID_COUNT
         : safeInteger(body.requested_component_ids, "requested_component_ids", 1, MAX_RESERVED_ID_COUNT);
-      const prepared = await this.engine.prepare(intent, requestedIds, principal(session));
+      const requestedViewGuard = viewGuard(body.view_guard);
+      const requestedLayoutFrame = layoutFrame(body.layout_frame);
+      const prepared = await this.engine.prepare(intent, requestedIds, principal(session), {
+        layoutFrame: requestedLayoutFrame,
+        viewGuard: requestedViewGuard,
+      });
       if (!validPrepared(prepared)) {
         throw new WorkspaceEngineError("engine_contract_violation", "Workspace core returned an invalid preparation");
+      }
+      if ((requestedViewGuard && (prepared.view_guard?.view_id !== requestedViewGuard.view_id
+        || prepared.view_guard?.view_epoch !== requestedViewGuard.view_epoch))
+        || (requestedLayoutFrame && prepared.layout_frame !== requestedLayoutFrame)) {
+        throw new WorkspaceEngineError("engine_contract_violation", "Workspace core did not preserve the requested view preconditions");
       }
       const currentRevision = await this.engine.getRevision();
       const currentRegistryDigest = await this.engine.getRegistryDigest();
@@ -1069,8 +1172,10 @@ export class WorkspaceAgentController {
         intent,
         envelope: structuredClone(prepared.envelope),
         workspace_summary: structuredClone(prepared.workspace_summary),
-        capability_manifest: structuredClone(prepared.capability_manifest),
+        capability_manifest: detail === "full" ? structuredClone(prepared.capability_manifest) : workspaceCapabilityCatalog(prepared.capability_manifest),
         reserved_component_ids: [...prepared.reserved_component_ids],
+        ...(prepared.layout_frame === undefined ? {} : { layout_frame: prepared.layout_frame }),
+        ...(prepared.view_guard === undefined ? {} : { view_guard: structuredClone(prepared.view_guard) }),
       });
     } catch (cause) {
       return fail(this.mapError(cause));
@@ -1351,6 +1456,8 @@ export class WorkspaceAgentController {
         return this.getWorkspaceInstructions(input);
       case "inspect_workspace":
         return this.inspectWorkspace(input);
+      case "inspect_workspace_capabilities":
+        return this.inspectWorkspaceCapabilities(input);
       case "inspect_workspace_component":
         return this.inspectWorkspaceComponent(input);
       case "read_workspace_resource_snapshot":
@@ -1588,11 +1695,17 @@ export class WorkspaceAgentController {
     );
   }
 
-  private async consistentState(): Promise<WorkspaceStateView> {
+  private async consistentState(): Promise<WorkspaceStateView & { registryDigest: string }> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      const beforeRegistryDigest = await this.engine.getRegistryDigest();
       const state = await this.engine.getState();
       const revision = await this.engine.getRevision();
-      if (state.revision === revision) return state;
+      const registryDigest = await this.engine.getRegistryDigest();
+      const manifestRegistryDigest = optionalCapabilitySection(state.capabilityManifest, "registry_digest");
+      if (state.revision === revision && beforeRegistryDigest === registryDigest &&
+          (manifestRegistryDigest === null || manifestRegistryDigest === registryDigest)) {
+        return { ...state, registryDigest };
+      }
     }
     throw new WorkspaceEngineError(
       "workspace_busy",

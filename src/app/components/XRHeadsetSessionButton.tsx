@@ -794,7 +794,7 @@ export const XRHeadsetSessionButton = forwardRef<XRHeadsetSessionButtonHandle, X
     >
       {busy ? <LoaderCircle className="spin-slow" size={17} aria-hidden="true" /> : <Headset size={17} aria-hidden="true" />}
     </button>}
-    {desktopControlsVisible && open && createPortal(<div className="xr-headset-modal-backdrop" role="presentation" onMouseDown={(event) => {
+    {desktopControlsVisible && open && createPortal(<div className="xr-headset-modal-backdrop" role="presentation" data-workspace-runtime-modal="xr-headset" onMouseDown={(event) => {
       if (event.target === event.currentTarget) setOpen(false);
     }}>
       <section className="xr-headset-modal" role="dialog" aria-modal="true" aria-labelledby="xr-headset-title">

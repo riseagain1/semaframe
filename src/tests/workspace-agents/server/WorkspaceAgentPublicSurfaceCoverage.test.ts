@@ -105,7 +105,7 @@ describe("public Workspace Agent surface", () => {
 
     try {
       const listed = await client.listTools();
-      expect(WORKSPACE_AGENT_TOOL_NAMES).toHaveLength(26);
+      expect(WORKSPACE_AGENT_TOOL_NAMES).toHaveLength(27);
       expect(listed.tools.map(({ name }) => name).sort()).toEqual(
         [...WORKSPACE_AGENT_TOOL_NAMES].sort(),
       );
@@ -129,6 +129,7 @@ describe("public Workspace Agent surface", () => {
         arguments: session,
       }));
       expect(inspectedEmpty).toMatchObject({ workspace_revision: 0 });
+      expect(data(await client.callTool({ name: "inspect_workspace_capabilities", arguments: { ...session, component_type_ids: ["button"], operation_names: ["create_component"] } }))).toHaveProperty("operation_schemas.create_component");
 
       const commit = async (
         intent: string,

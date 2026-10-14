@@ -30,6 +30,8 @@ import type {
   RenderPresentationContext,
 } from "../../renderer/materialization";
 import type { XRSpatialContextSnapshot } from "../../xr/client";
+import type { RuntimeViewContext } from "../layout/runtimeView";
+import { collectRuntimeViewHost } from "./runtimeViewHost";
 import type {
   ThreeRendererXRPanelAction,
   ThreeRendererXRPanelWarning,
@@ -64,7 +66,11 @@ export type HybridCanvasRendererOptions = Readonly<{
   onCancelResize?: (preview: ResizePreview) => void;
   onCommitResize?: (request: ResizeCommitRequest) => void | Promise<void>;
   onStatus?: (status: HybridRendererStatus) => void;
+  /** External headset presentation must never be reported as desktop view. */
+  isRemoteXRPresenting?: () => boolean;
 }>;
+
+let runtimeViewSequence = 0;
 
 /**
  * Coordinates the WebGL and accessible DOM/SVG projections without becoming
@@ -91,6 +97,15 @@ export class HybridCanvasRenderer {
   private lastCameraSignature = "";
   private lifecycleToken = 0;
   private renderQueue: Promise<void> = Promise.resolve();
+  private pendingRenders = 0;
+  private readonly runtimeViewId = `desktop-view-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++runtimeViewSequence}`}`;
+  private runtimeViewEpoch = 0;
+  private runtimeViewSignature = "";
+  private projectedViewport = { width: 0, height: 0 };
+  private transitionSettlesAt = 0;
+  private renderFailed = false;
+  private paintFrameId: number | null = null;
+  private projectionPaintPending = false;
   private readyStatusPublished = false;
   private readonly touchPoints = new Map<number, Readonly<{ x: number; y: number }>>();
   private lastPinchDistance: number | null = null;
@@ -369,7 +384,10 @@ export class HybridCanvasRenderer {
     if (!this.initialized) throw new Error("HybridCanvasRenderer must be initialized before render().");
     const snapshot = toRenderSnapshot(state);
     const lifecycleToken = this.lifecycleToken;
-    const queued = this.renderQueue.then(() => this.renderNow(snapshot, commit, lifecycleToken));
+    this.pendingRenders += 1;
+    const queued = this.renderQueue.then(() => this.renderNow(snapshot, commit, lifecycleToken))
+      .catch((error: unknown) => { this.renderFailed = true; throw error; })
+      .finally(() => { this.pendingRenders -= 1; });
     this.renderQueue = queued.catch(() => undefined);
     return queued;
   }
@@ -387,6 +405,17 @@ export class HybridCanvasRenderer {
       || previous.workspaceId !== snapshot.workspaceId
       || previous.revision !== snapshot.revision;
     const transitions = snapshotChanged ? componentTransitionsForOperations(operations) : undefined;
+    let transitionDuration = 0;
+    if (snapshotChanged) {
+      const reducedMotion = this.options.reducedMotion ?? this.options.threeOptions?.reducedMotion
+        ?? this.container?.ownerDocument.defaultView?.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      transitionDuration = reducedMotion ? 0 : Math.max(0, ...operations.map((operation) =>
+        "transition" in operation && operation.transition
+          ? operation.transition.durationMs + (operation.transition.delayMs ?? 0) : 0));
+      // Match the overlay's completion grace frame; final geometry is not yet
+      // the displayed geometry while either projection is interpolating.
+      this.transitionSettlesAt = transitionDuration > 0 ? this.runtimeNow() + transitionDuration + 34 : 0;
+    }
     const revisionChanged = previous?.revision !== snapshot.revision;
     if (revisionChanged) {
       for (const componentId of this.previews.keys()) this.three.clearPreview(componentId);
@@ -403,7 +432,9 @@ export class HybridCanvasRenderer {
     if (this.threeReady) {
       try {
         await this.three.render(snapshot, operations, presentation);
+        this.renderFailed = false;
       } catch (error) {
+        this.renderFailed = true;
         this.options.onStatus?.({
           kind: "three-error",
           message: error instanceof Error ? error.message : "The 3D projection failed to update.",
@@ -411,6 +442,9 @@ export class HybridCanvasRenderer {
       }
     }
     if (!this.initialized || lifecycleToken !== this.lifecycleToken) return;
+    // A spatial asset may have resolved after the overlay began animating.
+    // Keep the reported view conservative for its later transition as well.
+    if (transitionDuration > 0) this.transitionSettlesAt = this.runtimeNow() + transitionDuration + 34;
     this.refreshProjectionCamera();
     if (!this.readyStatusPublished) {
       this.readyStatusPublished = true;
@@ -444,6 +478,62 @@ export class HybridCanvasRenderer {
     return this.committed;
   }
 
+  /** Read-only, transient view metadata; never part of the saved Workspace. */
+  getRuntimeViewContext(): RuntimeViewContext {
+    this.refreshProjectionCamera();
+    const sampledAt = this.runtimeNow();
+    const container = this.container;
+    const rect = container?.getBoundingClientRect();
+    const viewport = {
+      width: container?.clientWidth || rect?.width || 0,
+      height: container?.clientHeight || rect?.height || 0,
+    };
+    const host = container ? collectRuntimeViewHost(container) : { occluders: [] };
+    let status: RuntimeViewContext["status"] = "ready";
+    let reason: string | undefined;
+    if (!this.initialized || !container?.isConnected || !this.committed || !this.threeReady
+      || viewport.width <= 0 || viewport.height <= 0 || this.renderFailed) {
+      status = "unavailable";
+      reason = this.renderFailed ? "renderer_error" : "renderer_not_ready";
+    } else if (this.isXRPresenting() || this.options.isRemoteXRPresenting?.()) {
+      status = "unavailable";
+      reason = "xr_active_use_xr_context";
+    } else if (host.unavailableReason) {
+      status = "unavailable";
+      reason = host.unavailableReason;
+    } else if (this.pendingRenders || this.previews.size || this.resizePreviews.size
+      || sampledAt < this.transitionSettlesAt
+      || viewport.width !== this.projectedViewport.width || viewport.height !== this.projectedViewport.height
+      || this.projectionPaintPending) {
+      status = "settling";
+      reason = this.pendingRenders ? "render_pending"
+        : this.previews.size || this.resizePreviews.size ? "human_preview_active"
+          : sampledAt < this.transitionSettlesAt ? "transition_active"
+            : viewport.width !== this.projectedViewport.width || viewport.height !== this.projectedViewport.height
+              ? "viewport_resize_pending" : "projection_paint_pending";
+    }
+    const camera = structuredClone(this.projection.getCamera());
+    const canvasView = structuredClone(this.projection.getCanvasView());
+    const signature = JSON.stringify({ viewport, camera, canvasView, occluders: host.occluders, status, reason });
+    if (signature !== this.runtimeViewSignature) {
+      this.runtimeViewSignature = signature;
+      this.runtimeViewEpoch += 1;
+    }
+    return {
+      viewId: this.runtimeViewId,
+      epoch: this.runtimeViewEpoch,
+      workspaceId: this.committed?.workspaceId ?? "",
+      workspaceRevision: this.committed?.revision ?? 0,
+      sampledAt,
+      status,
+      viewport,
+      camera,
+      canvasView,
+      occluders: host.occluders,
+      ...(reason ? { reason } : {}),
+    };
+  }
+
   getContainer(): HTMLElement | null {
     return this.container;
   }
@@ -454,6 +544,7 @@ export class HybridCanvasRenderer {
     const width = this.container.clientWidth || rect.width || 1;
     const height = this.container.clientHeight || rect.height || 1;
     this.projection.setViewport({ width, height });
+    this.projectedViewport = { width, height };
     if (this.threeReady) this.three.resize();
     this.renderOverlay();
   }
@@ -523,7 +614,10 @@ export class HybridCanvasRenderer {
     this.initialized = false;
     const view = this.container?.ownerDocument.defaultView;
     if (this.frameId !== null && view?.cancelAnimationFrame) view.cancelAnimationFrame(this.frameId);
+    if (this.paintFrameId !== null && view?.cancelAnimationFrame) view.cancelAnimationFrame(this.paintFrameId);
     this.frameId = null;
+    this.paintFrameId = null;
+    this.projectionPaintPending = false;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.selectionUnsubscribe?.();
@@ -567,12 +661,30 @@ export class HybridCanvasRenderer {
     };
   }
 
+  private runtimeNow(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
   private renderOverlay(transitions?: WorkspaceComponentTransitions): void {
     const snapshot = this.effectiveSnapshot();
     if (!snapshot || !this.overlay.getElement()) return;
     this.projection.setComponents(snapshot.components);
     const projections = this.projection.projectAll();
     this.overlay.render(snapshot, projections, this.selection.getSelectedId(), transitions);
+    // React's overlay commit is asynchronous. Two frame boundaries prevent a
+    // queued terminal rectangle being reported as already displayed. Hidden
+    // tabs remain settling until the browser actually resumes presentation.
+    const view = this.container?.ownerDocument.defaultView;
+    if (view?.requestAnimationFrame) {
+      if (this.paintFrameId !== null) view.cancelAnimationFrame(this.paintFrameId);
+      this.projectionPaintPending = true;
+      this.paintFrameId = view.requestAnimationFrame(() => {
+        this.paintFrameId = view.requestAnimationFrame(() => {
+          this.paintFrameId = null;
+          this.projectionPaintPending = false;
+        });
+      });
+    }
   }
 
   private refreshProjectionCamera(): void {

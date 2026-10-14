@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runAgentInstallationAction } from "./agent-installation.mjs";
+import { createDshLauncherPatch, launchDshAgent } from "./dsh-launcher.mjs";
 import { loadRootEnvironment } from "./root-env.mjs";
 
 export const SEMAFRAME_PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -49,8 +50,8 @@ export function parseSemaFrameCliArguments(argv) {
   const first = args.shift() ?? "start";
   if (first === "agent") {
     const action = args.shift();
-    if (!action || !["install", "status", "update", "remove"].includes(action)) {
-      throw new Error("Agent command must be install, status, update, or remove.");
+    if (!action || !["install", "status", "update", "remove", "config", "launch"].includes(action)) {
+      throw new Error("Agent command must be install, status, update, or remove for Codex/Claude, or config/launch for dsh.");
     }
     let client;
     const unsupported = [];
@@ -58,7 +59,7 @@ export function parseSemaFrameCliArguments(argv) {
       const argument = args[index];
       if (argument === "--client") {
         const value = args[index + 1];
-        if (!value || value.startsWith("--")) throw new Error("--client requires codex or claude.");
+        if (!value || value.startsWith("--")) throw new Error("--client requires codex or claude (installation), or dsh (config/launch).");
         if (client !== undefined) throw new Error("--client may be specified only once.");
         client = value;
         index += 1;
@@ -72,8 +73,10 @@ export function parseSemaFrameCliArguments(argv) {
     if (unsupported.length > 0) {
       throw new Error(`Unknown option “${unsupported[0]}”. Run semaframe --help for supported options.`);
     }
-    if (client !== "codex" && client !== "claude") {
-      throw new Error("--client requires codex or claude.");
+    if (action === "config" || action === "launch") {
+      if (client !== "dsh") throw new Error("Agent config and launch require --client dsh.");
+    } else if (client !== "codex" && client !== "claude") {
+      throw new Error("--client requires codex or claude. For dsh, use agent config or agent launch.");
     }
     return Object.freeze({ command: "agent", action, client });
   }
@@ -245,6 +248,8 @@ function helpText() {
     "  semaframe agent status  --client <codex|claude>",
     "  semaframe agent update  --client <codex|claude>",
     "  semaframe agent remove  --client <codex|claude>",
+    "  semaframe agent config --client dsh  Print a credential-free MCP overlay",
+    "  semaframe agent launch --client dsh  Launch an installed DSH Web profile",
     "  semaframe --version      Print the installed version",
     "",
     "Voice Relay is optional and off by default. A voice-capable Agent may use",
@@ -294,6 +299,8 @@ export async function runSemaFrameCli(argv, {
   inspect = inspectSemaFrameHost,
   spawnProcess = spawn,
   agentAction = runAgentInstallationAction,
+  dshConfig = createDshLauncherPatch,
+  dshLaunch = launchDshAgent,
 } = {}) {
   let parsed;
   try {
@@ -311,6 +318,18 @@ export async function runSemaFrameCli(argv, {
     return 0;
   }
   if (parsed.command === "agent") {
+    if (parsed.client === "dsh") {
+      try {
+        if (parsed.action === "config") {
+          output.write(`${await dshConfig({ packageRoot, environment })}\n`);
+          return 0;
+        }
+        return await dshLaunch({ packageRoot, environment, spawnProcess, errorOutput });
+      } catch {
+        errorOutput.write("DeepSeek Harness setup failed. Check the SemaFrame installation and fixed loopback Gateway configuration.\n");
+        return 1;
+      }
+    }
     let agentResult;
     try {
       agentResult = await agentAction(parsed.action, parsed.client, {

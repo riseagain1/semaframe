@@ -459,8 +459,34 @@
 .workspace-button:disabled,
 .workspace-side-panel button:disabled { cursor: not-allowed; opacity: 0.45; }
 
-.workspace-button-component { display: grid; width: 100%; height: 100%; place-items: center; padding: 12px; }
-.workspace-button { width: 100%; min-height: 44px; border-radius: 10px; font-weight: 700; letter-spacing: .01em; }
+.workspace-button-component {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+}
+/* The allocated component box owns sizing, including legacy 32/40 px
+   controls. Intrinsic label width or target-height padding must never enlarge
+   this view beyond its declared 2D layout bounds. */
+.workspace-button {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-radius: 10px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  line-height: 1.2;
+}
+.workspace-button:focus-visible { outline: 2px solid #f5f7fa; outline-offset: -4px; }
 .workspace-button.is-primary { color: #081018; border-color: rgba(104, 213, 255, .9); background: #68d5ff; }
 .workspace-button.is-secondary { color: #f5f7fa; background: rgba(255, 255, 255, .1); }
 .workspace-button.is-danger { color: #fff; border-color: rgba(255, 102, 125, .8); background: rgba(163, 37, 58, .78); }

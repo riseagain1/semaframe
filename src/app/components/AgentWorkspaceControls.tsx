@@ -49,7 +49,7 @@ export function AgentWorkspaceControls({
           : status === "disconnected"
             ? <WifiOff size={15} aria-hidden="true" />
             : <Bot size={15} aria-hidden="true" />}
-        <span>{statusCopy}</span>
+        <span title={statusCopy}>{statusCopy}</span>
       </div>
       <button
         type="button"
@@ -59,7 +59,7 @@ export function AgentWorkspaceControls({
       >
         <History size={15} aria-hidden="true" />
         <span>History</span>
-        {historyCount > 0 && <b aria-label={`${historyCount} ${historyCount === 1 ? "entry" : "entries"}`}>{historyCount}</b>}
+        {historyCount > 0 && <b aria-label={`${historyCount} ${historyCount === 1 ? "entry" : "entries"}`}>{historyCount > 999 ? "999+" : historyCount}</b>}
       </button>
       <button
         type="button"

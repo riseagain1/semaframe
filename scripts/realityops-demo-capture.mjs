@@ -589,6 +589,7 @@ export async function captureRealityOpsDemoAssets() {
     const begin = async (intent, count) => {
       const prepared = await callAgent(client, "begin_workspace_update", {
         ...session,
+        capability_detail: "full",
         intent,
         ...(count ? { requested_component_ids: count } : {}),
       });

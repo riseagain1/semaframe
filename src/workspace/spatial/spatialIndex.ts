@@ -1154,11 +1154,24 @@ export function cloneStateWithSpatialCandidate(
   const hasGeometry = candidate.geometry !== undefined;
   const hasAssetIdentity = candidate.assetId !== undefined || candidate.entityKind !== undefined;
   const hasCad = candidate.cad !== undefined;
+  if (candidate.componentId && !existing && !hasGeometry && !hasAssetIdentity && !hasCad) {
+    throw new TypeError(`Component ${candidate.componentId} does not exist. Inspect the current scene for an existing component_id; a new candidate requires geometry, cad_definition, or asset_id plus entity_kind.`);
+  }
   if (hasGeometry && hasAssetIdentity) {
     throw new TypeError("A parametric candidate cannot also declare assetId or entityKind");
   }
   if (hasCad && (hasGeometry || hasAssetIdentity)) {
     throw new TypeError("A placement candidate must use exactly one of CAD, parametric, or asset identity geometry");
+  }
+  if (existing?.type.typeId === "model-assembly") {
+    if (hasGeometry || hasAssetIdentity || hasCad || candidate.collision) {
+      throw new TypeError("An existing model-assembly candidate accepts only component_id and placement. Its actual descendant colliders and collision policies are preserved; query an individual child to change geometry or collision.");
+    }
+    components.set(candidateId, { ...existing, placement: structuredClone(candidate.placement) });
+    return { state: { ...state, components }, candidateId };
+  }
+  if (existing && !["spatial-entity", "spatial-primitive", "cad-part"].includes(existing.type.typeId)) {
+    throw new TypeError(`Component ${existing.id} is not a spatial placement candidate. Use an existing spatial-entity, spatial-primitive, cad-part, or model-assembly.`);
   }
   if (existing && hasCad && existing.type.typeId !== "cad-part") {
     throw new TypeError(`Component ${existing.id} is not a CAD placement candidate`);
@@ -1277,6 +1290,7 @@ function suggestedPlacements(
   placement: World3DPlacement,
   candidate: SemaFrameSpatialGraphNode,
   conflicts: readonly SemaFrameSpatialGraphNode[],
+  parentTransform?: SpatialTransform,
 ): ComponentPlacement[] {
   if (!conflicts.length) return [];
   const suggestions: Array<{ distance: number; placement: World3DPlacement }> = [];
@@ -1292,7 +1306,23 @@ function suggestedPlacements(
       return candidateBounds.max[axis] - bounds.min[axis] + clearance;
     }));
     for (const delta of [positive, -negative]) {
-      const position = { ...placement.position, [axis]: placement.position[axis] + delta };
+      const worldDelta = { x: 0, y: 0, z: 0, [axis]: delta };
+      // Bounds are in world coordinates, but a child placement is parent-local.
+      // Convert translations back through the parent's rotation and scale.
+      const unrotated = parentTransform
+        ? rotateVector({
+          x: -parentTransform.rotationQuaternion.x,
+          y: -parentTransform.rotationQuaternion.y,
+          z: -parentTransform.rotationQuaternion.z,
+          w: parentTransform.rotationQuaternion.w,
+        }, worldDelta)
+        : worldDelta;
+      const localDelta = parentTransform ? {
+        x: unrotated.x / parentTransform.scale.x,
+        y: unrotated.y / parentTransform.scale.y,
+        z: unrotated.z / parentTransform.scale.z,
+      } : unrotated;
+      const position = add(placement.position, localDelta);
       suggestions.push({
         distance: Math.abs(delta),
         placement: { ...structuredClone(placement), position },
@@ -1313,15 +1343,33 @@ export function querySpatialPlacement(
   const prepared = cloneStateWithSpatialCandidate(state, candidate);
   const nodes = createSpatialNodes(prepared.state);
   const targets = new Set([prepared.candidateId]);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  for (const node of nodes) {
+    const seen = new Set<string>();
+    let parentId = node.parentId;
+    while (parentId && !seen.has(parentId)) {
+      if (parentId === prepared.candidateId) {
+        targets.add(node.id);
+        break;
+      }
+      seen.add(parentId);
+      parentId = byId.get(parentId)?.parentId;
+    }
+  }
+  const candidateNode = byId.get(prepared.candidateId);
+  if (candidateNode?.nodeKind === "assembly"
+    && !nodes.some((node) => targets.has(node.id) && node.collision)) {
+    throw new TypeError("The model-assembly has no evaluable descendant colliders. Add collision geometry to its parts before preflighting assembly movement; an empty or visual-only assembly cannot establish collision clearance.");
+  }
   const allConflicts = collisionPairs(nodes, { maxConflicts: 1_000, targetIds: targets });
   const conflicts = allConflicts.filter((conflict) =>
-    conflict.componentId === prepared.candidateId || conflict.conflictsWith === prepared.candidateId);
-  const candidateNode = nodes.find((node) => node.id === prepared.candidateId);
+    targets.has(conflict.componentId) || targets.has(conflict.conflictsWith));
   const conflictIds = new Set(conflicts.flatMap((conflict) => [conflict.componentId, conflict.conflictsWith])
-    .filter((id) => id !== prepared.candidateId));
+    .filter((id) => !targets.has(id)));
   const conflictNodes = nodes.filter((node) => conflictIds.has(node.id));
+  const parentTransform = candidateNode?.parentId ? byId.get(candidateNode.parentId)?.worldTransform : undefined;
   const rawSuggestions = candidateNode
-    ? suggestedPlacements(candidate.placement as World3DPlacement, candidateNode, conflictNodes)
+    ? suggestedPlacements(candidate.placement as World3DPlacement, candidateNode, conflictNodes, parentTransform)
     : [];
   const safeSuggestions = rawSuggestions.filter((placement) => {
     const components = new Map(prepared.state.components);
@@ -1336,6 +1384,10 @@ export function querySpatialPlacement(
   return {
     valid: conflicts.length === 0,
     candidateId: prepared.candidateId,
+    coordinateFrame: parentTransform ? "parent_local" : "world",
+    ...(parentTransform && candidateNode?.parentId ? { referenceComponentId: candidateNode.parentId } : {}),
+    checkedComponentIds: [...targets].sort((left, right) => left.localeCompare(right)),
+    ...(candidateNode ? { worldTransform: candidateNode.worldTransform, worldBounds: candidateNode.worldBounds } : {}),
     conflicts,
     suggestedPlacements: safeSuggestions,
   };

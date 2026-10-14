@@ -772,7 +772,7 @@ function resizeKindMismatch(policy: ComponentResizePolicy, resize: ComponentResi
   );
 }
 
-function assertResizeValue(
+export function assertResizeValue(
   policy: ComponentResizePolicy,
   resize: ComponentResize,
   current?: ComponentResize,
@@ -1185,6 +1185,12 @@ export function migrateWorkspaceStateToCurrent(
   return state;
 }
 
+/** Ephemeral host validation; never serialized into commands or replayed. */
+export type WorkspacePrecommitValidator = (
+  before: Readonly<WorkspaceState>,
+  draft: Readonly<WorkspaceState>,
+) => void;
+
 export class WorkspaceStore {
   private state: WorkspaceState;
   private checkpointState: WorkspaceState;
@@ -1425,9 +1431,10 @@ export class WorkspaceStore {
   applyDetailed(
     untrustedBatch: WorkspaceCommandBatch,
     authorization: WorkspaceAuthorization = TRUSTED_USER,
+    validateBeforeCommit?: WorkspacePrecommitValidator,
   ): WorkspaceCommitResult {
     const batch = validateWorkspaceCommandBatch(untrustedBatch);
-    return this.applyValidatedDetailed(batch, authorization);
+    return this.applyValidatedDetailed(batch, authorization, undefined, batch.operations, false, validateBeforeCommit);
   }
 
   /**
@@ -1451,6 +1458,7 @@ export class WorkspaceStore {
     replayActionEffects?: readonly ResolvedActionEffect[],
     executionOperations: readonly WorkspaceOperation[] = batch.operations,
     replayingResolvedOperations = false,
+    validateBeforeCommit?: WorkspacePrecommitValidator,
   ): WorkspaceCommitResult {
     const fingerprint = fingerprintBatch(batch);
     const prior = this.committedRequests.get(batch.request_id);
@@ -1675,6 +1683,10 @@ export class WorkspaceStore {
       if (worsenedLayout.length) throw new LayoutOverlapStoreError(worsenedLayout.slice(0, 20));
     }
     this.validateState(draft);
+    // Validate the complete reduced draft (including routed actions), before
+    // committing IDs, history, events or state. Recorded history bypasses host
+    // view checks; idempotent receipts have already returned above.
+    if (!replayingResolvedOperations) validateBeforeCommit?.(before, draft);
     draft.revision = resultingRevision;
     const durableOperations = structuredClone(resolvedOperations);
     const command: WorkspaceCommandRecord = {
@@ -1913,7 +1925,7 @@ export class WorkspaceStore {
       }
       if (!explicitPlacementGeometryMatches(suppliedPlacement, resolvedPlacement)) {
         throw new WorkspaceStoreError(
-          "Policy-changing placement must use target default or frozen geometry; resize separately",
+          "Policy-changing place_component must omit size/scale or use the target default/frozen geometry. Then use resize_component as the next operation in the same batch for the desired size/scale; preflight the final placement first.",
           "resize_requires_resize_component",
         );
       }
@@ -1936,7 +1948,7 @@ export class WorkspaceStore {
         );
       }
       throw new WorkspaceStoreError(
-        "Geometry changes must use resize_component",
+        "place_component only moves or rotates and must preserve the current size/scale (or omit it). Use resize_component for geometry changes; to move and resize, put place_component then resize_component in the same batch and preflight the final placement first.",
         "resize_requires_resize_component",
       );
     }

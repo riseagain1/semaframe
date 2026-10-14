@@ -35,6 +35,15 @@ function config(overrides: Record<string, unknown> = {}) {
 }
 
 const feedRetrievedAt = "2026-08-15T03:04:05.000Z";
+const approvedHandshakeFixture = {
+  clientId: "dsh-client",
+  clientName: "DeepSeek Harness",
+  scopes: ["workspace:read", "workspace:write"],
+  fingerprint: "a1:b2:c3:d4",
+  approvedAt: "2030-01-01T00:00:00.000Z",
+  expiresAt: "2030-01-01T00:10:00.000Z",
+  status: "waiting",
+};
 
 function hostFeedResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -108,8 +117,128 @@ afterEach(() => {
 });
 
 describe("AgentGatewayClient", () => {
-  it("accepts all 36 public commands plus the reconstruction-only internal completion command", () => {
-    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(37);
+  it.each(["waiting", "in_flight"])("retains the approved handshake identity and independent deadline while %s", async (status) => {
+    const approvedHandshake = { ...approvedHandshakeFixture, status };
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      fetch: vi.fn(async () => jsonResponse(config({
+        offerStatus: "approval_granted",
+        offerExpiresAt: "2030-01-01T00:01:00.000Z",
+        approvedHandshake,
+      }))) as typeof fetch,
+      handler: vi.fn(),
+    });
+    const parsed = await client.fetchConfig();
+    expect(parsed.approvedHandshake).toEqual(approvedHandshake);
+    expect(parsed.approvedHandshake?.expiresAt).not.toBe(parsed.offerExpiresAt);
+    expect(Object.isFrozen(parsed.approvedHandshake)).toBe(true);
+    expect(Object.isFrozen(parsed.approvedHandshake?.scopes)).toBe(true);
+    expect(parsed).not.toHaveProperty("pendingApproval");
+  });
+
+  it("accepts an approved handshake without optional client labels", async () => {
+    const { clientId: _clientId, clientName: _clientName, ...approvedHandshake } = approvedHandshakeFixture;
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      fetch: vi.fn(async () => jsonResponse(config({ approvedHandshake }))) as typeof fetch,
+      handler: vi.fn(),
+    });
+    await expect(client.fetchConfig()).resolves.toHaveProperty("approvedHandshake", approvedHandshake);
+  });
+
+  it.each(["approval_expired", "handshake_expired", "offer_expired"])("retains the credential-free %s recovery reason after rotation", async (reason) => {
+    const connectionNotice = { reason, occurredAt: "2030-01-01T00:10:00.000Z" };
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      fetch: vi.fn(async () => jsonResponse(config({ connectionNotice, offerStatus: "waiting" }))) as typeof fetch,
+      handler: vi.fn(),
+    });
+    const parsed = await client.fetchConfig();
+    expect(parsed.connectionNotice).toEqual(connectionNotice);
+    expect(Object.isFrozen(parsed.connectionNotice)).toBe(true);
+    expect(parsed).not.toHaveProperty("approvedHandshake");
+    expect(parsed).not.toHaveProperty("pendingApproval");
+  });
+
+  it.each([
+    null,
+    [],
+    { ...approvedHandshakeFixture, status: "approved" },
+    { ...approvedHandshakeFixture, status: ["waiting"] },
+    { ...approvedHandshakeFixture, expiresAt: "invalid timestamp" },
+    { ...approvedHandshakeFixture, expiresAt: "2030-01-01T00:00:00.000Z" },
+    { ...approvedHandshakeFixture, expiresAt: "2029-01-01T00:00:00.000Z" },
+    { ...approvedHandshakeFixture, approvedAt: "2030-02-30T00:00:00.000Z" },
+    { ...approvedHandshakeFixture, approvedAt: "Bearer private-do-not-display" },
+    { ...approvedHandshakeFixture, scopes: ["workspace:read", 3] },
+    { ...approvedHandshakeFixture, scopes: [""] },
+    { ...approvedHandshakeFixture, scopes: null },
+    { ...approvedHandshakeFixture, clientName: 5 },
+    { ...approvedHandshakeFixture, clientName: "bad\nname" },
+    { ...approvedHandshakeFixture, clientId: false },
+    { ...approvedHandshakeFixture, fingerprint: "" },
+    { ...approvedHandshakeFixture, fingerprint: "x".repeat(257) },
+    { ...approvedHandshakeFixture, approvalToken: "private-do-not-display" },
+  ])("rejects malformed or secret-bearing approved handshake data (%#)", async (approvedHandshake) => {
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      fetch: vi.fn(async () => jsonResponse(config({ approvedHandshake }))) as typeof fetch,
+      handler: vi.fn(),
+    });
+    await expect(client.fetchConfig()).rejects.toMatchObject({
+      code: "invalid_response",
+      message: "The agent gateway returned invalid approved-handshake data.",
+    });
+    expect(client.config).toBeUndefined();
+  });
+
+  it("keeps the existing nonempty-string scope contract for approved metadata", async () => {
+    const approvedHandshake = { ...approvedHandshakeFixture, scopes: ["future:scope", "future:scope", "x".repeat(300)] };
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      fetch: vi.fn(async () => jsonResponse(config({ approvedHandshake }))) as typeof fetch,
+      handler: vi.fn(),
+    });
+    await expect(client.fetchConfig()).resolves.toHaveProperty("approvedHandshake.scopes", approvedHandshake.scopes);
+  });
+
+  it.each([
+    null,
+    [],
+    { reason: "unknown", occurredAt: "2030-01-01T00:10:00.000Z" },
+    { reason: ["approval_expired"], occurredAt: "2030-01-01T00:10:00.000Z" },
+    { reason: "approval_expired", occurredAt: "invalid" },
+    { reason: "approval_expired", occurredAt: "2030-02-30T00:10:00.000Z" },
+    { reason: "approval_expired" },
+    { reason: "approval_expired", occurredAt: "2030-01-01T00:10:00.000Z", approvalToken: "private-do-not-display" },
+  ])("rejects malformed or expanded connection notices without adopting them (%#)", async (connectionNotice) => {
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      fetch: vi.fn(async () => jsonResponse(config({ connectionNotice }))) as typeof fetch,
+      handler: vi.fn(),
+    });
+    await expect(client.fetchConfig()).rejects.toMatchObject({
+      code: "invalid_response",
+      message: "The agent gateway returned an invalid connection notice.",
+    });
+    expect(client.config).toBeUndefined();
+  });
+
+  it("continues to accept older gateway snapshots without handshake or notice metadata", async () => {
+    const client = new AgentGatewayClient({
+      origin: "https://scene.test",
+      fetch: vi.fn(async () => jsonResponse(config({ offerStatus: "approval_granted" }))) as typeof fetch,
+      handler: vi.fn(),
+    });
+    const parsed = await client.fetchConfig();
+    expect(parsed.offerStatus).toBe("approval_granted");
+    expect(parsed).not.toHaveProperty("approvedHandshake");
+    expect(parsed).not.toHaveProperty("connectionNotice");
+  });
+
+  it("accepts all 37 public commands plus the reconstruction-only internal completion command", () => {
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toHaveLength(38);
+    expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("inspect_workspace_capabilities");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("analyze_workspace_precision");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("read_workspace_resource_snapshot");
     expect(AGENT_GATEWAY_COMMAND_NAMES).toContain("begin_workspace_photo_reconstruction");

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import {
   createOwnedProcessSupervisor,
   spawnOwnedProcessTree,
@@ -118,6 +120,26 @@ test("never probes or signals a POSIX PGID after the owned child has fully close
 
   await tree.stop();
   assert.equal(killCalls, 0);
+});
+
+test("waits for queued close after an exited group disappears without probing its reusable PGID again", async () => {
+  const child = new FakeChild(4115);
+  let probes = 0;
+  const tree = spawnOwnedProcessTree("node", [], {}, {
+    platform: "darwin",
+    spawnProcess: () => child,
+    killProcess(_pid, signal) {
+      assert.equal(signal, 0);
+      probes += 1;
+      throw noSuchProcess();
+    },
+    wait: async () => child.close(0),
+  });
+  child.exitCode = 0;
+  child.emit("exit", 0, null);
+  await tree.stop();
+  assert.equal(probes, 1);
+  assert.equal(tree.closed, true);
 });
 
 test("requires inherited output pipes to close instead of accepting leader exit", async () => {
@@ -245,8 +267,30 @@ test("never invokes taskkill after the owned Windows PID has exited", async () =
   });
   child.emit("exit", 0, null);
 
-  await assert.rejects(tree.stop(), /root exited.*pipes did not close/u);
+  await assert.rejects(tree.stop(), { code: "OWNED_WINDOWS_TREE_UNVERIFIED" });
   assert.equal(taskkillCalls, 0);
+});
+
+test("Windows inherited-stdio close is not proof that descendants exited", async () => {
+  for (const alreadyClosed of [false, true]) {
+    const child = new FakeChild(4205);
+    let taskkillCalls = 0;
+    const tree = spawnOwnedProcessTree("node.exe", [], { stdio: "inherit" }, {
+      platform: "win32",
+      spawnProcess: () => child,
+      taskkill: async () => {
+        taskkillCalls += 1;
+        return { code: 0, timedOut: false };
+      },
+    });
+    child.exitCode = 0;
+    child.emit("exit", 0, null);
+    if (alreadyClosed) child.close(0);
+    const stopped = tree.stop();
+    if (!alreadyClosed) child.close(0);
+    await assert.rejects(stopped, { code: "OWNED_WINDOWS_TREE_UNVERIFIED" });
+    assert.equal(taskkillCalls, 0, "never target a reusable root PID");
+  }
 });
 
 test("does not force a reused Windows PID when the root exits after taskkill", async () => {
@@ -268,8 +312,62 @@ test("does not force a reused Windows PID when the root exits after taskkill", a
     pollIntervalMs: 1,
   });
 
-  await assert.rejects(tree.stop(), /exited after taskkill.*pipes did not close/u);
+  await assert.rejects(tree.stop(), { code: "OWNED_WINDOWS_TREE_UNVERIFIED" });
   assert.deepEqual(calls, [false]);
+});
+
+test("failed or timed-out Windows taskkill cannot claim cleanup merely because close follows", async () => {
+  for (const failedStep of ["graceful", "forced"]) {
+    for (const outcome of [{ code: 1, timedOut: false }, { code: null, timedOut: true }]) {
+      const child = new FakeChild(4206);
+      const calls = [];
+      const tree = spawnOwnedProcessTree("node.exe", [], { stdio: "inherit" }, {
+        platform: "win32",
+        spawnProcess: () => child,
+        taskkill: async (_pid, { force }) => {
+          calls.push(force);
+          if (failedStep === "graceful" || force) child.close(0);
+          return outcome;
+        },
+      });
+      await assert.rejects(tree.stop(), { code: "OWNED_WINDOWS_TREE_UNVERIFIED" });
+      assert.deepEqual(calls, failedStep === "graceful" ? [false] : [false, true]);
+    }
+  }
+});
+
+test("browser smoke teardown keeps Windows roots live until owned-tree termination", async () => {
+  for (const script of ["agent-smoke.mjs", "workspace-smoke.mjs"]) {
+    const source = readFileSync(new URL(script, import.meta.url), "utf8");
+    // Exercise the callers' actual cleanup branch, without launching a browser
+    // or services. If this lifecycle changes, review and update this contract.
+    const branch = source.match(/if \(cdp && process\.platform !== "win32"\) \{[\s\S]*?\n {2}\} else \{\n {4}cdp\?\.close\(\);\n {2}\}/u)?.[0];
+    assert.ok(branch, `${script} must explicitly preserve the Windows tree root`);
+    for (const platform of ["win32", "darwin"]) {
+      const calls = [];
+      const browserTree = { closed: false };
+      await runInNewContext(`(async () => { ${branch}; await stopOwnedProcessTrees(); })()`, {
+        process: { platform },
+        browserTree,
+        cdp: {
+          async send(method) {
+            assert.equal(method, "Browser.close");
+            calls.push(method);
+            browserTree.closed = true;
+          },
+          close() { calls.push("transport.close"); },
+        },
+        delay: async () => undefined,
+        async stopOwnedProcessTrees() {
+          assert.equal(browserTree.closed, platform !== "win32");
+          calls.push("tree.stop");
+        },
+      });
+      assert.deepEqual(calls, platform === "win32"
+        ? ["transport.close", "tree.stop"]
+        : ["Browser.close", "transport.close", "tree.stop"]);
+    }
+  }
 });
 
 test("drains every owned tree even when one cleanup fails", async () => {

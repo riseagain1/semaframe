@@ -189,13 +189,22 @@ describe("Workspace Agent SemaFrame Spatial Graph", () => {
         zIndex: 999,
       },
     };
-    const preflight = await controller.queryLayoutPlacement({ ...session, candidate });
+    // This fixture has no rendered host. The default view query is unknown;
+    // explicitly choose canonical for the logical ui2d collision test below.
+    expect(await controller.queryLayoutPlacement({ ...session, candidate })).toMatchObject({
+      ok: true,
+      data: { placement_check: { frame: "current_view", valid: null, current_view_valid: null, canonical_valid: false } },
+    });
+    const preflight = await controller.queryLayoutPlacement({ ...session, candidate, frame: "canonical" });
     expect(preflight).toMatchObject({
       ok: true,
       data: {
         workspace_revision: 1,
         placement_check: {
           valid: false,
+          frame: "canonical",
+          canonical_valid: false,
+          current_view_valid: null,
           dimension_domain: "ui2d",
           collision_domain: "overlay2d:canonical",
           mutates_workspace: false,
@@ -233,6 +242,7 @@ describe("Workspace Agent SemaFrame Spatial Graph", () => {
       ...session,
       intent: "Add a second non-overlapping panel",
       requested_component_ids: 1,
+      layout_frame: "canonical",
     });
     if (!prepared.ok) throw new Error(JSON.stringify(prepared.error));
     const componentId = prepared.data.reserved_component_ids[0]!;

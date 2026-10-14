@@ -78,7 +78,7 @@ export function ProjectBar(props: ProjectBarProps) {
     action();
   };
   return (
-    <header className="project-bar">
+    <header className="project-bar" data-workspace-runtime-region="project-controls">
       <div className="brand-lockup" aria-label="SemaFrame semantic spatial workspace">
         <SemaFrameMark className="brand-mark" />
         <div><strong>SEMAFRAME</strong><small>Semantic spatial workspace</small></div>
@@ -106,7 +106,7 @@ export function ProjectBar(props: ProjectBarProps) {
         <div className="more-menu" ref={menuRef}>
           {dirty && <span className="compact-unsaved-dot" aria-hidden="true" />}
           <button ref={menuButtonRef} type="button" onClick={() => setMenuOpen((value) => !value)} aria-label={`More project actions${dirty ? ", unsaved changes" : ""}`} aria-haspopup="menu" aria-controls="project-actions-menu" aria-expanded={menuOpen}><MoreHorizontal size={18} /></button>
-          {menuOpen && <div ref={menuPanelRef} id="project-actions-menu" className="menu-popover" role="menu" onKeyDown={handleMenuKeyDown}>
+          {menuOpen && <div ref={menuPanelRef} id="project-actions-menu" className="menu-popover" role="menu" data-workspace-runtime-region="project-menu" onKeyDown={handleMenuKeyDown}>
             <button type="button" role="menuitem" className="compact-only" onClick={() => runMenuAction(onUndo)} disabled={!canUndo || busy}><Undo2 size={14} />Undo last change</button>
             <button type="button" role="menuitem" className="compact-only" onClick={() => runMenuAction(onRedo)} disabled={!canRedo || busy}><Redo2 size={14} />Redo last change</button>
             <span className="menu-separator compact-only" role="separator" />

@@ -9,14 +9,123 @@ import type { SceneDelta, SceneOperation, SceneState } from "../../renderer/scen
 import type { RenderPresentationContext } from "../../renderer/materialization";
 import type { RealityMeasurementEvent } from "../../renderer/reality";
 import { ThreeComponentRenderer, type ThreeRendererPort } from "../../workspace/renderer/ThreeComponentRenderer";
+import { HybridCanvasRenderer } from "../../workspace/renderer/HybridCanvasRenderer";
 import type { WorkspaceRenderSnapshot } from "../../workspace/renderer/contracts";
 
+const manuallyOwnedRenderers = new Set<HybridCanvasRenderer>();
+
 afterEach(() => {
+  act(() => {
+    for (const renderer of manuallyOwnedRenderers) {
+      const container = renderer.getContainer();
+      renderer.dispose();
+      container?.remove();
+    }
+    manuallyOwnedRenderers.clear();
+  });
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe("HybridWorkspaceCanvas", () => {
+  it("exposes actual viewport geometry with stable heartbeat epochs and fresh renderer identities", async () => {
+    let now = 1_000;
+    const host = document.createElement("div");
+    host.dataset.workspaceRuntimeRoot = "true";
+    document.body.append(host);
+    let width = 501;
+    vi.spyOn(host, "getBoundingClientRect").mockImplementation(() => ({
+      x: 0, y: 0, left: 0, top: 0, width, height: 639, right: width, bottom: 639, toJSON: () => ({}),
+    }));
+    const renderer = new HybridCanvasRenderer({ three: new ThreeComponentRenderer({ renderer: new FakePort() }), now: () => now });
+    manuallyOwnedRenderers.add(renderer);
+    await act(async () => { await renderer.initialize(host); await renderer.render(snapshot()); });
+    await waitFor(() => expect(renderer.getRuntimeViewContext().status).toBe("ready"));
+    const committedBefore = renderer.getCommittedSnapshot();
+    const first = renderer.getRuntimeViewContext();
+    expect(first).toMatchObject({ status: "ready", viewport: { width: 501, height: 639 }, workspaceRevision: 4, sampledAt: 1_000 });
+    now = 2_000;
+    expect(renderer.getRuntimeViewContext()).toMatchObject({ epoch: first.epoch, sampledAt: 2_000 });
+    width = 700;
+    expect(renderer.getRuntimeViewContext()).toMatchObject({ status: "settling", reason: "viewport_resize_pending" });
+    act(() => renderer.resize());
+    await waitFor(() => expect(renderer.getRuntimeViewContext().status).toBe("ready"));
+    const resized = renderer.getRuntimeViewContext();
+    expect(resized.status).toBe("ready");
+    expect(resized.epoch).toBeGreaterThan(first.epoch);
+    act(() => renderer.setCanvasView({ zoom: 2, pan: { x: 7, y: 9 } }));
+    expect(renderer.getRuntimeViewContext().epoch).toBeGreaterThan(resized.epoch);
+    const epoch = renderer.getRuntimeViewContext().epoch;
+    renderer.projection.setCamera({ position: { x: 8, y: 5, z: 9 }, target: { x: 0, y: 0, z: 0 }, fovDeg: 55 });
+    expect(renderer.getRuntimeViewContext().epoch).toBeGreaterThan(epoch);
+    const cameraEpoch = renderer.getRuntimeViewContext().epoch;
+    const panel = document.createElement("aside");
+    panel.dataset.workspaceRuntimeRegion = "workspace-panel";
+    host.append(panel);
+    vi.spyOn(panel, "getBoundingClientRect").mockReturnValue({
+      x: 400, y: 0, left: 400, top: 0, width: 300, height: 639, right: 700, bottom: 639, toJSON: () => ({}),
+    });
+    const obstructed = renderer.getRuntimeViewContext();
+    expect(obstructed.epoch).toBeGreaterThan(cameraEpoch);
+    expect(obstructed.occluders).toEqual([{ id: "workspace-panel", kind: "panel", bounds: { left: 400, top: 0, width: 300, height: 639 } }]);
+    host.dataset.workspaceRuntimeBlocked = "true";
+    expect(renderer.getRuntimeViewContext()).toMatchObject({ status: "unavailable", reason: "host_modal_or_gate" });
+    expect(renderer.getCommittedSnapshot()).toBe(committedBefore);
+    act(() => renderer.dispose());
+    expect(renderer.getRuntimeViewContext().status).toBe("unavailable");
+    const replacement = new HybridCanvasRenderer();
+    expect(replacement.getRuntimeViewContext().viewId).not.toBe(first.viewId);
+    replacement.dispose();
+    host.remove();
+  });
+
+  it("does not advertise ready view geometry during queued renders or declared transitions", async () => {
+    let now = 1_000;
+    const port = new FakePort();
+    const host = document.createElement("div");
+    document.body.append(host);
+    vi.spyOn(host, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, width: 501, height: 639, right: 501, bottom: 639, toJSON: () => ({}),
+    });
+    const renderer = new HybridCanvasRenderer({ three: new ThreeComponentRenderer({ renderer: port }), now: () => now });
+    manuallyOwnedRenderers.add(renderer);
+    await act(async () => { await renderer.initialize(host); await renderer.render(snapshot()); });
+    const pending = deferred<void>();
+    port.applyDelta.mockImplementationOnce(async () => { await pending.promise; return undefined; });
+    let completion!: Promise<void>;
+    await act(async () => { completion = renderer.render({ ...snapshot(), revision: 5 }, visibilityCommit(4, 5, "hide", 500)); });
+    expect(renderer.getRuntimeViewContext()).toMatchObject({ status: "settling", reason: "render_pending" });
+    await act(async () => { pending.resolve(); await completion; });
+    expect(renderer.getRuntimeViewContext()).toMatchObject({ status: "settling", reason: "transition_active" });
+    now = 1_600;
+    await waitFor(() => expect(renderer.getRuntimeViewContext()).toMatchObject({ status: "ready", workspaceRevision: 5 }));
+    act(() => renderer.dispose());
+    host.remove();
+  });
+
+  it("keeps desktop context unavailable during either local or remote XR", async () => {
+    let remoteXR = false;
+    const port = new FakePort();
+    const ref = createRef<HybridWorkspaceCanvasHandle>();
+    const onRendererReady = vi.fn();
+    render(<HybridWorkspaceCanvas ref={ref} state={snapshot()} onRendererReady={onRendererReady}
+      rendererOptions={{ three: new ThreeComponentRenderer({ renderer: port }), isRemoteXRPresenting: () => remoteXR }} />);
+    await waitFor(() => expect(onRendererReady).toHaveBeenCalled());
+    const renderer = ref.current!.getRenderer()!;
+    vi.spyOn(ref.current!.getContainer()!, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, width: 501, height: 639, right: 501, bottom: 639, toJSON: () => ({}),
+    });
+    act(() => renderer.resize());
+    await waitFor(() => expect(renderer.getRuntimeViewContext().status).toBe("ready"));
+    remoteXR = true;
+    expect(renderer.getRuntimeViewContext()).toMatchObject({ status: "unavailable", reason: "xr_active_use_xr_context" });
+    remoteXR = false;
+    await act(async () => { await ref.current!.enterXR({} as XRSession); });
+    expect(renderer.getRuntimeViewContext()).toMatchObject({ status: "unavailable", reason: "xr_active_use_xr_context" });
+    await act(async () => { await ref.current!.exitXR(); });
+    expect(renderer.getRuntimeViewContext().status).toBe("ready");
+  });
+
   it("bridges a user-activated XR session without creating another Workspace authority", async () => {
     const port = new FakePort();
     const ref = createRef<HybridWorkspaceCanvasHandle>();
@@ -165,6 +274,10 @@ describe("HybridWorkspaceCanvas", () => {
     </div>);
 
     const panel = await screen.findByRole("region", { name: /Status panel, panel component/i });
+    vi.spyOn(ref.current!.getContainer()!, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, toJSON: () => ({}),
+    });
+    act(() => ref.current!.resize());
     fireEvent.focus(panel);
     expect(onSelect).toHaveBeenCalledWith("panel");
     expect(port.setSelectedEntity).toHaveBeenCalledWith(null, false);
@@ -176,15 +289,18 @@ describe("HybridWorkspaceCanvas", () => {
     fireEvent(panel, new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 10, clientY: 20 }));
     fireEvent(document, new MouseEvent("pointermove", { bubbles: true, clientX: 50, clientY: 60 }));
     expect(onPreviewPlacement).toHaveBeenCalledOnce();
+    expect(ref.current!.getRenderer()!.getRuntimeViewContext()).toMatchObject({ status: "settling", reason: "human_preview_active" });
     expect(onCommitPlacement).not.toHaveBeenCalled();
     fireEvent(document, new MouseEvent("pointerup", { bubbles: true, clientX: 50, clientY: 60 }));
     expect(onCommitPlacement).toHaveBeenCalledOnce();
     await waitFor(() => expect(onCancelPreview).toHaveBeenCalledOnce());
+    await waitFor(() => expect(ref.current!.getRenderer()!.getRuntimeViewContext().status).toBe("ready"));
 
     const resizeHandle = await screen.findByRole("button", { name: /Resize Status panel from bottom right/i });
     fireEvent(resizeHandle, new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 240, clientY: 144 }));
     fireEvent(document, new MouseEvent("pointermove", { bubbles: true, clientX: 280, clientY: 174 }));
     expect(onPreviewResize).toHaveBeenCalledOnce();
+    expect(ref.current!.getRenderer()!.getRuntimeViewContext()).toMatchObject({ status: "settling", reason: "human_preview_active" });
     expect(onCommitResize).not.toHaveBeenCalled();
     fireEvent(document, new MouseEvent("pointerup", { bubbles: true, clientX: 280, clientY: 174 }));
     expect(onCommitResize).toHaveBeenCalledOnce();
@@ -194,6 +310,7 @@ describe("HybridWorkspaceCanvas", () => {
       baseRevision: 4,
     }));
     await waitFor(() => expect(onCancelResize).toHaveBeenCalledOnce());
+    await waitFor(() => expect(ref.current!.getRenderer()!.getRuntimeViewContext().status).toBe("ready"));
 
     ref.current?.frameAll();
     ref.current?.resetView();

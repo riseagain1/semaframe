@@ -1169,6 +1169,25 @@ const INTERACTIVE_BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Ob
 ]);
 
 /**
+ * Keep the exact 1.2 button contract available for saved small controls. New
+ * buttons reserve a 44 px target plus the projected host's two 1 px borders.
+ * The view still fits its allocated box at legacy sizes instead of overflowing.
+ */
+function fittedButtonManifest(previous: ComponentManifest): ComponentManifest {
+  const { digest: _previousDigest, ...previousContent } = previous;
+  const content: Omit<ComponentManifest, "digest"> = {
+    ...structuredClone(previousContent),
+    version: "1.3.0",
+    resizePolicy: boxPolicy(UI_PLACEMENTS, { width: 160, height: 48 }, { width: 80, height: 46 }),
+  };
+  return Object.freeze({ ...content, digest: deterministicDigest(content) });
+}
+
+const FITTED_BUTTON_MANIFEST = fittedButtonManifest(
+  INTERACTIVE_BUILTIN_COMPONENT_MANIFESTS.find((manifest) => manifest.typeId === "button")!,
+);
+
+/**
  * Protocol 1.3 makes collision intent part of newly-created spatial entities.
  * Older pinned manifests remain exact and non-blocking so saved history stays
  * replayable; an explicit manifest upgrade is required to opt old entities in.
@@ -1466,6 +1485,7 @@ export const BUILTIN_COMPONENT_MANIFESTS: readonly ComponentManifest[] = Object.
   ...RESIZE_ADAPTED_LEGACY_BUILTIN_COMPONENT_MANIFESTS,
   ...RESIZE_AWARE_BUILTIN_COMPONENT_MANIFESTS,
   ...INTERACTIVE_BUILTIN_COMPONENT_MANIFESTS,
+  FITTED_BUTTON_MANIFEST,
   ...COLLISION_AWARE_BUILTIN_COMPONENT_MANIFESTS,
   ...PHYSICS_AWARE_BUILTIN_COMPONENT_MANIFESTS,
   ...SWITCHABLE_PHYSICS_BUILTIN_COMPONENT_MANIFESTS,
