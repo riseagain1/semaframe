@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { launchChromeForSmoke } from "./lib/chrome-smoke-launcher.mjs";
 import { spawnOwnedProcessTree, stopOwnedProcessTrees } from "./lib/owned-process-tree.mjs";
+import { corruptRecoveryHeadInBrowser, observeRecoveryNoticeInBrowser, renamedRecoveryPair } from "./lib/workspace-recovery-smoke.mjs";
 
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const withTimeout = (promise, timeoutMs, label) => new Promise((resolvePromise, rejectPromise) => {
@@ -176,7 +177,15 @@ async function readWorkspaceRecoveryStorage(cdp) {
       records.onerror = () => { value = { slots: [], databaseError: true }; };
       records.onsuccess = () => {
         value = {
-          slots: records.result.map((record) => ({ slot: record.slot, sequence: record.sequence, projectName: record.projectName })),
+          slots: records.result.map((record) => {
+            let componentCount = null;
+            try { componentCount = JSON.parse(record.serializedProject).workspace.components.length; } catch { /* Invalid snapshots cannot satisfy the fixture readiness check. */ }
+            return {
+              slot: record.slot, projectId: record.projectId, projectName: record.projectName,
+              generation: record.generation, sequence: record.sequence, workspaceRevision: record.workspaceRevision,
+              createdAt: record.createdAt, sha256: record.sha256, componentCount,
+            };
+          }),
           fallbackPresent: Boolean(localStorage.getItem('semaframe-workspace-recovery-v3-fallback')),
           legacyPresent: Boolean(localStorage.getItem('semaframe-workspace-recovery-v2')),
         };
@@ -185,37 +194,20 @@ async function readWorkspaceRecoveryStorage(cdp) {
   })`);
 }
 
-async function waitForWorkspaceRecoverySlots(cdp, requiredSlots, label, timeoutMs = 12_000) {
+async function waitForWorkspaceRecoverySlots(cdp, requiredSlots, label, timeoutMs = 12_000, accepts = () => true) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const state = await readWorkspaceRecoveryStorage(cdp);
-    if (requiredSlots.every((slot) => state.slots.some((record) => record.slot === slot))) return state;
+    if (requiredSlots.every((slot) => state.slots.some((record) => record.slot === slot)) && accepts(state)) return state;
     await delay(100);
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-async function corruptCurrentWorkspaceRecovery(cdp) {
-  return cdp.evaluate(`new Promise((resolve, reject) => {
-    const request = indexedDB.open('semaframe-workspace-recovery-v3', 1);
-    request.onerror = () => reject(request.error ?? new Error('Recovery database could not open'));
-    request.onsuccess = () => {
-      const database = request.result;
-      const transaction = database.transaction('snapshots', 'readwrite');
-      transaction.onerror = () => reject(transaction.error ?? new Error('Recovery transaction failed'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Recovery transaction aborted'));
-      const store = transaction.objectStore('snapshots');
-      const current = store.get('current');
-      let updated = false;
-      current.onerror = () => reject(current.error ?? new Error('Current recovery could not be read'));
-      current.onsuccess = () => {
-        if (!current.result) return;
-        updated = true;
-        store.put({ ...current.result, sha256: 'sha256:' + 'f'.repeat(64) });
-      };
-      transaction.oncomplete = () => { database.close(); resolve(updated); };
-    };
-  })`);
+async function corruptCurrentWorkspaceRecovery(cdp, state) {
+  const current = state.slots.find((record) => record.slot === "current");
+  const previous = state.slots.find((record) => record.slot === "previous");
+  return cdp.evaluate(`(${corruptRecoveryHeadInBrowser.toString()})(${JSON.stringify(current)}, ${JSON.stringify(previous)})`);
 }
 
 async function reloadWorkspaceApp(cdp, label) {
@@ -742,6 +734,9 @@ try {
   await poll(cdp, "!document.querySelector('.workspace-tool-panel')", "closed component panel");
 
   if (recoverySmokeOnly) {
+    const baseline = await waitForWorkspaceRecoverySlots(cdp, ["current"], "focused recovery baseline", 12_000,
+      (state) => state.slots.some((record) => record.slot === "current" && record.componentCount === 1));
+    const previous = baseline.slots.find((record) => record.slot === "current");
     if (!await cdp.evaluate(`(() => {
       const input = document.querySelector('input[aria-label="Project name"]');
       if (!(input instanceof HTMLInputElement)) return false;
@@ -754,21 +749,25 @@ try {
       cdp,
       ["current", "previous"],
       "focused current and previous recovery snapshots",
+      12_000,
+      (state) => renamedRecoveryPair(state, previous, "recovery-smoke-current"),
     );
     const previousProjectName = recoverySlots.slots.find((record) => record.slot === "previous")?.projectName;
     if (typeof previousProjectName !== "string" || !previousProjectName) {
       throw new Error(`Focused recovery previous snapshot had no project name: ${JSON.stringify(recoverySlots)}`);
     }
-    if (!await corruptCurrentWorkspaceRecovery(cdp)) {
+    if (!await corruptCurrentWorkspaceRecovery(cdp, recoverySlots)) {
       throw new Error("The focused current recovery snapshot was unavailable for corruption testing.");
     }
     await reloadWorkspaceApp(cdp, "focused Workspace recovery reload");
     const reloadClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace recovery reload");
     if (reloadClient) workspaceAgentClients.push(reloadClient);
     await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "focused recovery banner");
+    await cdp.evaluate(`(${observeRecoveryNoticeInBrowser.toString()})()`);
     if (!await cdp.evaluate(clickExactButton("Continue recovered project"))) {
       throw new Error("The focused recovery banner could not restore its previous snapshot.");
     }
+    await poll(cdp, "window.__workspaceRecoverySmokeNoticeSeen === true", "focused last-known-good recovery notice");
     await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", "focused recovery replacement gate");
     const restoreClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace after recovery restore");
     if (restoreClient) workspaceAgentClients.push(restoreClient);
@@ -1438,6 +1437,9 @@ try {
 
   // Produce a second durable snapshot, corrupt only the newest IndexedDB head,
   // and prove a real reload can still recover the previous semantic project.
+  const recoveryBaseline = await waitForWorkspaceRecoverySlots(cdp, ["current"], "mixed recovery baseline", 12_000,
+    (state) => state.slots.some((record) => record.slot === "current" && record.projectName === "workspace-mixed-smoke" && record.componentCount === 5));
+  const previousRecovery = recoveryBaseline.slots.find((record) => record.slot === "current");
   if (!await cdp.evaluate(`(() => {
     const input = document.querySelector('input[aria-label="Project name"]');
     if (!(input instanceof HTMLInputElement)) return false;
@@ -1451,22 +1453,25 @@ try {
     "document.querySelector('input[aria-label=\"Project name\"]')?.value === 'workspace-mixed-smoke-recovery-current'",
     "recovery project-name snapshot",
   );
-  await waitForWorkspaceRecoverySlots(cdp, ["current", "previous"], "current and previous recovery snapshots");
-  if (!await corruptCurrentWorkspaceRecovery(cdp)) throw new Error("The current recovery snapshot was unavailable for corruption testing.");
+  const recoveryPair = await waitForWorkspaceRecoverySlots(cdp, ["current", "previous"], "current and previous recovery snapshots", 12_000,
+    (state) => renamedRecoveryPair(state, previousRecovery, "workspace-mixed-smoke-recovery-current"));
+  if (!await corruptCurrentWorkspaceRecovery(cdp, recoveryPair)) throw new Error("The current recovery snapshot was unavailable for corruption testing.");
 
   await reloadWorkspaceApp(cdp, "Workspace reload with a corrupt current recovery");
   const recoveryReloadAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace recovery reload");
   if (recoveryReloadAgentClient) workspaceAgentClients.push(recoveryReloadAgentClient);
   await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "recovery banner after reload");
+  await cdp.evaluate(`(${observeRecoveryNoticeInBrowser.toString()})()`);
   if (!await cdp.evaluate(clickExactButton("Continue recovered project"))) {
     throw new Error("The recovery banner could not restore its last-known-good snapshot.");
   }
+  await poll(cdp, "window.__workspaceRecoverySmokeNoticeSeen === true", "last-known-good recovery notice");
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", "recovery project replacement gate");
   const restoredRecoveryAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace after recovery restore");
   if (restoredRecoveryAgentClient) workspaceAgentClients.push(restoredRecoveryAgentClient);
   await poll(
     cdp,
-    "document.querySelector('input[aria-label=\"Project name\"]')?.value === 'workspace-mixed-smoke' && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 5 && document.querySelector('.toast-stack')?.textContent?.includes('last-known-good Workspace snapshot')",
+    "document.querySelector('input[aria-label=\"Project name\"]')?.value === 'workspace-mixed-smoke' && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 5 && window.__workspaceRecoverySmokeNoticeSeen === true",
     "last-known-good previous recovery restoration",
   );
 
