@@ -4,6 +4,8 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-14
+
 ### Added
 
 - Ephemeral desktop `view_graph` with actual CSS-pixel viewport, live projection camera/canvas transform, app-owned toolbar regions and projected 2D boundaries. Explicit ready/settling/unavailable states and bounded detail never enter project files or undo history.
@@ -146,7 +148,8 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.3...v0.4.0
 [0.4.0-rc.3]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.2...v0.4.0-rc.3
 [0.4.0-rc.2]: https://github.com/riseagain1/semaframe/compare/v0.3.0...v0.4.0-rc.2

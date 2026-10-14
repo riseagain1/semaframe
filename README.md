@@ -47,9 +47,25 @@ These three silent-first English films show the product through ordinary-languag
 
 The rooms, city, and feeds are deterministic synthetic evidence—not field scans, live infrastructure, or engineering certification. Video binaries live in the [Demo Gallery release](https://github.com/riseagain1/semaframe/releases/tag/demo-gallery-v1); Remotion source, captions, contracts, and captured evidence remain reviewable in [`video/`](./video/README.md). The [original 78-second launch tour](https://github.com/riseagain1/semaframe/releases/download/v0.2.0/semaframe-demo.mp4) remains available in the [v0.2.0 release](https://github.com/riseagain1/semaframe/releases/tag/v0.2.0).
 
+## What's new in v0.5
+
+The current stable release is `v0.5.0`. It adds runtime-aware layout and smaller, targeted Agent discovery, and packages the official DeepSeek Harness integration. It preserves the editable modeling, precision, Reality, XR, and portable-project foundation from v0.4.
+
+| Capability | What changes |
+| --- | --- |
+| **Runtime-aware 2D layout** | An ephemeral `view_graph` describes the actual desktop viewport, projected panel bounds, and app-owned toolbar regions. Current-view preflight and final-draft validation detect overlap, clipping, and host occlusion without mixing 2D and physical 3D collision. |
+| **Progressive Agent discovery** | A compact mandatory guide and exact type catalog replace full schemas by default. `inspect_workspace_capabilities` retrieves selected manifests, guidance topics, and operation schemas; explicit full-reference modes remain available. |
+| **DeepSeek Harness integration** | Credential-free Cordis overlay export and a foreground Web-profile launcher use the official external DSH runtime and SemaFrame's persistent MCP bridge without editing the user's DSH profile. |
+| **Clearer approval recovery** | Initial approval starts a separate bounded 10-minute instruction-handshake window, with distinct approval/handshake status and expiry guidance. Completed sessions are not disconnected by those setup deadlines. |
+| **Assembly and control fixes** | Existing-assembly preflight uses real descendant colliders and explicit parent-local/world coordinates. Button content fits its panel; new button 1.3.0 provides a 44 px minimum target while older saved manifests remain supported. |
+
+The v0.5 surface is Workspace Protocol 1.3 with project schema 1.4, 27 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.4, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The stable package uses npm's default `latest` channel. Stable denotes the release channel, not universal model reliability, certified physical accuracy, or acceptance of every hardware combination.
+
+**Agent-client upgrade:** default responses no longer include every component and operation schema. Discover the contracts needed for the task before submitting edits, or opt into the documented full modes. For visible 2D placement, inspect a ready runtime view, carry its exact view guard through preflight and preparation, and re-inspect after a stale-view rejection. Canonical-only authoring remains available but does not certify screen visibility. See the [v0.5.0 release notes](./docs/release-v0.5.0.md) and [DSH setup and acceptance evidence](./docs/agents/deepseek-harness.md).
+
 ## What's new in v0.4
 
-The current stable release is `v0.4.0`. It keeps the v0.3 modeling and Reality foundation, adds editable B-rep authoring, measurement-driven modeling and a production-oriented CAD handoff, and closes the next operational loops:
+The `v0.4.0` release established the following foundation on top of v0.3 modeling and Reality, including editable B-rep authoring, measurement-driven modeling and a production-oriented CAD handoff:
 
 | Capability | What it adds |
 | --- | --- |
@@ -67,7 +83,7 @@ The current stable release is `v0.4.0`. It keeps the v0.3 modeling and Reality f
 | **Extension and host services** | Versioned connector/importer/exporter/bridge contracts, digest/signature verification, Workspace-bound grants, an owned framed-stdio host, immutable connector registries, and bounded asynchronous artifact jobs |
 | **Community ecosystem** | A signed static project/model template catalog with proposal-only installation plus explicitly opt-in, previewable anonymous performance diagnostics with no bundled vendor endpoint |
 
-The source surface is Workspace Protocol 1.3 with project schema 1.4, 27 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.4, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The stable `v0.4.0` release includes the measurement precision workflow, dependency security updates, and expanded regression coverage validated in `v0.4.0-rc.3`; the source checkout additionally includes progressive Agent discovery, runtime view validation, and the DSH integration described below. The published stable release uses npm's default `latest` channel and GitHub's Latest release. Stable denotes the supported release channel, not certification of physical accuracy or every hardware combination.
+The v0.4.0 surface used Workspace Protocol 1.3 and project schema 1.4, with 26 Workspace MCP tools plus 10 ephemeral host-control tools and Agent Guide 3.2. It included the measurement precision workflow, dependency security updates, and expanded regression coverage validated in v0.4.0-rc.3. Progressive discovery, runtime-view validation, and DSH integration were added in v0.5.0; they are not features of the historical v0.4.0 package.
 
 The v0.4 release also hardens the product surface around those
 contracts: explicit Agent states, direct Agent-first Workspace entry, a unified Checks center, Basic/Advanced
@@ -95,6 +111,7 @@ Together, these capabilities support one inspectable workflow: import captured c
 ## Contents
 
 - [See SemaFrame in action](#see-semaframe-in-action)
+- [What's new in v0.5](#whats-new-in-v05)
 - [What's new in v0.4](#whats-new-in-v04)
 - [What's new in v0.3](#whats-new-in-v03)
 - [Why SemaFrame](#why-semaframe)
@@ -200,7 +217,7 @@ npm exec --yes --package=semaframe -- semaframe start
 ```
 
 For a reproducible installation, replace `--package=semaframe` with
-`--package=semaframe@0.4.0`. Older candidates remain available by exact version;
+`--package=semaframe@0.5.0`. Older releases and candidates remain available by exact version;
 `next` is not required for this stable release.
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
@@ -410,7 +427,7 @@ The connection URL contains a random offer identifier, not authority. The first 
 
 Incomplete expired or failed offers can be replaced with **Create fresh URL**. **Revoke pairing** invalidates the current offer and live sessions. If the authoritative browser disappears, the engine becomes unavailable rather than creating a second hidden Workspace.
 
-In the current source checkout (not yet in the published `0.4.0` package), pending
+From v0.5.0, pending
 approval lasts up to 2 minutes, bounded by the connection offer. First approval
 starts a separate 10-minute window for the Agent to start or retry its instruction
 handshake; repeated approval cannot extend it. An in-flight request retains its
@@ -426,13 +443,13 @@ DeepSeek Harness can use the same approved Workspace tools as an external Agent.
 SemaFrame does not embed a DeepSeek chat UI or store a DeepSeek API key. Configure
 the model/provider in DSH itself.
 
-The DSH integration below is new in the source checkout and is not included in
-the published `semaframe@0.4.0` package yet. With the official `dsh` command
+The DSH integration is included from `semaframe@0.5.0`; the older `0.4.0`
+package does not contain it. With the official `dsh` command
 installed on PATH (or the macOS DeepSeek Harness app installed), keep SemaFrame
-open and run from this checkout:
+open and run:
 
 ```bash
-node bin/semaframe.mjs agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.0 -- semaframe agent launch --client dsh
 ```
 
 This launches DSH's Web profile with an independent temporary Cordis overlay and
@@ -445,7 +462,7 @@ scopes in SemaFrame when DSH first calls `get_workspace_instructions`.
 For an existing DSH launch workflow, use **Copy DSH configuration** on the
 connection page, save it as `semaframe.dsh.json`, and start
 `dsh web --patch ./semaframe.dsh.json`. The same JSON (a valid YAML subset) is
-available through `node bin/semaframe.mjs agent config --client dsh`. The overlay
+available through `npm exec --yes --package=semaframe@0.5.0 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
 contains only the launcher paths and fixed loopback Gateway origin, never model
 keys, pairing bearers, or short-lived connection URLs. Regenerate it if the
 SemaFrame installation moves. Do not load two SemaFrame overlays into one DSH

@@ -2,22 +2,22 @@
 
 This integration targets the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), whose executable is `dsh`, and its [`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md). It is not a DeepSeek API proxy, a built-in chat system, or an integration with an unrelated executable also named `dsh`.
 
-The commands below are new source-checkout functionality; the previously published `semaframe@0.4.0` does not contain them. After a release containing this integration is installed, `semaframe` can replace `node bin/semaframe.mjs`.
+The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.0 for reproducibility. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
 
 ## Prerequisites
 
 - Install the official DSH CLI or macOS Desktop app separately using its [official instructions](https://deepseek.com/en/harness/). SemaFrame does not silently download or install an Agent client. The launcher prefers `dsh` on PATH; on macOS, if absent, it recognizes the official app's bundled CLI under `/Applications` or your user's `Applications` directory without changing PATH.
-- Follow DSH's own Node requirement, which can be higher than SemaFrame's. The upstream runtime currently declares `^22.19.0 || >=24.0.0`; SemaFrame's `22.12` minimum alone does not establish DSH compatibility.
+- Follow DSH's own Node requirement, which can be higher than SemaFrame's. The tested DSH 0.2.0-rc.2 runtime declares `^22.19.0 || >=24.0.0`; SemaFrame's `22.12` minimum alone does not establish DSH compatibility. Check the requirement of the DSH version you install.
 - Configure the chosen model and authentication inside DSH. Do not paste model credentials into SemaFrame, an MCP overlay, or a connection URL.
 - Keep the authoritative SemaFrame browser tab open with Agent control enabled. The external Agent must be able to reach its local Gateway.
 - A cloud-hosted DSH process cannot reach the Mac's loopback address just because it received the configuration. This integration targets DSH running on the same computer.
 
 ## Launch without editing a DSH profile
 
-From the SemaFrame checkout, with its dependencies installed:
+With the official DSH runtime installed and SemaFrame open:
 
 ```sh
-node bin/semaframe.mjs agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.0 -- semaframe agent launch --client dsh
 ```
 
 This runs the installed `dsh web --patch <temporary-overlay>` as a foreground child. The working directory remains the one you launched from; the existing DSH model/provider environment remains DSH's responsibility. SemaFrame writes only its own temporary overlay and removes it after the child exits. Interrupting the launcher forwards shutdown to the child. The wrapper does not modify `~/.dsh`, select a different model, enter credentials, or bypass browser approval. DSH may perform its own normal first-run initialization.
@@ -36,7 +36,13 @@ On SemaFrame's connection screen, choose **Copy DSH configuration**, save the co
 dsh web --patch ./semaframe.dsh.json
 ```
 
-Alternatively, `node bin/semaframe.mjs agent config --client dsh` prints only the overlay JSON to stdout. Save that output in a new file of your choice. JSON is valid YAML for the official Cordis overlay loader, so no YAML conversion or executable `!!js` expressions are required.
+Alternatively, the following command prints only the overlay JSON to stdout:
+
+```sh
+npm exec --yes --package=semaframe@0.5.0 -- semaframe agent config --client dsh
+```
+
+Save that output in a new file of your choice. JSON is valid YAML for the official Cordis overlay loader, so no YAML conversion or executable `!!js` expressions are required.
 
 The overlay inserts one `@deepseek-ai/dsh-mcp-client` entry named `semaframe-mcp`, using the `semaframe` tool namespace and stdio transport. It points directly to the installed Node/tsx/SemaFrame bridge files, not an npm wrapper or a custom one-shot script. The only explicit child environment values are the fixed loopback Gateway origin and the display name `DeepSeek Harness`.
 
@@ -56,7 +62,7 @@ The default setup does not enable Voice Relay, grant deletion or photo-reconstru
 
 ### Approval timing and recovery
 
-In this source version, a pending approval request has a 2-minute deadline (also
+From v0.5.0, a pending approval request has a 2-minute deadline (also
 bounded by the original connection offer). Clicking **Approve client** starts a
 separate 10-minute instruction-handshake window. It is set once; clicking approval
 again does not renew it. This gives an external model time to resume after the
@@ -70,7 +76,7 @@ offer, do not repeat the old credential or assume prior approval still applies.
 Ask DSH to start a new `get_workspace_instructions` request with the same identity
 and intended scopes but no old approval token; compare and approve the newly
 displayed fingerprint. Neither SemaFrame nor DSH may approve that replacement on
-the user's behalf. Published `0.4.0` does not yet include this timing fix.
+the user's behalf. The historical `0.4.0` package does not include this timing fix.
 
 ## Verification boundaries
 
