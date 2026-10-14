@@ -18,14 +18,17 @@ describe("universal component registry", () => {
     expect(rebuilt.listLatest().map((manifest) => manifest.typeId).sort()).toEqual(
       [...BUILTIN_COMPONENT_TYPE_IDS].sort(),
     );
-    // Existing types retain 1.0/1.1 compatibility refs; button starts at 1.2,
+    // Existing types retain 1.0/1.1 compatibility refs; button starts at 1.2
+    // and adds the fitted accessible target minimum in 1.3,
     // while spatial-entity adds collision-aware 1.3, physics-aware 1.4,
     // master-switch 1.5, and movable 1.6 contracts. Exact primitives and
     // model assemblies gain move_to in pinned 1.1 contracts.
-    expect(rebuilt.list()).toHaveLength(58);
+    expect(rebuilt.list()).toHaveLength(59);
     for (const typeId of BUILTIN_COMPONENT_TYPE_IDS) {
       const expectedVersion = typeId === "spatial-entity"
         ? "1.6.0"
+        : typeId === "button"
+          ? "1.3.0"
         : typeId === "model-assembly"
           ? "2.0.0"
         : typeId === "spatial-primitive"

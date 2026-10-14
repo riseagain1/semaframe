@@ -61,6 +61,21 @@ export type AgentGatewayPendingApproval = Readonly<{
   expiresAt: string;
 }>;
 
+export type AgentGatewayApprovedHandshake = Readonly<{
+  clientId?: string;
+  clientName?: string;
+  scopes: readonly string[];
+  fingerprint: string;
+  approvedAt: string;
+  expiresAt: string;
+  status: "waiting" | "in_flight";
+}>;
+
+export type AgentGatewayConnectionNotice = Readonly<{
+  reason: "approval_expired" | "handshake_expired" | "offer_expired";
+  occurredAt: string;
+}>;
+
 export type AgentGatewayConfig = Readonly<{
   version: 1;
   gatewayInstanceId: string;
@@ -76,6 +91,8 @@ export type AgentGatewayConfig = Readonly<{
   offerExpiresAt?: string;
   offerStatus?: AgentGatewayOfferStatus;
   pendingApproval?: AgentGatewayPendingApproval;
+  approvedHandshake?: AgentGatewayApprovedHandshake;
+  connectionNotice?: AgentGatewayConnectionNotice;
 }>;
 
 export type AgentGatewayPairing = Readonly<{
@@ -775,6 +792,54 @@ function parsePendingApproval(value: unknown): AgentGatewayPendingApproval | und
   };
 }
 
+function isGatewayTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length !== 24 || !Number.isFinite(Date.parse(value))) return false;
+  return new Date(value).toISOString() === value;
+}
+
+function isDisplayIdentity(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 256
+    && !/[\u0000-\u001f\u007f]/u.test(value);
+}
+
+function parseApprovedHandshake(value: unknown): AgentGatewayApprovedHandshake | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !exactKeys(value, ["clientId", "clientName", "scopes", "fingerprint", "approvedAt", "expiresAt", "status"])
+    || (value.clientId !== undefined && !isDisplayIdentity(value.clientId))
+    || (value.clientName !== undefined && !isDisplayIdentity(value.clientName))
+    || !isDisplayIdentity(value.fingerprint)
+    || !Array.isArray(value.scopes)
+    || !value.scopes.every((scope) => typeof scope === "string" && scope)
+    || !isGatewayTimestamp(value.approvedAt) || !isGatewayTimestamp(value.expiresAt)
+    || Date.parse(value.expiresAt) <= Date.parse(value.approvedAt)
+    || (value.status !== "waiting" && value.status !== "in_flight")) {
+    throw new AgentGatewayError("invalid_response", "The agent gateway returned invalid approved-handshake data.");
+  }
+  return Object.freeze({
+    ...(value.clientId === undefined ? {} : { clientId: value.clientId }),
+    ...(value.clientName === undefined ? {} : { clientName: value.clientName }),
+    scopes: Object.freeze([...value.scopes]),
+    fingerprint: value.fingerprint,
+    approvedAt: value.approvedAt,
+    expiresAt: value.expiresAt,
+    status: value.status,
+  });
+}
+
+function parseConnectionNotice(value: unknown): AgentGatewayConnectionNotice | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !exactKeys(value, ["reason", "occurredAt"])
+    || typeof value.reason !== "string"
+    || !["approval_expired", "handshake_expired", "offer_expired"].includes(value.reason)
+    || !isGatewayTimestamp(value.occurredAt)) {
+    throw new AgentGatewayError("invalid_response", "The agent gateway returned an invalid connection notice.");
+  }
+  return Object.freeze({
+    reason: value.reason as AgentGatewayConnectionNotice["reason"],
+    occurredAt: value.occurredAt,
+  });
+}
+
 function isAbortError(error: unknown): boolean {
   return (error instanceof DOMException && error.name === "AbortError") ||
     (isRecord(error) && error.name === "AbortError");
@@ -921,6 +986,8 @@ function parseConfig(value: unknown): AgentGatewayConfig {
     throw new AgentGatewayError("invalid_response", "The agent gateway returned an invalid configuration response.");
   }
   const pendingApproval = parsePendingApproval(value.pendingApproval);
+  const approvedHandshake = parseApprovedHandshake(value.approvedHandshake);
+  const connectionNotice = parseConnectionNotice(value.connectionNotice);
   return {
     version: 1,
     gatewayInstanceId: value.gatewayInstanceId,
@@ -936,6 +1003,8 @@ function parseConfig(value: unknown): AgentGatewayConfig {
     ...(value.offerExpiresAt === undefined ? {} : { offerExpiresAt: value.offerExpiresAt }),
     ...(value.offerStatus === undefined ? {} : { offerStatus: value.offerStatus }),
     ...(pendingApproval === undefined ? {} : { pendingApproval }),
+    ...(approvedHandshake === undefined ? {} : { approvedHandshake }),
+    ...(connectionNotice === undefined ? {} : { connectionNotice }),
   };
 }
 

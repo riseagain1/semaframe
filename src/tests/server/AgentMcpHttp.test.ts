@@ -28,6 +28,7 @@ const expectedTools = [
   "inspect_voice_relay",
   "inspect_workspace",
   "inspect_workspace_asset",
+  "inspect_workspace_capabilities",
   "inspect_workspace_component",
   "inspect_workspace_model",
   "inspect_workspace_photo_reconstruction",
@@ -172,7 +173,11 @@ describe("Agent MCP connection offers", () => {
       name: "semaframe-workspace-engine",
       version: "1.10.0",
     });
-    expect(expectedTools).toHaveLength(36);
+    expect(client.getInstructions()).toContain("inspect_workspace_capabilities for only the needed component_type_ids, guide_topics, and operation_names before begin_workspace_update");
+    expect(client.getInstructions()).toContain("not props/action/operation schemas; never guess these schemas");
+    expect(client.getInstructions()).toContain("ephemeral view_graph");
+    expect(client.getInstructions()).toContain("current_view_valid null is unknown, never success");
+    expect(expectedTools).toHaveLength(37);
     expect(tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     expect(tools.every((tool) => tool.inputSchema.additionalProperties === false)).toBe(true);
     expect(tools.every((tool) => Boolean(tool.outputSchema))).toBe(true);
@@ -276,6 +281,15 @@ describe("Agent MCP connection offers", () => {
     const afterApproval = await payload(await handle(browserConfigRequest()));
     expect(afterApproval).toEqual(expect.objectContaining({ connected: false, offerStatus: "approval_granted" }));
     expect(afterApproval.pendingApproval).toBeUndefined();
+    expect(afterApproval.approvedHandshake).toEqual({
+      clientId: "agent-test-01",
+      clientName: "Trusted Agent",
+      scopes: ["workspace:read", "workspace:write"],
+      fingerprint: approvalFingerprint,
+      approvedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + 10 * 60_000).toISOString(),
+      status: "waiting",
+    });
 
     const pollPromise = browserPost(handle, browser.csrfToken, "/api/agent/browser/poll", {
       browserConnectionId: browser.browserConnectionId,
@@ -509,6 +523,9 @@ describe("Agent MCP connection offers", () => {
     now += 101;
     const refreshed = await payload(await handle(browserConfigRequest()));
     expect(refreshed).toEqual(expect.objectContaining({ offerStatus: "waiting" }));
+    expect(refreshed.connectionNotice).toEqual({
+      reason: "approval_expired", occurredAt: new Date(now).toISOString(),
+    });
     expect(refreshed.connectionUrl).not.toBe(browser.connectionUrl);
     expect((await handle(new Request(browser.connectionUrl))).status).toBe(404);
   });

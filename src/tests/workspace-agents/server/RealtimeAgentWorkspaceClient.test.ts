@@ -50,6 +50,7 @@ const INSTRUCTIONS: WorkspaceInstructionsData = {
   session_expires_at: "2026-08-14T01:00:00.000Z",
   guide_digest: "guide_digest_1234567890",
   guide: WORKSPACE_AGENT_GUIDE,
+  guide_detail: "full",
   client_id: "realtime-agent",
   requested_scopes: ["workspace:read", "workspace:write", "component:create"],
   granted_scopes: ["workspace:read", "workspace:write", "component:create"],
@@ -140,10 +141,13 @@ describe("RealtimeAgentWorkspaceClient", () => {
       utteranceId: "utterance-2",
       intent: "Create a timer",
       requestedComponentIds: 1,
+      layoutFrame: "current_view",
+      viewGuard: { view_id: "desktop-view", view_epoch: 2 },
       buildBatch,
     });
 
     expect(result).toEqual({ ok: true, data: COMMIT });
+    expect(transport.calls[1]?.input).toMatchObject({ layout_frame: "current_view", view_guard: { view_id: "desktop-view", view_epoch: 2 } });
     expect(buildBatch).toHaveBeenCalledWith(PREPARATION, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(transport.calls.map(({ name }) => name)).toEqual([
       "get_workspace_instructions",
@@ -320,5 +324,21 @@ describe("RealtimeAgentWorkspaceClient", () => {
       },
     ]);
     expect(JSON.stringify(client)).not.toMatch(/api[_-]?key|openai|openrouter/iu);
+  });
+
+  it("forwards optional runtime view detail, layout frame, and view guard without changing candidate bindings", async () => {
+    const transport = new ScriptedTransport();
+    const client = new RealtimeAgentWorkspaceClient(transport, new RecordingPreviewSink());
+    configureConnect(transport);
+    await client.connect();
+    transport.handler = async (name, input) => ({ ok: true, data: { name, input } });
+    await client.inspectSpace(3, { viewDetail: "full" });
+    const candidate = { component_type: { typeId: "button", version: "1.3.0", digest: "fixture-binding" }, placement: {} };
+    const guard = { view_id: "desktop-view", view_epoch: 2 };
+    await client.queryLayoutPlacement(candidate, { frame: "current_view", viewGuard: guard });
+    expect(transport.calls.slice(-2)).toEqual([
+      { name: "inspect_workspace_space", input: { session_token: INSTRUCTIONS.session_token, instruction_digest: INSTRUCTIONS.guide_digest, since_revision: 3, view_detail: "full" } },
+      { name: "query_layout_placement", input: { session_token: INSTRUCTIONS.session_token, instruction_digest: INSTRUCTIONS.guide_digest, candidate, frame: "current_view", view_guard: guard } },
+    ]);
   });
 });

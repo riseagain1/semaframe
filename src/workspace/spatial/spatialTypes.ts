@@ -221,6 +221,7 @@ export type SpatialPlacementCandidate = Readonly<{
     definition: CadPartDefinitionV1;
     evaluation: CadEvaluationEvidenceV1;
   }>;
+  /** Exact component placement: parent-local for an existing spatial child, world for a root/new component. */
   placement: ComponentPlacement;
   collision?: SpatialCollisionConfig;
 }>;
@@ -228,6 +229,11 @@ export type SpatialPlacementCandidate = Readonly<{
 export type SpatialPlacementCheck = Readonly<{
   valid: boolean;
   candidateId: string;
+  coordinateFrame: "world" | "parent_local";
+  referenceComponentId?: string;
+  checkedComponentIds: readonly string[];
+  worldTransform?: SpatialTransform;
+  worldBounds?: SpatialBounds;
   conflicts: readonly SpatialCollisionConflict[];
   suggestedPlacements: readonly ComponentPlacement[];
 }>;

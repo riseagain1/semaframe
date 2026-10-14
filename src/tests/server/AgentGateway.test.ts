@@ -149,7 +149,7 @@ describe("Agent Gateway browser boundary", () => {
       enabled: false,
       connected: false,
       engineConnected: false,
-      instructionVersion: "3.2",
+      instructionVersion: "3.4",
       csrfToken: expect.any(String),
     }));
     expect(JSON.stringify(payload)).not.toMatch(/pairing|bearer|mcpServers/u);
@@ -458,6 +458,78 @@ describe("Agent Gateway browser boundary", () => {
     }
   });
 
+  it("forwards runtime view detail, layout frame and exact view guards through public REST", async () => {
+    const { handle } = setup();
+    const browser = await browserSetup(handle);
+    const session = {
+      session_token: "workspace_session_example",
+      instruction_digest: "workspace_guide_digest",
+    };
+    const guard = { view_id: "runtime-view-fixture", view_epoch: 7 };
+    const candidate = {
+      component_id: "PANEL_A",
+      placement: { space: "viewport", anchor: "top_left", offset: { x: 0, y: 100 }, size: { width: 160, height: 48 } },
+    };
+    const cases = [
+      { path: "/v1/workspace/space/inspect", name: "inspect_workspace_space", body: { ...session, since_revision: 3, view_detail: "full" } },
+      { path: "/v1/workspace/layout/query", name: "query_layout_placement", body: { ...session, candidate, frame: "canonical" } },
+      { path: "/v1/workspace/layout/query", name: "query_layout_placement", body: { ...session, candidate, frame: "current_view", view_guard: guard } },
+      { path: "/v1/workspace/updates/begin", name: "begin_workspace_update", body: { ...session, intent: "Place a guarded panel", layout_frame: "current_view", view_guard: guard, capability_detail: "catalog" } },
+      { path: "/v1/workspace/updates/begin", name: "begin_workspace_update", body: { ...session, intent: "Logical-only layout", layout_frame: "canonical" } },
+    ];
+    for (const entry of cases) {
+      const pollPromise = browserPost(handle, browser.csrfToken, "/api/agent/browser/poll", {
+        browserConnectionId: browser.browserConnectionId,
+      });
+      const externalPromise = handle(jsonRequest(entry.path, entry.body, {
+        authorization: `Bearer ${browser.bearer}`,
+      }));
+      const poll = await json(await pollPromise);
+      const command = poll.command as Record<string, unknown>;
+      expect(command.name).toBe(entry.name);
+      expect(command.input).toEqual(entry.body);
+      const coreResult = { ok: true, data: { inspected: entry.name } };
+      await browserPost(handle, browser.csrfToken, "/api/agent/browser/result", {
+        browserConnectionId: browser.browserConnectionId,
+        commandId: command.id,
+        ok: true,
+        result: coreResult,
+      });
+      const response = await externalPromise;
+      expect(response.status).toBe(200);
+      expect(await json(response)).toEqual(coreResult);
+    }
+  });
+
+  it("keeps runtime-view REST request shapes closed and rejects malformed guards", async () => {
+    const { gateway, handle } = setup();
+    gateway.setEnabled(true);
+    const bearer = gateway.revealPairing().pairingBearer;
+    const session = { session_token: "workspace_session_example", instruction_digest: "workspace_guide_digest" };
+    const endpoints = [
+      { path: "/v1/workspace/space/inspect", body: { ...session, view_detail: "full" } },
+      { path: "/v1/workspace/layout/query", body: { ...session, candidate: {}, frame: "canonical" } },
+      { path: "/v1/workspace/updates/begin", body: { ...session, intent: "Place a panel", layout_frame: "current_view" } },
+    ];
+    const reject = async (path: string, body: unknown) => {
+      const response = await handle(jsonRequest(path, body, { authorization: `Bearer ${bearer}` }));
+      expect(response.status).toBe(400);
+      expect((await json(response)).error).toEqual(expect.objectContaining({ code: "invalid_request" }));
+    };
+    for (const entry of endpoints) await reject(entry.path, { ...entry.body, unexpected: true });
+    for (const entry of endpoints.slice(1)) {
+      for (const view_guard of [
+        { view_id: "view", view_epoch: 1, unexpected: true },
+        { view_id: "view" },
+        { view_id: "view", view_epoch: -1 },
+        { view_id: "view", view_epoch: 0.5 },
+        { view_id: "", view_epoch: 1 },
+        { view_id: "x".repeat(257), view_epoch: 1 },
+        null,
+      ]) await reject(entry.path, { ...entry.body, view_guard });
+    }
+  });
+
   it("preserves structured resource-read domain errors inside the public REST 200 envelope", async () => {
     const { handle } = setup();
     const browser = await browserSetup(handle);
@@ -744,6 +816,8 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("WorkspaceCommandBatch");
     expect(serialized).toContain("get_workspace_instructions");
     expect(serialized).toContain("inspect_workspace_component");
+    expect(serialized).toContain("inspect_workspace_capabilities");
+    expect(serialized).toContain("/workspace/capabilities/inspect");
     expect(serialized).toContain("inspect_workspace_asset");
     expect(serialized).toContain("read_workspace_resource_snapshot");
     expect(serialized).toContain("/workspace/resources/snapshot/read");
@@ -760,8 +834,9 @@ describe("Agent Gateway browser boundary", () => {
     expect(serialized).toContain("/workspace/models/inspect");
     expect(serialized).toContain("query_layout_placement");
     expect(serialized).toContain("/workspace/layout/query");
-    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(27);
+    expect(Object.keys(payload.paths as Record<string, unknown>)).toHaveLength(28);
     expect(payload.paths).toEqual(expect.objectContaining({
+      "/workspace/capabilities/inspect": expect.objectContaining({ post: expect.objectContaining({ operationId: "inspect_workspace_capabilities" }) }),
       "/assets/imports/begin": expect.any(Object),
       "/assets/imports/cancel": expect.any(Object),
       "/assets/imports/complete": expect.any(Object),

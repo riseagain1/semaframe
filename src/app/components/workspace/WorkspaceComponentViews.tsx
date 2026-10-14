@@ -66,6 +66,7 @@ function ButtonView({
       <button
         type="button"
         className={`workspace-button is-${variant}`}
+        title={label}
         disabled={component.locks.actions}
         data-press-count={pressCount}
         onClick={() => onAction("press")}

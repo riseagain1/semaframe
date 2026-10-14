@@ -167,6 +167,34 @@ async function verifyPackedAgentInstaller(installedRoot) {
   );
 }
 
+async function verifyPackedDshSetup(installedRoot) {
+  const result = await run(process.execPath, [
+    join(installedRoot, "bin", "semaframe.mjs"), "agent", "config", "--client", "dsh",
+  ], {
+    cwd: temporaryRoot,
+    env: { ...process.env, SEMAFRAME_AGENT_GATEWAY_URL: "http://127.0.0.1:48788" },
+  });
+  const overlay = JSON.parse(result.stdout);
+  assert.equal(overlay.length, 1);
+  const [entry] = overlay[0].insert;
+  assert.equal(entry.name, "@deepseek-ai/dsh-mcp-client");
+  assert.equal(entry.config.transport, "stdio");
+  assert.equal(entry.config.command, process.execPath);
+  assert.deepEqual(entry.config.env, {
+    SEMAFRAME_AGENT_GATEWAY_URL: "http://127.0.0.1:48788",
+    SEMAFRAME_AGENT_NAME: "DeepSeek Harness",
+  });
+  assert.equal(entry.config.args[0], "--import");
+  const installedRequire = createRequire(join(installedRoot, "package.json"));
+  assert.equal(fileURLToPath(entry.config.args[1]), installedRequire.resolve("tsx"));
+  assert.equal(await realpath(entry.config.args[2]), await realpath(join(installedRoot, "scripts", "agent-mcp.ts")));
+  for (const path of [fileURLToPath(entry.config.args[1]), entry.config.args[2]]) {
+    await access(path, fsConstants.R_OK);
+    assert.ok(pathIsInside(await realpath(temporaryRoot), await realpath(path)), "DSH setup escaped the isolated install.");
+  }
+  await access(join(installedRoot, "docs", "agents", "deepseek-harness.md"), fsConstants.R_OK);
+}
+
 /**
  * Exercise the exact TypeScript bridge shipped by the tarball after an
  * `--omit=dev` install. Merely checking package.json would miss a runtime-only
@@ -347,6 +375,7 @@ try {
   }
 
   await verifyPackedAgentInstaller(installedRoot);
+  await verifyPackedDshSetup(installedRoot);
   await verifyPackedAgentBridge(installedRoot);
 
   const version = await run(process.execPath, [join(installedRoot, "bin", "semaframe.mjs"), "--version"], {

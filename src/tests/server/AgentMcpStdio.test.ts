@@ -25,6 +25,7 @@ const EXPECTED_TOOLS = [
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_asset",
+  "inspect_workspace_capabilities",
   "inspect_workspace_component",
   "inspect_workspace_model",
   "inspect_workspace_photo_reconstruction",

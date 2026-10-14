@@ -1521,11 +1521,15 @@ try {
     5_000,
     `Workspace smoke Agent client ${index + 1} to close`,
   )));
-  if (cdp) {
+  // Windows must keep the root alive until taskkill scopes its owned tree.
+  // Browser.close first would discard that capability before descendant cleanup.
+  if (cdp && process.platform !== "win32") {
     await cdp.send("Browser.close", {}, 5_000).catch(() => undefined);
     cdp.close();
     const browserCloseDeadline = Date.now() + 5_000;
     while (!browserTree.closed && Date.now() < browserCloseDeadline) await delay(50);
+  } else {
+    cdp?.close();
   }
   await stopOwnedProcessTrees([browserTree, stackTree]);
   rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

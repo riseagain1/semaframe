@@ -99,6 +99,7 @@ describe("Workspace Agent data and interaction vertical slice", () => {
         name: "get_workspace_instructions",
         arguments: {
           client_id: "vertical-slice-agent",
+          detail: "full",
           client_name: "Vertical slice regression agent",
         },
       }));
@@ -130,6 +131,7 @@ describe("Workspace Agent data and interaction vertical slice", () => {
           ...session,
           intent,
           requested_component_ids: requestedComponentIds,
+          capability_detail: "full",
         },
       }));
       const submit = async (

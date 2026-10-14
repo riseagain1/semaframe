@@ -133,6 +133,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
         name: "get_workspace_instructions",
         arguments: {
           client_id: "parametric-modeling-agent",
+          detail: "full",
           client_name: "Parametric modeling regression agent",
         },
       }));
@@ -166,6 +167,7 @@ describe("Workspace Agent parametric modeling vertical slice", () => {
           ...session,
           intent,
           requested_component_ids: requestedComponentIds,
+          capability_detail: "full",
         },
       }));
       const submit = async (

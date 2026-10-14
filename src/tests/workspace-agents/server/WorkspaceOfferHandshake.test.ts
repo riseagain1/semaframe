@@ -203,6 +203,7 @@ describe("Workspace MCP connection offer", () => {
       "inspect_voice_relay",
       "inspect_workspace",
       "inspect_workspace_asset",
+      "inspect_workspace_capabilities",
       "inspect_workspace_component",
       "inspect_workspace_model",
       "inspect_workspace_photo_reconstruction",

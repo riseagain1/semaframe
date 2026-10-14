@@ -280,7 +280,7 @@ export function WorkspaceChrome({
   };
   return (
     <>
-      <nav className="workspace-tool-dock" aria-label="Workspace component tools">
+      <nav className="workspace-tool-dock" aria-label="Workspace component tools" data-workspace-runtime-region="workspace-tools">
         {!sourcesOnly && <button type="button" disabled={disabled} aria-expanded={panel === "library"} aria-controls="workspace-tool-panel" onClick={() => toggle("library")}>
           <Boxes size={17} /><span>Components</span>
         </button>}
@@ -311,6 +311,8 @@ export function WorkspaceChrome({
         <div
           id="workspace-tool-panel"
           className="workspace-tool-panel"
+          data-workspace-runtime-region="workspace-panel"
+          data-workspace-runtime-modal-scope="true"
           role="region"
           aria-label={`${panel} panel`}
           aria-disabled={disabled || undefined}

@@ -69,7 +69,7 @@ function assertAction(action) {
   }
 }
 
-function stableGatewayUrl(environment, exactGatewayUrl) {
+export function stableGatewayUrl(environment, exactGatewayUrl) {
   const configuredPort = environment.SEMAFRAME_AGENT_GATEWAY_PORT?.trim();
   if (configuredPort && (!/^[0-9]{1,5}$/u.test(configuredPort)
     || Number(configuredPort) < 1

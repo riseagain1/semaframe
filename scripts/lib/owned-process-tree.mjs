@@ -106,6 +106,16 @@ async function terminatePosixTree(tree, options) {
   };
   if (gone()) return;
   if (groupObservedGone) {
+    // At the root's exit event a fully stopped group may already be absent
+    // while Node still has its close event queued. Wait only for these owned
+    // handles; never probe or signal the vanished (and reusable) PGID again.
+    if (await waitUntil(
+      closed,
+      options.termGraceMs,
+      options.pollIntervalMs,
+      options.wait,
+      options.now,
+    )) return;
     throw new Error("Owned process group exited but inherited pipes did not close.");
   }
 
@@ -133,22 +143,18 @@ async function terminatePosixTree(tree, options) {
 }
 
 async function terminateWindowsTree(tree, options) {
-  if (tree.closed()) return;
-  if (tree.exited()) {
-    if (await waitUntil(
-      tree.closed,
-      options.termGraceMs,
-      options.pollIntervalMs,
-      options.wait,
-      options.now,
-    )) return;
-    throw new Error("Owned Windows root exited but inherited pipes did not close.");
-  }
+  const ownershipLost = () => Object.assign(new Error(
+    "Owned Windows root exited before process-tree termination was confirmed; descendant cleanup cannot be verified safely.",
+  ), { code: "OWNED_WINDOWS_TREE_UNVERIFIED" });
+  // A child close event accounts for its own handles, not every descendant
+  // (especially with inherited stdio). Once the root exits, its reusable PID
+  // is no longer a safe tree capability. Do not claim cleanup or taskkill it.
+  if (tree.exited() || tree.closed()) throw ownershipLost();
   const graceful = await options.taskkill(tree.pid, {
     force: false,
     timeoutMs: options.termGraceMs,
   });
-  if (graceful.code === 0
+  if (graceful.code === 0 && !graceful.timedOut
     && await waitUntil(
       tree.closed,
       options.termGraceMs,
@@ -158,29 +164,20 @@ async function terminateWindowsTree(tree, options) {
     )) {
     return;
   }
-  if (tree.closed()) return;
-  if (tree.exited()) {
-    if (await waitUntil(
-      tree.closed,
-      options.forceGraceMs,
-      options.pollIntervalMs,
-      options.wait,
-      options.now,
-    )) return;
-    throw new Error("Owned Windows root exited after taskkill but inherited pipes did not close.");
-  }
+  if (tree.exited() || tree.closed()) throw ownershipLost();
 
-  await options.taskkill(tree.pid, {
+  const forced = await options.taskkill(tree.pid, {
     force: true,
     timeoutMs: options.forceGraceMs,
   });
-  if (await waitUntil(
+  if (forced.code === 0 && !forced.timedOut && await waitUntil(
     tree.closed,
     options.forceGraceMs,
     options.pollIntervalMs,
     options.wait,
     options.now,
   )) return;
+  if (tree.exited() || tree.closed()) throw ownershipLost();
   throw new Error("Owned Windows process tree did not close after taskkill escalation.");
 }
 

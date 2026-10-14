@@ -6,7 +6,9 @@
  */
 
 export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "3.2" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "3.4" as const;
+/** Exact progressive discovery result cap; text and structured MCP copies are budgeted separately in tests. */
+export const WORKSPACE_CAPABILITY_DISCOVERY_MAX_BYTES = 48_000;
 /** Final JSON cap for one public inspect_workspace_component result. */
 export const WORKSPACE_COMPONENT_INSPECTION_MAX_BYTES = 1_048_576;
 /**
@@ -99,6 +101,7 @@ export const DEFAULT_WORKSPACE_AGENT_SCOPES = [
 export const WORKSPACE_AGENT_TOOL_NAMES = [
   "get_workspace_instructions",
   "inspect_workspace",
+  "inspect_workspace_capabilities",
   "inspect_workspace_component",
   "read_workspace_resource_snapshot",
   "inspect_workspace_asset",
@@ -203,6 +206,28 @@ export type WorkspacePreparedEnvelope = Readonly<{
   mode: "commit";
 }>;
 
+/** Ephemeral host-view precondition, separate from durable Workspace authority. */
+export type WorkspaceViewGuard = Readonly<{
+  view_id: string;
+  view_epoch: number;
+}>;
+
+export type WorkspaceLayoutFrame = "current_view" | "canonical";
+
+export type WorkspaceSpaceInspectionOptions = Readonly<{
+  viewDetail?: "summary" | "full";
+}>;
+
+export type WorkspaceLayoutQueryOptions = Readonly<{
+  frame?: WorkspaceLayoutFrame;
+  viewGuard?: WorkspaceViewGuard;
+}>;
+
+export type WorkspacePrepareOptions = Readonly<{
+  layoutFrame?: WorkspaceLayoutFrame;
+  viewGuard?: WorkspaceViewGuard;
+}>;
+
 /**
  * A preparation produced by the authoritative Workspace core. The controller
  * retains this exact object and passes it back to submit; clients never supply
@@ -213,6 +238,9 @@ export type WorkspacePreparedUpdate = Readonly<{
   workspace_summary: JSONValue;
   capability_manifest: JSONValue;
   reserved_component_ids: readonly string[];
+  /** Ephemeral host preconditions; never part of the persisted batch envelope. */
+  layout_frame?: WorkspaceLayoutFrame;
+  view_guard?: WorkspaceViewGuard;
 }>;
 
 export type WorkspaceStateView = Readonly<{
@@ -307,6 +335,8 @@ export type WorkspaceSpatialStateView = Readonly<{
   registryDigest: string;
   spatialGraph: JSONValue;
   layoutGraph: JSONValue;
+  /** Older/headless adapters may omit this; the controller reports unavailable. */
+  viewGraph?: JSONValue;
 }>;
 
 export type WorkspaceSpatialPlacementView = Readonly<{
@@ -418,6 +448,7 @@ export interface WorkspaceEnginePort {
   inspectSpace(
     sinceRevision: number | undefined,
     principal: WorkspaceAgentPrincipal,
+    options?: WorkspaceSpaceInspectionOptions,
   ): WorkspaceSpatialStateView | Promise<WorkspaceSpatialStateView>;
   querySpatialPlacement(
     candidate: unknown,
@@ -426,6 +457,7 @@ export interface WorkspaceEnginePort {
   queryLayoutPlacement(
     candidate: unknown,
     principal: WorkspaceAgentPrincipal,
+    options?: WorkspaceLayoutQueryOptions,
   ): WorkspaceLayoutPlacementView | Promise<WorkspaceLayoutPlacementView>;
   inspectPhysics(
     componentIds: readonly string[] | undefined,
@@ -445,6 +477,7 @@ export interface WorkspaceEnginePort {
     intent: string,
     requestedIds?: number,
     principal?: WorkspaceAgentPrincipal,
+    options?: WorkspacePrepareOptions,
   ): WorkspacePreparedUpdate | Promise<WorkspacePreparedUpdate>;
   submit(
     prepared: WorkspacePreparedUpdate,

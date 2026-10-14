@@ -57,7 +57,7 @@ describe("Agent placement input boundaries", () => {
     expect(store.getRevision()).toBe(0);
   });
 
-  it("accepts explicit canvas rotation/z-index and both documented ID spellings", async () => {
+  it("accepts explicit canonical canvas rotation/z-index and both documented ID spellings", async () => {
     const store = new WorkspaceStore();
     store.apply(workspaceBatch(store, "panel", [{ op: "create_component", op_id: "panel", id: "NEW_PANEL",
       component_type: DEFAULT_COMPONENT_REGISTRY.ref("panel"),
@@ -66,8 +66,8 @@ describe("Agent placement input boundaries", () => {
     const adapter = new WorkspaceStoreEngineAdapter(store);
     for (const idField of ["component_id", "componentId"]) {
       for (const placement of [{ ...canvas, rotationDeg: 45, zIndex: -2 }, { ...viewport, zIndex: 2 }]) {
-        await expect(adapter.queryLayoutPlacement({ [idField]: "NEW_PANEL", placement }, reader))
-          .resolves.toMatchObject({ revision: 1, placementCheck: { valid: true, candidate_id: "NEW_PANEL", mutates_workspace: false } });
+        await expect(adapter.queryLayoutPlacement({ [idField]: "NEW_PANEL", placement }, reader, { frame: "canonical" }))
+          .resolves.toMatchObject({ revision: 1, placementCheck: { frame: "canonical", valid: true, canonical_valid: true, current_view_valid: null, candidate_id: "NEW_PANEL", mutates_workspace: false } });
       }
     }
   });

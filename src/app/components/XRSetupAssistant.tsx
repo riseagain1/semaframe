@@ -365,7 +365,7 @@ export function XRSetupAssistant(props: XRSetupAssistantProps) {
       <CircleHelp size={17} aria-hidden="true" />
       <span>XR setup</span>
     </button>
-    {open && createPortal(<div className="xr-setup-backdrop" role="presentation" onMouseDown={(event) => {
+    {open && createPortal(<div className="xr-setup-backdrop" role="presentation" data-workspace-runtime-modal="xr-setup" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !operation) closeAssistant();
     }}>
       <section

@@ -19,8 +19,10 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { createDshMcpPatch } from "../../../scripts/lib/dsh-setup.mjs";
 import {
   AgentGatewayError,
+  type AgentGatewayConnectionNotice,
   type AgentClientInstallationSnapshot,
   type AgentClientInstallationView,
   type AgentInstallationAction,
@@ -102,6 +104,20 @@ const GATEWAY_VERSION_ERROR = "SemaFrame received incompatible connection data f
 const SENSITIVE_ERROR_PATTERN = /(?:authorization|bearer|password|api[_ -]?key|secret|(?:approval|session|csrf)[_ -]?token|token\s*=|https?:\/\/|\/mcp\/connect\/)/iu;
 const NETWORK_ERROR_PATTERN = /(?:failed to fetch|network(?:error| request)?|load failed|connection (?:refused|reset)|econnrefused|gateway unavailable)/iu;
 const DESTRUCTIVE_SCOPES = new Set(["component:delete", "connector:delete", "workspace:clear"]);
+const CONNECTION_NOTICE_COPY: Record<AgentGatewayConnectionNotice["reason"], { title: string; detail: string }> = {
+  approval_expired: {
+    title: "The approval request expired before it was approved",
+    detail: "A fresh connection offer is ready. Ask your client to reconnect, then review its new request. No access was granted by the expired request.",
+  },
+  handshake_expired: {
+    title: "The approved client did not finish the instruction handshake in time",
+    detail: "That approval is no longer valid. A fresh connection offer is ready. Ask your client to reconnect and approve its new request; the Workspace remains locked and your project is preserved.",
+  },
+  offer_expired: {
+    title: "The previous connection offer expired",
+    detail: "A fresh connection offer is ready. Use the current address below or reconnect through your stable launcher. No workspace access was granted by the expired offer.",
+  },
+};
 
 function displayableLocalError(message: string): string | undefined {
   const trimmed = message.trim();
@@ -240,6 +256,28 @@ function connectionUrlExpired(expiresAt: string | undefined, now = Date.now()): 
   return Number.isFinite(expiry) && expiry <= now;
 }
 
+function useDeadlineCountdown(expiresAt: string | undefined): number | undefined {
+  const [now, setNow] = useState(Date.now);
+  const deadline = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+  useEffect(() => {
+    let timer: number | undefined;
+    const tick = () => {
+      const current = Date.now();
+      setNow(current);
+      if (Number.isFinite(deadline) && deadline > current) {
+        timer = window.setTimeout(tick, Math.min(1000, deadline - current));
+      }
+    };
+    tick();
+    return () => { if (timer !== undefined) window.clearTimeout(timer); };
+  }, [deadline]);
+  return Number.isFinite(deadline) ? Math.max(0, Math.ceil((deadline - now) / 1000)) : undefined;
+}
+
+function countdownLabel(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 export function AgentConnectionPage({
   id,
   status: legacyStatus,
@@ -269,9 +307,16 @@ export function AgentConnectionPage({
   onClose,
 }: AgentConnectionPageProps) {
   const status = experience ? agentExperienceLegacyStatus(experience) : (legacyStatus ?? "booting");
-  const pairedClient = experienceClient(experience) ?? legacyPairedClient;
+  const pairedClient = experience ? experienceClient(experience) : legacyPairedClient;
   const connectionUrl = experience?.kind === "offer_ready" ? experience.url : legacyConnectionUrl;
   const expiresAt = experience?.kind === "offer_ready" ? experience.expiresAt : legacyExpiresAt;
+  const approvalDeadline = experience?.kind === "approval_pending" || experience?.kind === "approval_granted"
+    ? experience.expiresAt : undefined;
+  const approvalRemaining = useDeadlineCountdown(approvalDeadline);
+  const approvalExpired = approvalRemaining === 0;
+  const handshakeInFlight = experience?.kind === "approval_granted" && experience.handshakeStatus === "in_flight";
+  const connectionNotice = experience?.kind === "offer_ready" && experience.notice
+    ? CONNECTION_NOTICE_COPY[experience.notice.reason] : undefined;
   const experienceError = experience?.kind === "gateway_unavailable" && experience.message
     ? displayableLocalError(experience.message) ?? GATEWAY_UNAVAILABLE_ERROR
     : undefined;
@@ -288,7 +333,7 @@ export function AgentConnectionPage({
   onCloseRef.current = onClose;
   const [permission, setPermission] = useState(status === "disabled" ? false : allowDeleteAndClear);
   const [pending, setPending] = useState<PendingAction | null>(null);
-  const [copied, setCopied] = useState<"connection" | "mcp" | "rest" | null>(null);
+  const [copied, setCopied] = useState<"connection" | "mcp" | "rest" | "dsh" | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [confirmTakeover, setConfirmTakeover] = useState(false);
   const [localError, setLocalError] = useState<string>();
@@ -399,16 +444,17 @@ export function AgentConnectionPage({
     }
   };
 
-  const copyLocalSetup = async (kind: "mcp" | "rest") => {
-    const readSetup = kind === "mcp" ? onCopySetup : onCopyRestSetup;
-    if (!readSetup) return;
+  const copyLocalSetup = async (kind: "mcp" | "rest" | "dsh") => {
+    const readSetup = kind === "rest" ? onCopyRestSetup : onCopySetup;
+    if (!readSetup || blocked) return;
     setPending("copy");
     setLocalError(undefined);
     try {
       const payload = await readSetup();
-      const text = kind === "mcp"
-        ? setupText(payload as AgentConnectionSetup)
-        : restSetupText(payload as AgentRestConnectionSetup);
+      const config = kind === "rest"
+        ? restSetupText(payload as AgentRestConnectionSetup)
+        : setupText(payload as AgentConnectionSetup);
+      const text = kind === "dsh" ? createDshMcpPatch(config) : config;
       if (!text || !navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
       await navigator.clipboard.writeText(text);
       setCopied(kind);
@@ -416,7 +462,9 @@ export function AgentConnectionPage({
       copyTimerRef.current = window.setTimeout(() => setCopied(null), 2_400);
     } catch {
       setCopied(null);
-      setLocalError("The local setup could not be copied. Check browser clipboard permission and try again.");
+      setLocalError(kind === "dsh"
+        ? "The DSH configuration could not be copied. Check that the local Gateway is running and browser clipboard access is allowed, then try again."
+        : "The local setup could not be copied. Check browser clipboard permission and try again.");
     } finally {
       setPending(null);
     }
@@ -474,6 +522,7 @@ export function AgentConnectionPage({
   };
 
   const canCopy = Boolean((connectionUrl && !urlExpired) || (!connectionUrl && onCopySetup));
+  const canCopyDsh = Boolean(onCopySetup) && (status === "waiting" || status === "connected" || status === "disconnected");
   const clientRequestedDestructiveAccess = pairedClient?.scopes.some((scope) => DESTRUCTIVE_SCOPES.has(scope)) ?? false;
   const showDestructivePolicy = status === "disabled" ||
     ((status === "waiting" || status === "disconnected") && !pairedClient) ||
@@ -519,6 +568,10 @@ export function AgentConnectionPage({
         </div>
 
         <div className="agent-connection-actions">
+          {connectionNotice && <section className="agent-experience-card is-warning" role="status" aria-label="Connection recovery notice">
+            <Clock3 size={20} aria-hidden="true" />
+            <div><h2>{connectionNotice.title}</h2><p>{connectionNotice.detail}</p></div>
+          </section>}
           {status === "booting" ? (
             <section className="agent-experience-card" role="status" aria-label="Starting Agent Gateway">
               <LoaderCircle className="spin-slow" size={20} aria-hidden="true" />
@@ -549,17 +602,31 @@ export function AgentConnectionPage({
               </div>
             </section>
           ) : status === "approved" ? (
-            <section className="agent-approved-card" aria-labelledby={`${titleId}-approved`} role="status" aria-live="polite">
+            <section className="agent-approved-card" aria-labelledby={`${titleId}-approved`}>
               <div className="agent-approval-heading">
                 <UserCheck size={18} aria-hidden="true" />
                 <div><p className="eyebrow">Approved client</p><h2 id={`${titleId}-approved`}>{pairedClient?.name ?? "Unnamed agent"}</h2></div>
               </div>
+              {pairedClient?.clientId && <code className="agent-approved-identity">{pairedClient.clientId}</code>}
               <ol className="agent-handshake-progress" aria-label="Agent connection progress">
                 <li data-complete="true"><span aria-hidden="true">✓</span><div><strong>Connection received</strong><small>The client reached this browser-owned session.</small></div></li>
                 <li data-complete="true"><span aria-hidden="true">✓</span><div><strong>Access approved</strong><small>You reviewed the client and its requested scopes.</small></div></li>
-                <li aria-current="step"><LoaderCircle className="spin-slow" size={14} aria-hidden="true" /><div><strong>Reading Workspace instructions</strong><small>Keep this browser and the approved client open.</small></div></li>
+                <li aria-current="step">
+                  {handshakeInFlight ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
+                  <div>
+                    <strong>{handshakeInFlight ? "Reading Workspace instructions" : "Waiting for the client to request Workspace instructions"}</strong>
+                    <small>{handshakeInFlight ? "An instruction request is in progress. Keep this browser and the approved client open." : "Ask the approved client to retry get_workspace_instructions using its existing approval response."}</small>
+                  </div>
+                </li>
               </ol>
-              <p className="agent-approved-note">The Workspace will unlock automatically after the client completes this final handshake. No repeated approval is needed.</p>
+              {approvalDeadline && approvalRemaining !== undefined && <div className={`agent-approval-deadline${approvalExpired ? " is-expired" : ""}`}>
+                <p>Retry the instruction handshake before <time dateTime={approvalDeadline}>{expiryLabel(approvalDeadline)}</time>.</p>
+                <p role="timer" aria-live="off">{approvalExpired ? "Retry window expired" : `Retry window: ${countdownLabel(approvalRemaining)} remaining`}</p>
+                {approvalExpired && <p>{handshakeInFlight
+                  ? "An instruction request already in progress may still finish. If it fails, reconnect and review a fresh approval request."
+                  : "Ask the client to reconnect and review a fresh approval request. Your project remains preserved."}</p>}
+              </div>}
+              <p className="agent-approved-note">The Workspace unlocks only after this browser completes the instruction handshake. If the Gateway expires this approval, reconnect and review a fresh request.</p>
               <div className="agent-recovery-actions">
                 {onRetry && <button type="button" onClick={() => void runAction("retry", onRetry)} disabled={blocked}><RefreshCw className={pending === "retry" ? "spin-slow" : undefined} size={15} aria-hidden="true" />Check status</button>}
                 {onRefreshOffer && <button type="button" onClick={() => void runAction("refresh", onRefreshOffer)} disabled={blocked}>{pending === "refresh" ? "Starting over…" : "Start over with a fresh URL"}</button>}
@@ -623,14 +690,22 @@ export function AgentConnectionPage({
               </div>
               {pairedClient?.clientId && <code>{pairedClient.clientId}</code>}
               <p className="agent-approval-caution">Client names are self-reported. Approve only if you just asked this agent to connect.</p>
+              {approvalDeadline && approvalRemaining !== undefined && <div className={`agent-approval-deadline${approvalExpired ? " is-expired" : ""}`}>
+                <p>Review before <time dateTime={approvalDeadline}>{expiryLabel(approvalDeadline)}</time>.</p>
+                <p role="timer" aria-live="off">{approvalExpired ? "Approval request expired" : `Approval request: ${countdownLabel(approvalRemaining)} remaining`}</p>
+                {approvalExpired && <p>Ask the client to reconnect and review its new request. This expired request cannot grant access.</p>}
+              </div>}
               {pairedClient?.scopes.length ? <ul className="agent-scope-list" aria-label="Requested access">
                 {pairedClient.scopes.map((scope) => <li key={scope}><span>{scopeLabel(scope)}</span><code>{scope}</code></li>)}
               </ul> : null}
               <div className="agent-approval-actions">
                 {onReject && <button type="button" onClick={() => void runAction("reject", onReject)} disabled={blocked}>Reject</button>}
-                {onApprove && <button type="button" className="agent-primary-action" onClick={() => void runAction("approve", onApprove)} disabled={blocked}>
+                {onApprove && <button type="button" className="agent-primary-action" onClick={() => {
+                  if (!connectionUrlExpired(approvalDeadline)) void runAction("approve", onApprove);
+                }} disabled={blocked || approvalExpired}>
                   {pending === "approve" ? "Approving…" : "Approve client"}
                 </button>}
+                {approvalExpired && onRefreshOffer && <button type="button" onClick={() => void runAction("refresh", onRefreshOffer)} disabled={blocked}>Create fresh URL</button>}
               </div>
             </section>
           ) : (
@@ -761,6 +836,32 @@ export function AgentConnectionPage({
               })}
             </ul>}
             {installationNotice && <p className="agent-installation-notice" role="status">{installationNotice}</p>}
+          </section>}
+
+          {status !== "booting" && status !== "approval" && status !== "approved" && status !== "occupied" && <section
+            className="agent-dsh-setup"
+            aria-labelledby={`${titleId}-dsh`}
+          >
+            <p className="eyebrow">External Agent</p>
+            <h2 id={`${titleId}-dsh`}>DeepSeek Harness (dsh)</h2>
+            <p>Install and configure DSH and its DeepSeek provider separately. SemaFrame does not need your model API key.</p>
+            <p>With both CLIs installed, run this in a local terminal:</p>
+            <code className="agent-dsh-command">semaframe agent launch --client dsh</code>
+            <div className="agent-dsh-manual">
+              <p>Or copy a separate overlay, save it as <code>semaframe.dsh.json</code>, then run:</p>
+              <code className="agent-dsh-command">dsh web --patch ./semaframe.dsh.json</code>
+              <button
+                type="button"
+                onClick={() => void copyLocalSetup("dsh")}
+                disabled={!canCopyDsh || blocked}
+              >
+                {pending === "copy" ? <LoaderCircle className="spin-slow" size={15} aria-hidden="true" /> : copied === "dsh" ? <Check size={15} aria-hidden="true" /> : <Clipboard size={15} aria-hidden="true" />}
+                {copied === "dsh" ? "DSH configuration copied" : "Copy DSH configuration"}
+              </button>
+              {!canCopyDsh && <p>Enable Agent control and connect to the local Gateway to copy a configuration.</p>}
+              {copied === "dsh" && <p role="status">Copied. Save as semaframe.dsh.json; your existing DSH configuration stays unchanged.</p>}
+            </div>
+            <p className="agent-dsh-approval-note">Keep this workspace open. Review and approve DSH here before it can inspect or change the scene.</p>
           </section>}
 
           {status !== "occupied" && showDestructivePolicy && <label className="agent-connection-permission">

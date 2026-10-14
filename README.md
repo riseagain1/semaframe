@@ -67,7 +67,7 @@ The current stable release is `v0.4.0`. It keeps the v0.3 modeling and Reality f
 | **Extension and host services** | Versioned connector/importer/exporter/bridge contracts, digest/signature verification, Workspace-bound grants, an owned framed-stdio host, immutable connector registries, and bounded asynchronous artifact jobs |
 | **Community ecosystem** | A signed static project/model template catalog with proposal-only installation plus explicitly opt-in, previewable anonymous performance diagnostics with no bundled vendor endpoint |
 
-The source surface is Workspace Protocol 1.3 with project schema 1.4, 26 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.2, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The stable `v0.4.0` release includes the measurement precision workflow, dependency security updates, and expanded regression coverage validated in `v0.4.0-rc.3`. It uses npm's default `latest` channel and GitHub's Latest release. Stable denotes the supported release channel, not certification of physical accuracy or every hardware combination.
+The source surface is Workspace Protocol 1.3 with project schema 1.4, 27 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.4, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The stable `v0.4.0` release includes the measurement precision workflow, dependency security updates, and expanded regression coverage validated in `v0.4.0-rc.3`; the source checkout additionally includes progressive Agent discovery, runtime view validation, and the DSH integration described below. The published stable release uses npm's default `latest` channel and GitHub's Latest release. Stable denotes the supported release channel, not certification of physical accuracy or every hardware combination.
 
 The v0.4 release also hardens the product surface around those
 contracts: explicit Agent states, direct Agent-first Workspace entry, a unified Checks center, Basic/Advanced
@@ -401,7 +401,7 @@ Any other Streamable HTTP MCP-capable client can still use manual pairing:
 1. Start SemaFrame with `npm run dev`.
 2. Enable Agent control and copy the short-lived connection URL.
 3. Add that URL as an MCP server or connector in the external client.
-4. The client reads `workspace://instructions/v1` and calls `get_workspace_instructions` first.
+4. The client calls `get_workspace_instructions` first for the compact mandatory guide, then uses `inspect_workspace_capabilities` for the needed manifests, guidance topics, and operation schemas. `workspace://instructions/v1` remains the optional full reference.
 5. SemaFrame displays the client's name, fingerprint, requested scopes, and destructive capabilities.
 6. Approve the request in the authoritative browser.
 7. The Agent inspects and edits the same open project through revision-bound transactions.
@@ -409,6 +409,49 @@ Any other Streamable HTTP MCP-capable client can still use manual pairing:
 The connection URL contains a random offer identifier, not authority. The first instruction request creates a separate approval claim. Approval, session, and transaction capabilities are never placed in the URL or project file. Stable local launchers discover only from the exact configured loopback origin; discovery cannot redirect a launcher to another local port or remote host.
 
 Incomplete expired or failed offers can be replaced with **Create fresh URL**. **Revoke pairing** invalidates the current offer and live sessions. If the authoritative browser disappears, the engine becomes unavailable rather than creating a second hidden Workspace.
+
+In the current source checkout (not yet in the published `0.4.0` package), pending
+approval lasts up to 2 minutes, bounded by the connection offer. First approval
+starts a separate 10-minute window for the Agent to start or retry its instruction
+handshake; repeated approval cannot extend it. An in-flight request retains its
+own bounded command timeout. A completed handshake is not
+disconnected by these setup deadlines. If an incomplete request expires, ask the
+Agent to request fresh approval without its old approval token, compare the new
+fingerprint, and approve again. The connection page distinguishes waiting for the
+Agent from an instruction read already in progress and explains expiry recovery.
+
+### DeepSeek Harness (dsh)
+
+DeepSeek Harness can use the same approved Workspace tools as an external Agent.
+SemaFrame does not embed a DeepSeek chat UI or store a DeepSeek API key. Configure
+the model/provider in DSH itself.
+
+The DSH integration below is new in the source checkout and is not included in
+the published `semaframe@0.4.0` package yet. With the official `dsh` command
+installed on PATH (or the macOS DeepSeek Harness app installed), keep SemaFrame
+open and run from this checkout:
+
+```bash
+node bin/semaframe.mjs agent launch --client dsh
+```
+
+This launches DSH's Web profile with an independent temporary Cordis overlay and
+the existing persistent SemaFrame stdio bridge. It does not install DSH, edit its
+profile, or grant Workspace access. On macOS, it can discover the app's bundled
+CLI without changing PATH; this still launches the Web profile, not the Desktop
+window's existing profile. Approve the client fingerprint and requested
+scopes in SemaFrame when DSH first calls `get_workspace_instructions`.
+
+For an existing DSH launch workflow, use **Copy DSH configuration** on the
+connection page, save it as `semaframe.dsh.json`, and start
+`dsh web --patch ./semaframe.dsh.json`. The same JSON (a valid YAML subset) is
+available through `node bin/semaframe.mjs agent config --client dsh`. The overlay
+contains only the launcher paths and fixed loopback Gateway origin, never model
+keys, pairing bearers, or short-lived connection URLs. Regenerate it if the
+SemaFrame installation moves. Do not load two SemaFrame overlays into one DSH
+scope or overwrite an existing DSH user patch.
+
+See [DSH setup, verification, and boundaries](./docs/agents/deepseek-harness.md).
 
 ## Product tour
 
@@ -606,6 +649,40 @@ These domains are intentionally disjoint: 2D rectangles are checked only against
 
 `surface`, `billboard`, and non-spatial `world3d` cards remain in the 2D graph but are marked `projection_dependent`: their apparent screen overlap varies with camera, target surface, and viewport, so a persisted camera-independent Store cannot honestly claim a permanent hard result for them. The canonical layout and spatial graphs together are SemaFrame's **Universal Space Data** for Agent reasoning; neither is Pixar OpenUSD.
 
+### Live desktop view and layout validation
+
+`inspect_workspace_space` also returns an ephemeral `view_graph`. Its default
+summary includes the actual viewport in **CSS pixels**, current camera and
+canvas pan/zoom, app-owned toolbar rectangles, view identity/epoch, readiness,
+and bounded diagnostics. Use `view_detail: "full"` for projected component
+polygons and bounds. Detail truncation is explicit and never turns incomplete
+validation into a visual pass.
+
+`query_layout_placement` reports `canonical_valid` separately from
+`current_view_valid`; its default `frame: "current_view"` uses the same projection
+as rendering. For a new component, supply its exact `component_type`
+`{typeId, version, digest}` plus final placement and size; existing instances
+can use `component_id`. It detects 2D/2D overlap, host toolbar occlusion and
+fixed-viewport clipping, and suggests placements that pass both checks.
+Canvas-plane content may intentionally remain offscreen.
+
+Pass the observed `view_guard: {view_id, view_epoch}` to
+`begin_workspace_update` to bind planning to that view. Browser-connected
+preparations default to current-view validation and capture a ready view guard;
+the final reduced batch, including event-routed changes, is checked atomically
+before commit. A relevant view change requires reinspection, **not re-pairing**.
+Pure 3D work is not blocked by unrelated viewport movement. Explicit
+`layout_frame: "canonical"` supports headless/camera-first authoring but does
+not certify screen layout. Missing, stale, XR-only or unsettled desktop views
+report unknown visual validity rather than falling back to 1440×900.
+
+Views are not saved scene data: resizing or orbiting does not modify project
+revisions, undo history or OpenUSD exports. Existing layouts remain editable;
+only newly introduced/worsened current-view problems are blocked. Undo, redo
+and project replay restore recorded state independently of the current screen.
+These checks validate stable target layout, not text quality, arbitrary embedded
+website contents, 3D visibility or every future camera/window configuration.
+
 ### SemaFrame Spatial Graph
 
 `inspect_workspace_space` returns **SemaFrame Spatial Graph 3.2 (SSG)** in `data.spatial_graph`: a revision-bound, model-readable projection of the open Workspace. It includes:
@@ -718,7 +795,7 @@ Anonymous performance diagnostics are off by default. Enabling them only permits
 
 ## Agent integration
 
-SemaFrame exposes 25 authoritative Workspace MCP tools. When the browser-backed
+SemaFrame exposes 27 authoritative Workspace MCP tools. When the browser-backed
 host-control surface is available, the same approved connection also exposes 10
 ephemeral Voice Relay and XR preparation tools. Host-control calls prepare or
 inspect a user-visible local action; they are not a second mutation path, and
@@ -728,8 +805,10 @@ the Agent still changes the scene only through Workspace transaction tools.
 | --- | --- |
 | Handshake | `get_workspace_instructions` |
 | Inspect | `inspect_workspace` |
+| Discover | `inspect_workspace_capabilities` |
 | Inspect | `inspect_workspace_component` |
 | Data read | `read_workspace_resource_snapshot` |
+| Precision | `analyze_workspace_precision` |
 | Inspect | `inspect_workspace_asset` |
 | Inspect | `inspect_workspace_model` |
 | Inspect | `inspect_workspace_space` |
@@ -767,9 +846,10 @@ The normal Agent flow is:
 1. obtain approval through `get_workspace_instructions`;
 2. retain the returned `session_token` and map `guide_digest` to the `instruction_digest` input used by subsequent tools;
 3. inspect the Workspace, exact components/assets/models, spatial projection, or physics report;
-4. begin an update against an exact revision and registry digest;
-5. submit one bounded atomic operation batch;
-6. retry safely with the same request ID, or inspect the new revision before continuing.
+4. discover only the needed full type manifests, guidance topics, and operation schemas through `inspect_workspace_capabilities`; cache them by registry digest;
+5. begin an update against an exact revision and registry digest;
+6. submit one bounded atomic operation batch;
+7. retry safely with the same request ID, or inspect the new revision before continuing.
 
 Host preparation stays outside Workspace persistence. Read-only readiness and fresh-context calls require `workspace:read`; setup or entry requests additionally require the separately approved `host:voice_relay_setup` or `host:xr_prepare` scope. A successful request can return a required user action, but it cannot grant OS permission, choose or arm a desktop target, or synthesize a WebXR gesture.
 

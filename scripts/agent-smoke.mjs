@@ -610,7 +610,7 @@ try {
   const toolNames = new Set(tools.tools.map((tool) => tool.name));
   const expectedTools = [
     "analyze_workspace_precision",
-    "get_workspace_instructions", "inspect_workspace", "inspect_workspace_component", "read_workspace_resource_snapshot", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "query_layout_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
+    "get_workspace_instructions", "inspect_workspace", "inspect_workspace_capabilities", "inspect_workspace_component", "read_workspace_resource_snapshot", "inspect_workspace_asset", "inspect_workspace_model", "inspect_workspace_space", "query_spatial_placement", "query_layout_placement", "inspect_workspace_physics", "query_stable_placement", "simulate_workspace_physics", "begin_workspace_asset_import", "cancel_workspace_asset_import", "complete_workspace_asset_import", "begin_workspace_update", "submit_workspace_batch",
     "undo_workspace_batch", "redo_workspace_batch", "read_workspace_events", "begin_workspace_photo_reconstruction", "start_workspace_photo_reconstruction", "inspect_workspace_photo_reconstruction", "cancel_workspace_photo_reconstruction", "finalize_workspace_photo_reconstruction",
     "inspect_voice_relay", "prepare_voice_relay_setup", "run_voice_relay_diagnostics", "request_voice_relay_arm", "inspect_xr_readiness", "prepare_xr_session", "request_enter_xr", "wait_for_xr_session_state", "request_exit_xr", "get_live_xr_context",
   ];
@@ -724,6 +724,7 @@ try {
 
   const workspaceInstructions = await callAgent(mcpClient, "get_workspace_instructions", {
     client_id: "agent-smoke",
+    detail: "full",
     client_name: workspaceClientName,
     requested_scopes: workspaceScopes,
     approval_token: approvalToken,
@@ -763,7 +764,7 @@ try {
     throw new Error(`Successful native Workspace handshake did not return to the unified Workspace: ${JSON.stringify(connectedUi)}`);
   }
 
-  const initialWorkspace = await callAgent(mcpClient, "inspect_workspace", workspaceSessionInput);
+  const initialWorkspace = await callAgent(mcpClient, "inspect_workspace", { ...workspaceSessionInput, capability_detail: "full" });
   const initialSummary = initialWorkspace.data?.workspace_summary;
   if (initialWorkspace.ok !== true || initialWorkspace.data?.workspace_revision !== 0 ||
       initialSummary?.revision !== 0 || initialSummary?.component_count !== 0 || initialSummary?.components?.length !== 0) {
@@ -840,6 +841,9 @@ try {
 
   const workspacePrepared = await callAgent(mcpClient, "begin_workspace_update", {
     ...workspaceSessionInput,
+    // This test compares the complete inspected defaults/policies below;
+    // ordinary clients may retain compact catalogs and discover selected types.
+    capability_detail: "full",
     intent: "Create a native timer from the advertised Workspace defaults",
     requested_component_ids: 1,
   });
@@ -1095,6 +1099,7 @@ try {
   const openApi = await fetch(`${gatewayUrl}/openapi.json`).then((response) => response.json());
   if (openApi.openapi !== "3.1.0" ||
       openApi.paths?.["/workspace/instructions"]?.post?.operationId !== "get_workspace_instructions" ||
+      openApi.paths?.["/workspace/capabilities/inspect"]?.post?.operationId !== "inspect_workspace_capabilities" ||
       openApi.paths?.["/workspace/resources/snapshot/read"]?.post?.operationId !== "read_workspace_resource_snapshot" ||
       openApi.paths?.["/workspace/assets/inspect"]?.post?.operationId !== "inspect_workspace_asset" ||
       openApi.paths?.["/workspace/models/inspect"]?.post?.operationId !== "inspect_workspace_model" ||
@@ -1108,11 +1113,11 @@ try {
       openApi.paths?.["/assets/imports/complete"]?.post?.operationId !== "complete_workspace_asset_import" ||
       openApi.paths?.["/reconstructions/begin"]?.post?.operationId !== "begin_workspace_photo_reconstruction" ||
       openApi.paths?.["/reconstructions/finalize"]?.post?.operationId !== "finalize_workspace_photo_reconstruction" ||
-      Object.keys(openApi.paths ?? {}).length !== 27 ||
+      Object.keys(openApi.paths ?? {}).length !== 28 ||
       /get_scene|inspect_scene|begin_scene|submit_scene|undo_scene|redo_scene|SceneCommandBatch|expected_scene_revision/u.test(JSON.stringify(openApi))) {
     throw new Error("Agent OpenAPI discovery document is incomplete.");
   }
-  console.log("Agent browser smoke passed: exclusive thirty-six-tool MCP and twenty-seven-route OpenAPI contract, explicit approval, exact snapshot-read and photo-reconstruction discovery, separate world3d/ui2d graphs plus layout/physics placement discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
+  console.log("Agent browser smoke passed: exclusive thirty-seven-tool MCP and twenty-eight-route OpenAPI contract, explicit approval, progressive capability discovery, exact snapshot-read and photo-reconstruction discovery, separate world3d/ui2d graphs plus layout/physics placement discovery, event-routable spatial movement discovery, rejected unreserved ID with no revision change, default-materialized timer commit and identical retry, exact inspection/tree/render/revision/provenance, native undo/redo and saved persistence, secret scan, and responsive screenshots.");
 } catch (error) {
   smokeFailed = true;
   const safeLogs = diagnosticText(processLogs.join(""));
@@ -1120,7 +1125,9 @@ try {
   throw sanitizeAgentSmokeFailure(error, sensitiveDiagnosticValues);
 } finally {
   await mcpClient?.close().catch(() => undefined);
-  if (cdp) {
+  // Windows must keep the root alive until taskkill scopes its owned tree.
+  // Browser.close first would discard that capability before descendant cleanup.
+  if (cdp && process.platform !== "win32") {
     await Promise.race([
       cdp.send("Browser.close").catch(() => undefined),
       delay(5_000),
@@ -1128,6 +1135,8 @@ try {
     cdp.close();
     const browserCloseDeadline = Date.now() + 5_000;
     while (!browserTree.closed && Date.now() < browserCloseDeadline) await delay(50);
+  } else {
+    cdp?.close();
   }
   try {
     await stopOwnedProcessTrees([browserTree, stackTree]);

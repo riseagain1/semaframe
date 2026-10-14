@@ -255,6 +255,14 @@ function safeInteger(value: unknown, name: string): number {
   return Number(value);
 }
 
+function workspaceViewGuard(value: unknown): { view_id: string; view_epoch: number } {
+  const guard = exactObject(value, ["view_id", "view_epoch"]);
+  return {
+    view_id: boundedString(guard.view_id, "view_id", 1, 256),
+    view_epoch: safeInteger(guard.view_epoch, "view_epoch"),
+  };
+}
+
 function voiceRelayDesktopHostAction(value: unknown): VoiceRelayDesktopHostAction {
   if (value !== "voice_relay_accessibility"
     && value !== "voice_relay_configure_target"
@@ -521,7 +529,7 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
   input: unknown;
 } | null {
   if (pathname === "/v1/workspace/instructions" && method === "POST") {
-    const body = exactObject(value, ["client_id", "client_name", "requested_scopes"], []);
+    const body = exactObject(value, ["client_id", "client_name", "requested_scopes", "detail"], []);
     const requestedScopes = body.requested_scopes;
     if (requestedScopes !== undefined && (!Array.isArray(requestedScopes)
       || requestedScopes.length > WORKSPACE_PERMISSION_SCOPE_REQUEST_LIMIT
@@ -536,14 +544,29 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
         ...(body.client_id === undefined ? {} : { client_id: boundedString(body.client_id, "client_id", 1, 128) }),
         ...(body.client_name === undefined ? {} : { client_name: boundedString(body.client_name, "client_name", 1, 160) }),
         ...(requestedScopes === undefined ? {} : { requested_scopes: requestedScopes }),
+        ...(body.detail === undefined ? {} : { detail: boundedString(body.detail, "detail", 1, 16) }),
       },
     };
   }
   if (pathname === "/v1/workspace/inspect" && method === "POST") {
-    const body = exactObject(value, ["session_token", "instruction_digest"]);
+    const body = exactObject(value, ["session_token", "instruction_digest", "capability_detail"], ["session_token", "instruction_digest"]);
     return {
       name: "inspect_workspace",
       input: {
+        session_token: boundedString(body.session_token, "session_token", 8, 256),
+        instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
+        ...(body.capability_detail === undefined ? {} : { capability_detail: boundedString(body.capability_detail, "capability_detail", 1, 16) }),
+      },
+    };
+  }
+  if (pathname === "/v1/workspace/capabilities/inspect" && method === "POST") {
+    const body = exactObject(value, ["session_token", "instruction_digest", "component_type_ids", "guide_topics", "operation_names", "include_connectors", "include_asset_library"], ["session_token", "instruction_digest"]);
+    // The controller enforces selector bounds and exact known names identically
+    // for REST and MCP. This route only owns transport/session field parsing.
+    return {
+      name: "inspect_workspace_capabilities",
+      input: {
+        ...body,
         session_token: boundedString(body.session_token, "session_token", 8, 256),
         instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
       },
@@ -624,7 +647,7 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
     } };
   }
   if (pathname === "/v1/workspace/space/inspect" && method === "POST") {
-    const body = exactObject(value, ["session_token", "instruction_digest", "since_revision"], [
+    const body = exactObject(value, ["session_token", "instruction_digest", "since_revision", "view_detail"], [
       "session_token", "instruction_digest",
     ]);
     return {
@@ -635,6 +658,7 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
         ...(body.since_revision === undefined ? {} : {
           since_revision: safeInteger(body.since_revision, "since_revision"),
         }),
+        ...(body.view_detail === undefined ? {} : { view_detail: boundedString(body.view_detail, "view_detail", 1, 16) }),
       },
     };
   }
@@ -650,13 +674,17 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
     };
   }
   if (pathname === "/v1/workspace/layout/query" && method === "POST") {
-    const body = exactObject(value, ["session_token", "instruction_digest", "candidate"]);
+    const body = exactObject(value, ["session_token", "instruction_digest", "candidate", "frame", "view_guard"], [
+      "session_token", "instruction_digest", "candidate",
+    ]);
     return {
       name: "query_layout_placement",
       input: {
         session_token: boundedString(body.session_token, "session_token", 8, 256),
         instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
         candidate: body.candidate,
+        ...(body.frame === undefined ? {} : { frame: boundedString(body.frame, "frame", 1, 16) }),
+        ...(body.view_guard === undefined ? {} : { view_guard: workspaceViewGuard(body.view_guard) }),
       },
     };
   }
@@ -700,7 +728,7 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
     };
   }
   if (pathname === "/v1/workspace/updates/begin" && method === "POST") {
-    const body = exactObject(value, ["session_token", "instruction_digest", "intent", "requested_component_ids"], [
+    const body = exactObject(value, ["session_token", "instruction_digest", "intent", "requested_component_ids", "capability_detail", "layout_frame", "view_guard"], [
       "session_token", "instruction_digest", "intent",
     ]);
     return {
@@ -709,6 +737,9 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
         session_token: boundedString(body.session_token, "session_token", 8, 256),
         instruction_digest: boundedString(body.instruction_digest, "instruction_digest", 8, 256),
         intent: boundedString(body.intent, "intent", 1, 4_000),
+        ...(body.capability_detail === undefined ? {} : { capability_detail: boundedString(body.capability_detail, "capability_detail", 1, 16) }),
+        ...(body.layout_frame === undefined ? {} : { layout_frame: boundedString(body.layout_frame, "layout_frame", 1, 16) }),
+        ...(body.view_guard === undefined ? {} : { view_guard: workspaceViewGuard(body.view_guard) }),
         ...(body.requested_component_ids === undefined
           ? {}
           : { requested_component_ids: safeInteger(body.requested_component_ids, "requested_component_ids") }),

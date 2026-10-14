@@ -5,6 +5,7 @@ import {
   type ServerContext,
 } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
+import { createAgentGatewayOpenApi } from "../../../../server/agent/openapi";
 import {
   WORKSPACE_REST_PATHS,
   createWorkspaceAgentRestHandler,
@@ -59,6 +60,7 @@ const EXPECTED_WORKSPACE_TOOLS = [
   "get_workspace_instructions",
   "inspect_workspace",
   "inspect_workspace_asset",
+  "inspect_workspace_capabilities",
   "inspect_workspace_component",
   "inspect_workspace_model",
   "inspect_workspace_photo_reconstruction",
@@ -77,7 +79,24 @@ const EXPECTED_WORKSPACE_TOOLS = [
 ];
 
 describe("composable Workspace MCP tools", () => {
-  it("registers all twenty-six Workspace tools and its guide", async () => {
+  it("advertises the same runtime-view selectors and exact component binding over REST", () => {
+    const document = createAgentGatewayOpenApi("http://127.0.0.1:4173") as {
+      paths: Record<string, { post: { requestBody: { content: { "application/json": { schema: { properties: Record<string, unknown> } } } } } }>;
+      components: { schemas: Record<string, unknown> };
+    };
+    const properties = (path: string) => document.paths[path]!.post.requestBody.content["application/json"].schema.properties;
+    expect(properties("/workspace/space/inspect").view_detail).toEqual({ enum: ["summary", "full"] });
+    expect(properties("/workspace/layout/query")).toMatchObject({
+      frame: { enum: ["current_view", "canonical"] },
+      view_guard: { $ref: "#/components/schemas/WorkspaceViewGuard" },
+      candidate: { additionalProperties: false, properties: { component_type: { additionalProperties: false, required: ["typeId", "version", "digest"] } } },
+    });
+    expect(properties("/workspace/updates/begin")).toMatchObject({ layout_frame: { enum: ["current_view", "canonical"] }, view_guard: { $ref: "#/components/schemas/WorkspaceViewGuard" } });
+    expect(properties("/workspace/updates/submit")).not.toHaveProperty("view_guard");
+    expect(document.components.schemas.WorkspaceViewGuard).toMatchObject({ additionalProperties: false, required: ["view_id", "view_epoch"], properties: { view_epoch: { minimum: 0, maximum: Number.MAX_SAFE_INTEGER } } });
+  });
+
+  it("registers all twenty-seven Workspace tools and its guide", async () => {
     const recorder = new RecordingMcpServer();
     const dispatch = vi.fn(async (name: WorkspaceAgentToolName, input: unknown) => ({
       responseOk: true,
@@ -131,8 +150,9 @@ describe("composable Workspace MCP tools", () => {
       resource_id: "bad resource id",
     }).success).toBe(false);
 
-    const spatialPlacementInput = recorder.tools.get("query_spatial_placement")
-      ?.definition.inputSchema as ZodType | undefined;
+    const spatialPlacementDefinition = recorder.tools.get("query_spatial_placement")!
+      .definition.inputSchema as { "~standard": { validate(value: unknown): { issues?: unknown } } };
+    const spatialPlacementInput = { safeParse: (value: unknown) => ({ success: !spatialPlacementDefinition["~standard"].validate(value).issues }) };
     const exactParametricCandidate = {
       session_token: "workspace_session_1234567890",
       instruction_digest: "guide_digest_1234567890",
@@ -214,6 +234,28 @@ describe("composable Workspace MCP tools", () => {
       },
     };
     expect(layoutPlacementInput?.safeParse(exactLayoutCandidate).success).toBe(true);
+    const guardedLayoutCandidate = {
+      ...exactLayoutCandidate,
+      frame: "current_view",
+      view_guard: { view_id: "desktop-fixture", view_epoch: 2 },
+      candidate: {
+        component_type: { typeId: "button", version: "1.3.0", digest: "fnv1a32:testtype" },
+        placement: exactLayoutCandidate.candidate.placement,
+      },
+    };
+    expect(layoutPlacementInput?.safeParse(guardedLayoutCandidate).success).toBe(true);
+    expect(layoutPlacementInput?.safeParse({ ...guardedLayoutCandidate, frame: "canonical" }).success).toBe(true);
+    expect(layoutPlacementInput?.safeParse({ ...guardedLayoutCandidate, frame: "screen" }).success).toBe(false);
+    expect(layoutPlacementInput?.safeParse({ ...guardedLayoutCandidate, view_guard: { view_id: "desktop-fixture", view_epoch: -1 } }).success).toBe(false);
+    expect(layoutPlacementInput?.safeParse({ ...guardedLayoutCandidate, candidate: { ...guardedLayoutCandidate.candidate, component_type: { typeId: "button" } } }).success).toBe(false);
+    const inspectSpaceInput = recorder.tools.get("inspect_workspace_space")?.definition.inputSchema as ZodType;
+    const beginInput = recorder.tools.get("begin_workspace_update")?.definition.inputSchema as ZodType;
+    const session = { session_token: exactLayoutCandidate.session_token, instruction_digest: exactLayoutCandidate.instruction_digest };
+    expect(inspectSpaceInput.safeParse({ ...session, view_detail: "full" }).success).toBe(true);
+    expect(inspectSpaceInput.safeParse({ ...session, view_detail: "summary" }).success).toBe(true);
+    expect(inspectSpaceInput.safeParse({ ...session, view_detail: "raw" }).success).toBe(false);
+    expect(beginInput.safeParse({ ...session, intent: "Place in current view", layout_frame: "current_view", view_guard: guardedLayoutCandidate.view_guard }).success).toBe(true);
+    expect(beginInput.safeParse({ ...session, intent: "Place in current view", view_guard: { ...guardedLayoutCandidate.view_guard, hidden: true } }).success).toBe(false);
     expect(layoutPlacementInput?.safeParse({
       ...exactLayoutCandidate,
       candidate: {
@@ -334,7 +376,7 @@ describe("composable Workspace MCP tools", () => {
     }));
   });
 
-  it("advertises and enforces the complete canonical WorkspaceCommandBatch schema", async () => {
+  it("advertises a compact batch envelope but enforces the complete canonical operation schema", async () => {
     const dispatch = vi.fn(async (name: WorkspaceAgentToolName, input: unknown) => ({
       responseOk: true,
       status: 200,
@@ -354,8 +396,10 @@ describe("composable Workspace MCP tools", () => {
         "set instruction_digest to the exact get_workspace_instructions.data.guide_digest value",
       );
       expect(client.getInstructions()).toContain(
-        "first call inspect_workspace, then call begin_workspace_update",
+        "first call inspect_workspace for the compact type catalog",
       );
+      expect(client.getInstructions()).toContain("inspect_workspace_capabilities with only the needed component_type_ids, guide_topics, and operation_names before begin_workspace_update");
+      expect(client.getInstructions()).toContain("not props/action/operation schemas; never guess these schemas");
       expect(client.getInstructions()).toContain("Copy begin_workspace_update.data.envelope unchanged");
       expect(client.getInstructions()).toContain("reserved_component_ids");
       expect(client.getInstructions()).toContain("exact typeId/version/digest tuple");
@@ -391,17 +435,10 @@ describe("composable Workspace MCP tools", () => {
           "operations",
         ],
       });
-      expect(definitions.operation).toMatchObject({
-        oneOf: expect.arrayContaining([{ $ref: "#/$defs/createComponent" }]),
-      });
-      expect(definitions.createComponent).toMatchObject({
-        required: ["op", "op_id", "id", "component_type", "placement"],
-        properties: {
-          op: { const: "create_component" },
-          component_type: { $ref: "#/$defs/componentType" },
-          placement: { $ref: "#/$defs/placement" },
-        },
-      });
+      expect(definitions.operation).toBeUndefined();
+      expect(definitions.createComponent).toBeUndefined();
+      expect(JSON.stringify(inputSchema).length).toBeLessThan(3_000);
+      expect(tools.tools.find(({ name }) => name === "inspect_workspace_capabilities")).toBeDefined();
 
       const validInput = {
         session_token: "session_12345678",
@@ -447,6 +484,18 @@ describe("composable Workspace MCP tools", () => {
         arguments: { ...validInput, session_token: "1234567" },
       })).toMatchObject({ isError: true });
       expect(dispatch).not.toHaveBeenCalled();
+
+      // Runtime preconditions live on the retained preparation, not in durable
+      // command JSON or an independently replaceable submit argument.
+      const guard = { view_id: "do-not-persist", view_epoch: 1 };
+      for (const guardedInput of [
+        { ...validInput, view_guard: guard },
+        { ...validInput, batch: { ...validInput.batch, view_guard: guard } },
+        { ...validInput, batch: { ...validInput.batch, layout_frame: "canonical" } },
+      ]) {
+        expect(await client.callTool({ name: "submit_workspace_batch", arguments: guardedInput })).toMatchObject({ isError: true });
+        expect(dispatch).not.toHaveBeenCalled();
+      }
 
       expect(await client.callTool({
         name: "submit_workspace_batch",
@@ -545,6 +594,14 @@ describe("composable Workspace MCP tools", () => {
         },
       },
     });
+    for (const code of ["runtime_view_unavailable", "current_view_layout_conflict", "stale_view_context"]) {
+      const runtimeBackend = workspaceControllerMcpBackend({
+        async dispatch(): Promise<WorkspaceAgentResult<unknown>> {
+          return { ok: false, error: { code, message: "Inspect the current view", retryable: true, required_action: "inspect_workspace_space" } };
+        },
+      });
+      expect(await runtimeBackend.dispatch("submit_workspace_batch", {}, { protocolEra: "modern" })).toMatchObject({ responseOk: false, status: 409 });
+    }
   });
 });
 
@@ -686,6 +743,9 @@ describe("Workspace REST adapter", () => {
       ["resource_snapshot_not_readable", 422],
       ["resource_snapshot_too_large", 413],
       ["model_inspection_too_large", 413],
+      ["runtime_view_unavailable", 409],
+      ["current_view_layout_conflict", 409],
+      ["stale_view_context", 409],
     ]);
     let code = "resource_not_found";
     const handler = createWorkspaceAgentRestHandler(

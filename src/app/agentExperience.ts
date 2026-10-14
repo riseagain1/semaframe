@@ -1,5 +1,6 @@
 import type {
   AgentGatewayConfig,
+  AgentGatewayConnectionNotice,
   AgentGatewayOfferStatus,
   AgentGatewayStatus,
 } from "../agent/AgentGatewayClient";
@@ -11,9 +12,9 @@ export type AgentExperienceState =
   | Readonly<{ kind: "booting" }>
   | Readonly<{ kind: "gateway_unavailable"; message?: string }>
   | Readonly<{ kind: "control_disabled" }>
-  | Readonly<{ kind: "offer_ready"; url?: string; expiresAt?: string }>
-  | Readonly<{ kind: "approval_pending"; client: AgentConnectionClient }>
-  | Readonly<{ kind: "approval_granted"; client: AgentConnectionClient }>
+  | Readonly<{ kind: "offer_ready"; url?: string; expiresAt?: string; notice?: AgentGatewayConnectionNotice }>
+  | Readonly<{ kind: "approval_pending"; client: AgentConnectionClient; expiresAt?: string }>
+  | Readonly<{ kind: "approval_granted"; client: AgentConnectionClient; expiresAt?: string; handshakeStatus?: "waiting" | "in_flight" }>
   | Readonly<{ kind: "workspace_ready"; client: AgentConnectionClient; applying: boolean }>
   | Readonly<{ kind: "reconnecting"; client?: AgentConnectionClient }>
   | Readonly<{ kind: "offer_invalid"; reason: "expired" | "denied" }>
@@ -50,6 +51,13 @@ function configuredClient(
   config: AgentGatewayConfig,
   fallback?: AgentConnectionClient | null,
 ): AgentConnectionClient {
+  const handshake = config.approvedHandshake;
+  if (handshake) return Object.freeze({
+    name: handshake.clientName?.trim() || "Unnamed agent",
+    clientId: handshake.clientId ? `${handshake.clientId} · ${handshake.fingerprint}` : handshake.fingerprint,
+    scopes: Object.freeze([...handshake.scopes]),
+    connected: false,
+  });
   if (fallback) return Object.freeze({
     ...fallback,
     scopes: Object.freeze([...fallback.scopes]),
@@ -88,7 +96,11 @@ export function deriveAgentExperienceState(input: AgentExperienceInput): AgentEx
 
   const client = pendingClient(config) ?? configuredClient(config, input.client);
   if (config.offerStatus === "approval_pending") {
-    return Object.freeze({ kind: "approval_pending", client });
+    return Object.freeze({
+      kind: "approval_pending",
+      client,
+      ...(config.pendingApproval ? { expiresAt: config.pendingApproval.expiresAt } : {}),
+    });
   }
 
   const transportLive = input.gatewayStatus === "connected" || input.gatewayStatus === "applying";
@@ -99,6 +111,27 @@ export function deriveAgentExperienceState(input: AgentExperienceInput): AgentEx
       kind: "workspace_ready",
       client: Object.freeze({ ...client, connected: true }),
       applying: input.gatewayStatus === "applying",
+    });
+  }
+
+  // An automatically rotated offer has no approved client. Do not retain the
+  // previous identity or show a reconnect loop just because transport status
+  // has not caught up with this newer Gateway snapshot yet.
+  if (config.offerStatus === "waiting" && config.connectionNotice) {
+    return Object.freeze({
+      kind: "offer_ready",
+      ...(config.connectionUrl ? { url: config.connectionUrl } : {}),
+      ...(config.offerExpiresAt ? { expiresAt: config.offerExpiresAt } : {}),
+      notice: config.connectionNotice,
+    });
+  }
+
+  if (config.approvedHandshake && approvalReachedInstructions) {
+    return Object.freeze({
+      kind: "approval_granted",
+      client: configuredClient(config, input.client),
+      expiresAt: config.approvedHandshake.expiresAt,
+      handshakeStatus: config.approvedHandshake.status,
     });
   }
 

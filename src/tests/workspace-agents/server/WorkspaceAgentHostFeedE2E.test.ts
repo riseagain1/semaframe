@@ -173,7 +173,7 @@ describe("Workspace Agent host-feed handoff", () => {
 
       const preparation = data(await client.callTool({
         name: "begin_workspace_update",
-        arguments: { ...session, intent: "Show the approved feed in a Data Panel", requested_component_ids: 1 },
+        arguments: { ...session, intent: "Show the approved feed in a Data Panel", requested_component_ids: 1, capability_detail: "full" },
       }));
       const capability = preparation.capability_manifest as {
         component_types: Array<Record<string, unknown>>;

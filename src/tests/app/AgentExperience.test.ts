@@ -66,6 +66,7 @@ describe("Agent experience state", () => {
 
     expect(state).toEqual({
       kind: "approval_pending",
+      expiresAt: "2030-01-01T00:01:00.000Z",
       client: {
         name: "Codex Desktop",
         clientId: "codex-local · fingerprint-test",
@@ -84,6 +85,51 @@ describe("Agent experience state", () => {
         client,
       }))).toEqual({ kind: "approval_granted", client });
     }
+  });
+
+  it.each(["waiting", "in_flight"] as const)("restores approved identity, scopes and deadline after reload while %s", (status) => {
+    const approvedHandshake = {
+      clientId: "dsh-session",
+      clientName: "DeepSeek Harness",
+      scopes: ["workspace:read"],
+      fingerprint: "a1:b2:c3",
+      approvedAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: "2030-01-01T00:10:00.000Z",
+      status,
+    };
+    const state = deriveAgentExperienceState(input({
+      gatewayStatus: "disconnected",
+      config: config({ offerStatus: "approval_granted", approvedHandshake }),
+      client: { name: "Stale client", clientId: "old-id", scopes: ["workspace:clear"] },
+    }));
+    expect(state).toEqual({
+      kind: "approval_granted",
+      expiresAt: approvedHandshake.expiresAt,
+      handshakeStatus: status,
+      client: {
+        name: "DeepSeek Harness",
+        clientId: "dsh-session · a1:b2:c3",
+        scopes: ["workspace:read"],
+        connected: false,
+      },
+    });
+  });
+
+  it.each(["approval_expired", "handshake_expired", "offer_expired"] as const)("shows %s recovery after rotation without a stale identity or unlock", (reason) => {
+    const notice = { reason, occurredAt: "2030-01-01T00:10:00.000Z" };
+    const state = deriveAgentExperienceState(input({
+      gatewayStatus: "disconnected",
+      sessionReady: true,
+      config: config({ connectionNotice: notice }),
+      client: { name: "Expired client", scopes: ["workspace:clear"] },
+    }));
+    expect(state).toEqual({
+      kind: "offer_ready",
+      url: "http://127.0.0.1:8788/mcp/connect/test-offer",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      notice,
+    });
+    expect(state).not.toHaveProperty("client");
   });
 
   it("unlocks only with both browser-local instructions and a live transport", () => {

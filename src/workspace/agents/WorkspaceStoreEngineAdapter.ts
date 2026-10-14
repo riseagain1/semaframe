@@ -5,6 +5,7 @@ import {
   resizePolicyForPlacement,
   type ComponentInstance,
   type ComponentManifest,
+  type ComponentTypeRef,
   type ComponentResizePolicy,
   type JSONObject,
 } from "../components/componentTypes";
@@ -60,8 +61,14 @@ import {
   buildSemaFrameLayoutGraph,
   queryLayoutPlacement,
   type LayoutOverlapConflict,
-  type LayoutPlacementCandidate,
 } from "../layout";
+import {
+  buildRuntimeViewGraph,
+  checkRuntimeLayoutPlacement,
+  findWorsenedRuntimeIssues,
+  type RuntimeLayoutCandidate,
+  type RuntimeViewContext,
+} from "../layout/runtimeView";
 import {
   isPhysicalSpatialTypeId,
   isSpatialRenderTypeId,
@@ -85,6 +92,7 @@ import {
   WorkspacePermissionError,
   WorkspaceStore,
   WorkspaceStoreError,
+  assertResizeValue,
 } from "../state/WorkspaceStore";
 import type { WorkspaceState } from "../state/workspaceState";
 import {
@@ -116,6 +124,10 @@ import {
   type WorkspacePhysicsSimulationView,
   type WorkspacePhysicsStateView,
   type WorkspaceStateView,
+  type WorkspaceSpaceInspectionOptions,
+  type WorkspaceLayoutQueryOptions,
+  type WorkspacePrepareOptions,
+  type WorkspaceViewGuard,
 } from "./contracts";
 import { stableJson } from "./guide";
 import { analyzePrecisionDocument, compactPrecisionReport, parsePrecisionCadComparisonOptions, parsePrecisionSourceOptions, precisionInspectionSummary, PrecisionWorkspaceAnalysisError } from "../precision/workspaceAnalysis";
@@ -183,6 +195,8 @@ const CORE_PERMISSIONS = new Set<WorkspacePermission>([
 ]);
 
 export type WorkspaceStoreEngineAdapterOptions = Readonly<{
+  /** Browser-owned ephemeral facts. Never persisted, never supplied by an agent. */
+  getRuntimeView?: () => RuntimeViewContext | null;
   requestId?: (inputRevision: number) => string;
   maxSummaryComponents?: number;
   maxSummaryResources?: number;
@@ -252,6 +266,8 @@ function spatialGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameSpatialG
       units: snapshot.coordinateSystem.units,
       up_axis: snapshot.coordinateSystem.upAxis,
       forward_axis: snapshot.coordinateSystem.forwardAxis,
+      angles: "radians",
+      placement_rule: "local_placement is relative to parent_id when present; root placements are world coordinates. world_transform and world_bounds are resolved world coordinates.",
     },
     ...(snapshot.stage ? {
       stage: {
@@ -334,6 +350,9 @@ function spatialGraphForAgent(snapshot: ReturnType<typeof buildSemaFrameSpatialG
       })),
       visibility: node.visibility,
       local_placement: node.localPlacement,
+      placement_reference: node.parentId
+        ? { frame: "parent_local", component_id: node.parentId }
+        : { frame: "world" },
       world_transform: {
         position: node.worldTransform.position,
         rotation_quaternion: node.worldTransform.rotationQuaternion,
@@ -533,7 +552,18 @@ function parseSpatialPlacementCandidate(value: unknown): ParsedSpatialPlacementC
     "geometry", "cad_definition", "cadDefinition", "placement", "collision", "physics",
   ]);
   if (Object.keys(record).some((key) => !allowed.has(key))) {
-    throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate contains unsupported fields", { retryable: true });
+    throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate contains unsupported fields. For an existing object or model-assembly, use {component_id, placement}; for new geometry, use {geometry, placement}, {cad_definition, placement}, or {asset_id, entity_kind, placement}. Do not nest props or use component_type here.", {
+      retryable: true,
+      requiredAction: "query_spatial_placement",
+      details: { unsupported_fields: Object.keys(record).filter((key) => !allowed.has(key)), allowed_fields: [...allowed] },
+    });
+  }
+  for (const [snake, camel] of [["component_id", "componentId"], ["asset_id", "assetId"], ["entity_kind", "entityKind"]]) {
+    if (record[snake!] !== undefined && record[camel!] !== undefined) {
+      throw new WorkspaceEngineError("invalid_spatial_candidate", `candidate must not provide both ${snake} and ${camel}`, {
+        retryable: true, requiredAction: "query_spatial_placement",
+      });
+    }
   }
   const placement = record.placement;
   if (!placement || typeof placement !== "object" || Array.isArray(placement)) {
@@ -557,13 +587,13 @@ function parseSpatialPlacementCandidate(value: unknown): ParsedSpatialPlacementC
   };
   if (placementRecord.space !== "world3d"
     || Object.keys(placementRecord).some((key) => !["space", "position", "rotation", "scale"].includes(key))) {
-    throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate.placement must be an exact world3d placement", { retryable: true });
+    throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate.placement must be {space:'world3d', position:{x,y,z}, rotation:{x,y,z}, scale:{x,y,z}}. Use metres and radians; an existing spatial child's placement is parent-local, while a new or root component's placement is world-relative.", { retryable: true });
   }
   let collision: SpatialCollisionConfig | undefined;
   if (record.collision !== undefined) {
     collision = parseSpatialCollisionConfig(record.collision);
     if (!collision) {
-      throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate.collision is invalid", { retryable: true });
+      throw new WorkspaceEngineError("invalid_spatial_candidate", "candidate.collision is invalid. Omit it to preserve an existing collider or use geometry bounds by default. An explicit box requires {enabled:true, role:'solid', shape:'box', margin:0, center:{x,y,z}, size:{x,y,z}}; use full size, not half_extents.", { retryable: true });
     }
   }
   const componentId = record.component_id ?? record.componentId;
@@ -632,12 +662,12 @@ function invalidLayoutCandidate(message: string): WorkspaceEngineError {
   });
 }
 
-function parseLayoutPlacementCandidate(value: unknown): LayoutPlacementCandidate {
+function parseLayoutPlacementCandidate(value: unknown): RuntimeLayoutCandidate {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw invalidLayoutCandidate("candidate must be an object");
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set(["component_id", "componentId", "placement"]);
+  const allowed = new Set(["component_id", "componentId", "component_type", "placement"]);
   if (Object.keys(record).some((key) => !allowed.has(key))) {
     throw invalidLayoutCandidate("candidate contains unsupported fields");
   }
@@ -645,6 +675,17 @@ function parseLayoutPlacementCandidate(value: unknown): LayoutPlacementCandidate
     throw invalidLayoutCandidate("candidate must not contain both component_id and componentId");
   }
   const rawComponentId = record.component_id ?? record.componentId;
+  let componentType: ComponentTypeRef | undefined;
+  if (record.component_type !== undefined) {
+    const binding = record.component_type;
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)
+      || Object.keys(binding).some((key) => !["typeId", "version", "digest"].includes(key))
+      || ["typeId", "version", "digest"].some((key) => {
+        const part = (binding as Record<string, unknown>)[key];
+        return typeof part !== "string" || !part || part.length > 256;
+      })) throw invalidLayoutCandidate("component_type requires the exact typeId, version and digest binding");
+    componentType = structuredClone(binding) as ComponentTypeRef;
+  }
   if (rawComponentId !== undefined
     && (typeof rawComponentId !== "string" || !rawComponentId || rawComponentId.length > 256)) {
     throw invalidLayoutCandidate("component_id must be a non-empty string no longer than 256 characters");
@@ -710,6 +751,7 @@ function parseLayoutPlacementCandidate(value: unknown): LayoutPlacementCandidate
       : finiteNumber(placement.rotationDeg, "candidate.placement.rotationDeg", -1_000_000, 1_000_000);
     return {
       ...(rawComponentId ? { componentId: rawComponentId as string } : {}),
+      ...(componentType ? { componentType } : {}),
       placement: {
         space: "canvas2d",
         position: vector(placement.position, "candidate.placement.position"),
@@ -732,6 +774,7 @@ function parseLayoutPlacementCandidate(value: unknown): LayoutPlacementCandidate
     }
     return {
       ...(rawComponentId ? { componentId: rawComponentId as string } : {}),
+      ...(componentType ? { componentType } : {}),
       placement: {
         space: "viewport",
         anchor: placement.anchor as "top_left" | "top" | "top_right" | "left" | "center" | "right" | "bottom_left" | "bottom" | "bottom_right",
@@ -863,6 +906,7 @@ function redactedComponentState(component: Readonly<ComponentInstance>): {
 }
 
 function componentForAgent(
+  state: Readonly<WorkspaceState>,
   component: Readonly<ComponentInstance>,
   props: JSONValue,
   durableState: JSONValue,
@@ -876,6 +920,7 @@ function componentForAgent(
     props,
     durable_state: durableState,
     placement: component.placement,
+    ...placementReferenceForAgent(state, component),
     ...(component.parentId ? { parent_id: component.parentId } : {}),
     bindings,
     tags,
@@ -884,6 +929,14 @@ function componentForAgent(
     locks: component.locks,
     provenance: component.provenance,
   });
+}
+
+function placementReferenceForAgent(state: Readonly<WorkspaceState>, component: Readonly<ComponentInstance>) {
+  if (component.placement.space !== "world3d") return {};
+  const parent = component.parentId ? state.components.get(component.parentId) : undefined;
+  return { placement_reference: parent && parent.placement.space === "world3d" && isSpatialRenderTypeId(parent.type.typeId)
+    ? { frame: "parent_local", component_id: parent.id, units: "meters", angles: "radians" }
+    : { frame: "world", units: "meters", angles: "radians" } };
 }
 
 function manifestForAgent(manifest: ComponentManifest): JSONValue {
@@ -1035,6 +1088,7 @@ function workspaceSummary(
       type: component.type,
       label: component.label,
       placement: component.placement,
+      ...placementReferenceForAgent(state, component),
       active_resize_policy: asJSON(policy),
       current_geometry: currentGeometry(component, policy),
       current_visual_effects: component.visualEffects ?? DEFAULT_COMPONENT_VISUAL_EFFECTS,
@@ -1533,11 +1587,13 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
   private readonly maxResourceSnapshotBytes: number;
   private readonly cadKernelFactory: (() => Promise<CadKernel>) | undefined;
   private readonly precisionEvidenceVault: PrecisionEvidenceVault;
+  private readonly getRuntimeView: (() => RuntimeViewContext | null) | undefined;
 
   constructor(
     readonly store: WorkspaceStore,
     options: WorkspaceStoreEngineAdapterOptions = {},
   ) {
+    this.getRuntimeView = options.getRuntimeView;
     this.requestId = options.requestId ?? defaultRequestId;
     this.maxSummaryComponents = options.maxSummaryComponents ?? MAX_SUMMARY_COMPONENTS;
     this.maxSummaryResources = options.maxSummaryResources ?? MAX_SUMMARY_RESOURCES;
@@ -1811,6 +1867,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         revision: state.revision,
         registryDigest: state.registryDigest,
         component: componentForAgent(
+          state,
           component,
           publicProps,
           publicDurableState,
@@ -2158,6 +2215,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
   inspectSpace(
     sinceRevision: number | undefined,
     principal: WorkspaceAgentPrincipal,
+    options: WorkspaceSpaceInspectionOptions = {},
   ): Promise<WorkspaceSpatialStateView> {
     return this.runSerialized(() => {
       requireAgentScope(principal, "workspace:read");
@@ -2237,6 +2295,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         registryDigest: state.registryDigest,
         spatialGraph: spatialGraphForAgent(space),
         layoutGraph: layoutGraphForAgent(layout),
+        viewGraph: asJSON(buildRuntimeViewGraph(state, this.readRuntimeView(), { detail: options.viewDetail })),
       };
     });
   }
@@ -2263,6 +2322,17 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           placementCheck: asJSON({
             valid: check.valid,
             candidate_id: check.candidateId,
+            input_coordinate_frame: check.coordinateFrame,
+            ...(check.referenceComponentId ? { reference_component_id: check.referenceComponentId } : {}),
+            checked_component_ids: check.checkedComponentIds,
+            ...(check.worldTransform ? { candidate_world_transform: {
+              position: check.worldTransform.position,
+              rotation_quaternion: check.worldTransform.rotationQuaternion,
+              scale: check.worldTransform.scale,
+            } } : {}),
+            ...(check.worldBounds ? { candidate_world_bounds: check.worldBounds } : {}),
+            suggested_placements_coordinate_frame: check.coordinateFrame,
+            mutates_workspace: false,
             conflicts: check.conflicts.map(spatialConflictForAgent),
             suggested_placements: check.suggestedPlacements,
           }),
@@ -2311,24 +2381,61 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
   queryLayoutPlacement(
     candidate: unknown,
     principal: WorkspaceAgentPrincipal,
+    options: WorkspaceLayoutQueryOptions = {},
   ): Promise<WorkspaceLayoutPlacementView> {
     return this.runSerialized(() => {
       requireAgentScope(principal, "workspace:read");
       const state = this.store.getState();
       try {
         const parsed = parseLayoutPlacementCandidate(candidate);
+        if (parsed.componentType) {
+          const manifest = this.store.getComponentManifest(parsed.componentType.typeId, parsed.componentType.version);
+          if (!manifest || manifest.digest !== parsed.componentType.digest
+            || spatialComponentKind(manifest.typeId) !== undefined) {
+            throw invalidLayoutCandidate("component_type must be an exact registered 2D component binding");
+          }
+          const existing = parsed.componentId ? state.components.get(parsed.componentId) : undefined;
+          if (existing && stableJson(existing.type) !== stableJson(parsed.componentType)) {
+            throw invalidLayoutCandidate("component_type must match the existing component's pinned binding");
+          }
+        }
+        const existing = parsed.componentId ? state.components.get(parsed.componentId) : undefined;
+        const binding = existing?.type ?? parsed.componentType;
+        if (binding) {
+          const manifest = this.store.getComponentManifest(binding.typeId, binding.version)!;
+          if (!manifest.allowedPlacements.includes(parsed.placement.space)) {
+            throw invalidLayoutCandidate("The pinned component type does not support this placement space");
+          }
+          const policy = resizePolicyForPlacement(manifest, parsed.placement);
+          if (policy.kind === "box2d") {
+            const previous = existing && existing.placement.size
+              && stableJson(resizePolicyForPlacement(manifest, existing.placement)) === stableJson(policy)
+              ? existing.placement.size : policy.defaultSize;
+            assertResizeValue(policy, { kind: "box2d", size: parsed.placement.size }, { kind: "box2d", size: previous });
+          } else if (existing?.placement.size
+            && stableJson(existing.placement.size) !== stableJson(parsed.placement.size)) {
+            throw invalidLayoutCandidate("A fixed-size component must retain its current box");
+          }
+        }
         const check = queryLayoutPlacement(state, parsed);
+        const context = this.readRuntimeView();
+        this.validateViewGuard(options.viewGuard, context);
+        const runtime = checkRuntimeLayoutPlacement(state, parsed, context);
+        const frame = options.frame ?? "current_view";
         return {
           workspaceId: state.workspaceId,
           revision: state.revision,
           registryDigest: state.registryDigest,
           placementCheck: asJSON({
-            valid: check.valid,
+            ...runtime,
+            valid: frame === "canonical" ? check.valid : runtime.valid,
+            frame,
+            canonical_valid: check.valid,
             candidate_id: check.candidateId,
             conflicts: check.conflicts.map(layoutConflictForAgent),
-            suggested_placements: check.suggestedPlacements,
+            suggested_placements: frame === "canonical" ? check.suggestedPlacements : runtime.suggested_placements,
             dimension_domain: "ui2d",
-            collision_domain: "overlay2d:canonical",
+            collision_domain: frame === "canonical" ? "overlay2d:canonical" : "overlay2d:current_view",
             mutates_workspace: false,
           }),
         };
@@ -2515,6 +2622,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
     intent: string,
     requestedIds = 8,
     principal?: WorkspaceAgentPrincipal,
+    options: WorkspacePrepareOptions = {},
   ): Promise<WorkspacePreparedUpdate> {
     return this.runSerialized(() => {
       if (typeof intent !== "string" || !intent.trim() || intent.length > 4_000) {
@@ -2524,8 +2632,18 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         throw new WorkspaceEngineError("invalid_request", "requestedIds must be between 1 and 100", { retryable: true });
       }
       const state = this.store.getState();
+      const context = this.readRuntimeView();
+      this.validateViewGuard(options.viewGuard, context);
+      const layoutFrame = options.layoutFrame ?? (this.getRuntimeView ? "current_view" : "canonical");
+      if (layoutFrame === "canonical" && options.viewGuard) {
+        throw new WorkspaceEngineError("invalid_request", "view_guard requires layout_frame current_view");
+      }
+      const viewGuard = options.viewGuard ?? (layoutFrame === "current_view" && context?.status === "ready"
+        ? { view_id: context.viewId, view_epoch: context.epoch } : undefined);
       const inputRevision = this.nextInputRevision++;
       const prepared: WorkspacePreparedUpdate = {
+        layout_frame: layoutFrame,
+        ...(viewGuard ? { view_guard: structuredClone(viewGuard) } : {}),
         envelope: {
           protocol_version: WORKSPACE_PROTOCOL_VERSION,
           request_id: this.requestId(inputRevision),
@@ -2619,6 +2737,9 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         const commit = this.store.applyDetailed(
           hostBatch,
           authorizationFor(principal),
+          known.value.layout_frame === "current_view"
+            ? (before, draft) => this.validateRuntimeDraft(before, draft, known.value.view_guard)
+            : undefined,
         );
         const resolvedBatch = {
           ...known.value.envelope,
@@ -2701,6 +2822,54 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
         hasMore: available.length > selected.length,
       };
     });
+  }
+
+  private readRuntimeView(): RuntimeViewContext | null {
+    // Unmounted/failed renderers do not certify a visual pass. Keep canonical
+    // and headless inspection available, without exposing host exception text.
+    try { return this.getRuntimeView?.() ?? null; } catch { return null; }
+  }
+
+  private validateViewGuard(guard: WorkspaceViewGuard | undefined, context: RuntimeViewContext | null): void {
+    if (!guard) return;
+    if (!context || context.viewId !== guard.view_id || context.epoch !== guard.view_epoch) {
+      throw new WorkspaceEngineError("stale_view_context", "The viewport changed. Inspect the current view and preflight again; the agent session is still valid.", {
+        retryable: true, requiredAction: "inspect_workspace_space",
+        details: { view_id: context?.viewId ?? null, view_epoch: context?.epoch ?? null },
+      });
+    }
+  }
+
+  private validateRuntimeDraft(
+    before: Readonly<WorkspaceState>,
+    draft: Readonly<WorkspaceState>,
+    guard: WorkspaceViewGuard | undefined,
+  ): void {
+    // Sampling happens after asynchronous CAD work, inside the store's final
+    // synchronous atomic section. Both sides use exactly the same view.
+    const context = this.readRuntimeView();
+    const authoredCameraChanged = [...draft.components.values()].some((component) => component.type.typeId === "stage-3d"
+      && stableJson(component.props.activeCamera ?? null) !== stableJson(before.components.get(component.id)?.props.activeCamera ?? null));
+    const hasProjectedUI = [...draft.components.values()].some((component) => spatialComponentKind(component.type.typeId) === undefined
+      && component.visibility === "visible"
+      && ["world3d", "billboard", "surface"].includes(component.placement.space));
+    if (authoredCameraChanged && hasProjectedUI) {
+      throw new WorkspaceEngineError("runtime_view_unavailable", "Changing the authored camera changes projected 2D geometry. Apply the camera change with explicit canonical-only authoring, then inspect the settled view and recheck its projected panels.", {
+        retryable: true, requiredAction: "inspect_workspace_space",
+        details: { reason: "authored_camera_change_requires_recheck" },
+      });
+    }
+    const check = findWorsenedRuntimeIssues(before, draft, context);
+    if (!check.checked_component_ids.length) return;
+    this.validateViewGuard(guard, context);
+    if (check.valid !== true) {
+      throw new WorkspaceEngineError(check.valid === false ? "current_view_layout_conflict" : "runtime_view_unavailable",
+        check.valid === false
+          ? "The final 2D layout introduces or worsens a current-view overlap, occlusion or viewport clipping. No changes were committed."
+          : "A settled, revision-matching rendered view is required to validate this 2D update. Inspect the view and retry, or explicitly choose canonical-only authoring.", {
+          retryable: true, requiredAction: "inspect_workspace_space", details: asJSON(check),
+        });
+    }
   }
 
   private runSerialized<T>(operation: () => T | Promise<T>): Promise<T> {

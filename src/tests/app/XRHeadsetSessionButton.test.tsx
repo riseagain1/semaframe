@@ -115,6 +115,8 @@ describe("XRHeadsetSessionButton", () => {
     />);
 
     fireEvent.click(screen.getByRole("button", { name: "Connect XR headset" }));
+    expect(screen.getByRole("dialog", { name: "XR headset session" }).closest("[data-workspace-runtime-modal]"))
+      .toHaveAttribute("data-workspace-runtime-modal", "xr-headset");
     fireEvent.click(screen.getByRole("button", { name: "Start headset session" }));
     const link = await screen.findByRole("textbox", { name: "XR one-time pairing link" });
     expect(link).toHaveValue(`https://viewer.semaframe.test/xr.html#pair=${"A".repeat(43)}`);

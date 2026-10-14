@@ -22,6 +22,7 @@ import type {
   WorkspaceModelDefinitionView,
   WorkspacePermissionScope,
   WorkspacePreparedUpdate,
+  WorkspacePrepareOptions,
   WorkspaceRealityAssetView,
   WorkspaceResourceSnapshotView,
   WorkspaceSpatialPlacementView,
@@ -45,7 +46,7 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
   revision = 0;
   registryDigest = "registry_digest_v1";
   inputRevision = 0;
-  prepareCalls: Array<{ intent: string; requestedIds?: number; principal?: WorkspaceAgentPrincipal }> = [];
+  prepareCalls: Array<{ intent: string; requestedIds?: number; principal?: WorkspaceAgentPrincipal; options?: WorkspacePrepareOptions }> = [];
   submitCalls: Array<{ prepared: WorkspacePreparedUpdate; batch: unknown; principal: WorkspaceAgentPrincipal }> = [];
   undoCalls: Array<{ expected: number; principal: WorkspaceAgentPrincipal }> = [];
   redoCalls: Array<{ expected: number; principal: WorkspaceAgentPrincipal }> = [];
@@ -291,8 +292,8 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
     };
   }
 
-  prepare(intent: string, requestedIds?: number, principal?: WorkspaceAgentPrincipal): WorkspacePreparedUpdate {
-    this.prepareCalls.push({ intent, requestedIds, principal });
+  prepare(intent: string, requestedIds?: number, principal?: WorkspaceAgentPrincipal, options?: WorkspacePrepareOptions): WorkspacePreparedUpdate {
+    this.prepareCalls.push({ intent, requestedIds, principal, options });
     this.inputRevision += 1;
     return {
       envelope: {
@@ -310,6 +311,8 @@ class FakeWorkspaceEngine implements WorkspaceEnginePort {
         { length: requestedIds ?? 1 },
         (_, index) => `CMP_${this.inputRevision}_${index + 1}`,
       ),
+      ...(options?.layoutFrame === undefined ? {} : { layout_frame: options.layoutFrame }),
+      ...(options?.viewGuard === undefined ? {} : { view_guard: options.viewGuard }),
     };
   }
 
@@ -414,6 +417,7 @@ describe("WorkspaceAgentController", () => {
     const controller = controllerFor(engine, ["workspace:read", "workspace:write", "component:create"]);
     const instructions = unwrap(await controller.getWorkspaceInstructions({
       client_id: "client-a",
+      detail: "full",
       client_name: "JARVIS\u202e admin",
       requested_scopes: ["workspace:read", "workspace:write", "component:create", "component:delete"],
     }));
@@ -423,7 +427,7 @@ describe("WorkspaceAgentController", () => {
     expect(instructions.guide.instructions).toContain("connector:delete");
     expect(instructions.guide.instructions).toContain("workspace:clear");
     expect(instructions.guide.instructions).not.toContain("workspace:delete");
-    expect(instructions.guide.guide_version).toBe("3.2");
+    expect(instructions.guide.guide_version).toBe("3.4");
     expect(instructions.guide.protocol_version).toBe("1.3");
     expect(instructions.guide.data_interaction_quickstart).toMatchObject({
       required_scopes: expect.arrayContaining(["connector:bind", "event:connect"]),
@@ -515,6 +519,7 @@ describe("WorkspaceAgentController", () => {
     const controller = controllerFor(engine, ["workspace:read"]);
     const instructions = unwrap(await controller.getWorkspaceInstructions({
       client_id: "quickstart-client",
+      detail: "full",
       requested_scopes: ["workspace:read"],
     }));
     const quickstart = instructions.guide.creation_quickstart as {
@@ -869,6 +874,64 @@ describe("WorkspaceAgentController", () => {
     expect(engine.submitCalls).toHaveLength(1);
     expect(engine.submitCalls[0]?.principal.scopes).toContain("component:create");
     expect(engine.prepareCalls[0]).toMatchObject({ requestedIds: 2 });
+  });
+
+  it("forwards runtime view detail and guards without adding ephemeral fields to the batch envelope", async () => {
+    const engine = new FakeWorkspaceEngine();
+    const controller = controllerFor(engine, ["workspace:read", "workspace:write"]);
+    const session = await sessionFor(controller, ["workspace:read", "workspace:write"]);
+    const inspect = vi.spyOn(engine, "inspectSpace");
+    const query = vi.spyOn(engine, "queryLayoutPlacement");
+    const guard = { view_id: "fixture-desktop", view_epoch: 4 };
+    const absentView = unwrap(await controller.inspectWorkspaceSpace({ ...session, view_detail: "full" }));
+    expect(inspect).toHaveBeenLastCalledWith(undefined, expect.anything(), { viewDetail: "full" });
+    expect(absentView.view_graph).toMatchObject({ status: "unavailable", ephemeral: true, view_id: null, view_epoch: null, current_view_valid: null, viewport: null });
+    await controller.inspectWorkspaceSpace(session);
+    expect(inspect).toHaveBeenLastCalledWith(undefined, expect.anything(), { viewDetail: "summary" });
+    const candidate = { component_type: { typeId: "button", version: "1.3.0", digest: "fixture-digest" }, placement: {} };
+    await controller.queryLayoutPlacement({ ...session, candidate, view_guard: guard });
+    expect(query).toHaveBeenLastCalledWith(candidate, expect.anything(), { frame: "current_view", viewGuard: guard });
+    await controller.queryLayoutPlacement({ ...session, candidate, frame: "canonical" });
+    expect(query).toHaveBeenLastCalledWith(candidate, expect.anything(), { frame: "canonical", viewGuard: undefined });
+    const prepared = unwrap(await controller.beginWorkspaceUpdate({
+      ...session, intent: "Guarded view placement", layout_frame: "current_view", view_guard: guard,
+    }));
+    expect(prepared).toMatchObject({ layout_frame: "current_view", view_guard: guard });
+    expect(prepared.envelope).not.toHaveProperty("view_guard");
+    expect(prepared.envelope).not.toHaveProperty("layout_frame");
+    guard.view_epoch = 99;
+    (prepared.view_guard as { view_epoch: number }).view_epoch = 100;
+    unwrap(await controller.submitWorkspaceBatch({
+      ...session, transaction_token: prepared.transaction_token, batch: { ...prepared.envelope, operations: [] },
+    }));
+    expect(engine.submitCalls[0]?.prepared).toMatchObject({ layout_frame: "current_view", view_guard: { view_id: "fixture-desktop", view_epoch: 4 } });
+  });
+
+  it("rejects invalid runtime selectors and engines that silently drop requested view guards", async () => {
+    const engine = new FakeWorkspaceEngine();
+    const controller = controllerFor(engine, ["workspace:read", "workspace:write"]);
+    const session = await sessionFor(controller, ["workspace:read", "workspace:write"]);
+    for (const view_detail of ["everything", null, 1]) {
+      expect(await controller.inspectWorkspaceSpace({ ...session, view_detail })).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+    }
+    for (const view_guard of [{}, { view_id: "a", view_epoch: -1 }, { view_id: "a", view_epoch: 1.5 }, { view_id: "a", view_epoch: 1, untrusted: true }]) {
+      expect(await controller.queryLayoutPlacement({ ...session, candidate: {}, view_guard })).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+      expect(await controller.beginWorkspaceUpdate({ ...session, intent: "Invalid guard", view_guard })).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+    }
+    expect(await controller.queryLayoutPlacement({ ...session, candidate: {}, frame: "screen" })).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+    expect(engine.prepareCalls).toHaveLength(0);
+    const original = engine.prepare.bind(engine);
+    vi.spyOn(engine, "prepare").mockImplementation((intent, count, principal) => original(intent, count, principal));
+    expect(await controller.beginWorkspaceUpdate({ ...session, intent: "Do not discard guard", view_guard: { view_id: "fixture", view_epoch: 1 } }))
+      .toMatchObject({ ok: false, error: { code: "engine_contract_violation" } });
+    expect(await controller.beginWorkspaceUpdate({ ...session, intent: "Do not discard frame", layout_frame: "canonical" }))
+      .toMatchObject({ ok: false, error: { code: "engine_contract_violation" } });
+    vi.spyOn(engine, "prepare").mockImplementation((intent, count, principal) => ({
+      ...original(intent, count, principal),
+      view_guard: { view_id: "malformed-host", view_epoch: -1 },
+    }));
+    expect(await controller.beginWorkspaceUpdate({ ...session, intent: "Reject an invalid host precondition" }))
+      .toMatchObject({ ok: false, error: { code: "engine_contract_violation" } });
   });
 
   it("rejects envelope tampering, stale revisions, and stale registry digests before core submission", async () => {

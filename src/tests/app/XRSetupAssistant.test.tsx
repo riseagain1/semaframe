@@ -142,6 +142,8 @@ describe("XRSetupAssistant", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open XR setup assistant" }));
 
     expect(screen.getByRole("dialog", { name: "Set up XR" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Set up XR" }).closest("[data-workspace-runtime-modal]"))
+      .toHaveAttribute("data-workspace-runtime-modal", "xr-setup");
     expect(screen.getByText(/an Agent cannot accept WebXR permission for you/i)).toBeVisible();
     const enter = await screen.findByRole("button", { name: "Enter XR on this device" });
     await waitFor(() => expect(enter).toBeEnabled());

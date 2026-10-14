@@ -224,7 +224,10 @@ describe("Workspace Protocol 1.1 resize_component", () => {
         space: "viewport", anchor: "top_left", offset: { x: 10, y: 10 },
         size: { width: 420, height: 224 },
       },
-    }]))).toThrow(/must use resize_component/i);
+    }]))).toThrowError(expect.objectContaining({
+      code: "resize_requires_resize_component",
+      message: expect.stringContaining("place_component then resize_component"),
+    }));
   });
 
   it("keeps fixed-policy geometry immutable while allowing ordinary moves and prop updates", () => {
@@ -435,7 +438,10 @@ describe("Workspace Protocol 1.1 resize_component", () => {
         space: "viewport", anchor: "center", offset: { x: 0, y: 0 },
         size: { width: 350, height: 175 },
       },
-    }]))).toThrow(/target default or frozen geometry/i);
+    }]))).toThrowError(expect.objectContaining({
+      code: "resize_requires_resize_component",
+      message: expect.stringContaining("must omit size/scale or use the target default/frozen geometry"),
+    }));
 
     store.apply(batch(store, "return_to_box", [{
       op: "place_component", op_id: "place", id: "CMP_000001",

@@ -1,4 +1,5 @@
 export type AgentClient = "codex" | "claude";
+export function stableGatewayUrl(environment: NodeJS.ProcessEnv, exactGatewayUrl?: string): string;
 export type AgentInstallationAction = "install" | "status" | "update" | "remove";
 export type AgentInstallationState =
   | "installed"

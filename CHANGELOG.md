@@ -4,7 +4,26 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Ephemeral desktop `view_graph` with actual CSS-pixel viewport, live projection camera/canvas transform, app-owned toolbar regions and projected 2D boundaries. Explicit ready/settling/unavailable states and bounded detail never enter project files or undo history.
+- Current-view 2D preflight and final-draft atomic validation, with separate canonical/current-view results and view-epoch preparation guards. Explicit canonical-only authoring supports headless workflows without certifying screen layout.
+- External DeepSeek Harness (DSH) MCP setup through its official client: credential-free Cordis configuration export, a connection-page copy action, and a foreground DSH Web launcher using an isolated temporary overlay and the existing persistent SemaFrame bridge.
+- DSH setup and lifecycle validation without embedding a model provider, modifying the user's DSH profile, or changing Workspace authorization.
+- Progressive Agent discovery: a compact mandatory guide and exact type catalog by default, with authenticated `inspect_workspace_capabilities` for selected manifests, topics, and canonical operation schemas. Explicit full-reference modes remain available; validation and authorization are unchanged.
+
+### Fixed
+
+- Detect actual-viewport 2D overlap, host toolbar occlusion and fixed-HUD clipping. Validate final routed effects, preserve idempotent receipts/history replay, and keep 2D/3D overlap independent of physical collision.
+- Give a newly approved Agent a separate, bounded 10-minute instruction-handshake window instead of expiring it on the original 2-minute approval-request deadline. Repeated approval does not renew this window; permissions and token binding remain unchanged.
+- Show approval and handshake deadlines separately, distinguish waiting for the Agent from an in-flight instruction read, and explain expired incomplete approvals after automatic offer rotation.
+- Existing-assembly movement preflight now checks real descendant colliders, reports parent-local versus world coordinates, and returns correctly transformed suggestions for rotated/scaled parents. Clarify hierarchy, event wiring, and move-versus-resize workflows and rejection messages.
+- Fit button content to its allocated panel instead of clipping a fixed-height control inside padded small panels. New button 1.3.0 reserves a 44 px target; exact earlier manifests and saved small controls remain supported.
+- Preserve the requested instruction detail through approved Gateway dispatch, including the opt-in full-reference guide.
+- Forward runtime-view detail, layout-frame selection, and exact view guards through the public REST Gateway; reject malformed guards and unknown fields before dispatch.
+- Keep browser smoke tool/route inventories and full-manifest comparisons aligned with progressive capability discovery.
+- Start Windows DSH tree shutdown before terminating its root. Report unverified descendant cleanup if the root has already exited instead of claiming success or targeting a potentially reused PID.
+- Align the README Agent tool count and table with the 27-tool surface, including `analyze_workspace_precision` and targeted capability discovery.
 
 ## [0.4.0] - 2026-10-13
 

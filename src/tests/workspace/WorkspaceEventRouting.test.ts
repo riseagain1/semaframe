@@ -28,7 +28,7 @@ function createButton(
       space: "viewport",
       anchor: "center",
       offset: { x: -576 + column * 96, y: -168 + row * 48 },
-      size: { width: 80, height: 32 },
+      size: { width: 80, height: 46 },
     },
   };
 }
