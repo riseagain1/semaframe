@@ -210,7 +210,10 @@ async function corruptCurrentWorkspaceRecovery(cdp, state) {
   return cdp.evaluate(`(${corruptRecoveryHeadInBrowser.toString()})(${JSON.stringify(current)}, ${JSON.stringify(previous)})`);
 }
 
-async function reloadWorkspaceApp(cdp, label) {
+async function reloadWorkspaceApp(cdp, label, observeRecovery = false) {
+  const observer = observeRecovery ? await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `document.addEventListener('DOMContentLoaded', () => (${observeRecoveryNoticeInBrowser.toString()})(), { once: true });`,
+  }) : undefined;
   await cdp.evaluate("window.__workspaceRecoveryReloadMarker = 'before'");
   const loaded = cdp.waitFor("Page.loadEventFired");
   await cdp.send("Page.reload", { ignoreCache: true });
@@ -220,6 +223,23 @@ async function reloadWorkspaceApp(cdp, label) {
     "window.__workspaceRecoveryReloadMarker !== 'before' && Boolean(document.querySelector('.app-shell'))",
     label,
   );
+  if (observer) await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: observer.identifier });
+}
+
+async function clearRecoveryWithNewProject(cdp) {
+  if (!await cdp.evaluate(`(() => {
+    const button = document.querySelector('button[aria-controls="project-actions-menu"]');
+    if (!(button instanceof HTMLButtonElement)) return false;
+    button.click();
+    return true;
+  })()`)) throw new Error("Recovery reset project menu was unavailable.");
+  await poll(cdp, "Boolean(document.querySelector('[role=menu]'))", "recovery reset project menu");
+  if (!await cdp.evaluate(clickExactButton("New project"))) throw new Error("Recovery reset New project was unavailable.");
+  await poll(cdp, "document.querySelector('[role=alertdialog] #confirm-title')?.textContent?.includes('Start a new project')", "recovery reset confirmation");
+  if (!await cdp.evaluate(clickExactButton("Start new"))) throw new Error("Recovery reset confirmation was unavailable.");
+  await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-disabled'))", "recovery reset Agent gate");
+  await waitForWorkspaceRecoverySlots(cdp, [], "explicit New cleared recovery", 12_000,
+    (state) => state.slots.length === 0 && !state.fallbackPresent && !state.legacyPresent);
 }
 
 function clickExactButton(text) {
@@ -759,35 +779,27 @@ try {
     if (!await corruptCurrentWorkspaceRecovery(cdp, recoverySlots)) {
       throw new Error("The focused current recovery snapshot was unavailable for corruption testing.");
     }
-    await reloadWorkspaceApp(cdp, "focused Workspace recovery reload");
-    const reloadClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace recovery reload");
-    if (reloadClient) workspaceAgentClients.push(reloadClient);
-    await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "focused recovery banner");
-    await cdp.evaluate(`(${observeRecoveryNoticeInBrowser.toString()})()`);
-    if (!await cdp.evaluate(clickExactButton("Continue recovered project"))) {
-      throw new Error("The focused recovery banner could not restore its previous snapshot.");
-    }
+    await reloadWorkspaceApp(cdp, "focused Workspace recovery reload", true);
     await poll(cdp, "window.__workspaceRecoverySmokeNoticeSeen === true", "focused last-known-good recovery notice");
-    await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", "focused recovery replacement gate");
-    const restoreClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace after recovery restore");
+    const restoreClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace automatic recovery");
     if (restoreClient) workspaceAgentClients.push(restoreClient);
     await poll(
       cdp,
       `document.querySelector('input[aria-label="Project name"]')?.value === ${JSON.stringify(previousProjectName)} && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 1`,
       "focused previous recovery restoration",
     );
-    await reloadWorkspaceApp(cdp, "focused Workspace reload before dismissal");
-    const dismissClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace recovery dismissal");
-    if (dismissClient) workspaceAgentClients.push(dismissClient);
-    await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "focused recovery banner before dismissal");
-    if (!await cdp.evaluate(clickExactButton("Dismiss"))) throw new Error("Focused recovery dismissal was unavailable.");
-    await poll(cdp, "!document.querySelector('.recovery-banner')", "focused dismissed recovery banner");
-    const dismissed = await readWorkspaceRecoveryStorage(cdp);
-    if (dismissed.slots.length !== 0 || dismissed.fallbackPresent || dismissed.legacyPresent) {
-      throw new Error(`Focused Dismiss did not clear every recovery store: ${JSON.stringify(dismissed)}`);
-    }
+    await poll(cdp, "!document.querySelector('.recovery-banner')", "focused no manual recovery prompt");
+    await reloadWorkspaceApp(cdp, "focused Workspace second automatic recovery");
+    const secondClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace repeat recovery");
+    if (secondClient) workspaceAgentClients.push(secondClient);
+    await poll(cdp, `document.querySelector('input[aria-label="Project name"]')?.value === ${JSON.stringify(previousProjectName)} && document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 1`, "focused repeated restored scene");
+    await clearRecoveryWithNewProject(cdp);
+    await reloadWorkspaceApp(cdp, "focused Workspace reload after explicit New");
+    const blankClient = await unlockWorkspaceThroughAgent(cdp, "Focused Workspace explicit New persisted");
+    if (blankClient) workspaceAgentClients.push(blankClient);
+    await poll(cdp, "document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 0 && !document.querySelector('.recovery-banner')", "focused explicit New stays empty");
     if (problems.length) throw new Error(`Browser reported warnings/errors:\n${problems.join("\n")}`);
-    console.log("Focused Workspace recovery browser smoke passed: current/previous write, corrupt-current reload fallback, project restore, and verified dismissal.");
+    console.log("Focused Workspace recovery browser smoke passed: current/previous write, automatic corrupt-current reload fallback, repeated restore without Continue, and explicit New stays empty after reload.");
     throw RECOVERY_SMOKE_COMPLETE;
   }
 
@@ -1457,17 +1469,9 @@ try {
     (state) => renamedRecoveryPair(state, previousRecovery, "workspace-mixed-smoke-recovery-current"));
   if (!await corruptCurrentWorkspaceRecovery(cdp, recoveryPair)) throw new Error("The current recovery snapshot was unavailable for corruption testing.");
 
-  await reloadWorkspaceApp(cdp, "Workspace reload with a corrupt current recovery");
-  const recoveryReloadAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace recovery reload");
-  if (recoveryReloadAgentClient) workspaceAgentClients.push(recoveryReloadAgentClient);
-  await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "recovery banner after reload");
-  await cdp.evaluate(`(${observeRecoveryNoticeInBrowser.toString()})()`);
-  if (!await cdp.evaluate(clickExactButton("Continue recovered project"))) {
-    throw new Error("The recovery banner could not restore its last-known-good snapshot.");
-  }
+  await reloadWorkspaceApp(cdp, "Workspace reload with a corrupt current recovery", true);
   await poll(cdp, "window.__workspaceRecoverySmokeNoticeSeen === true", "last-known-good recovery notice");
-  await poll(cdp, "Boolean(document.querySelector('.agent-connection-page'))", "recovery project replacement gate");
-  const restoredRecoveryAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace after recovery restore");
+  const restoredRecoveryAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace automatic recovery");
   if (restoredRecoveryAgentClient) workspaceAgentClients.push(restoredRecoveryAgentClient);
   await poll(
     cdp,
@@ -1475,18 +1479,14 @@ try {
     "last-known-good previous recovery restoration",
   );
 
-  // The recovery remains available until the human dismisses it. A second
-  // reload exercises the actual Dismiss button and verifies both stores clear.
-  await reloadWorkspaceApp(cdp, "Workspace reload before recovery dismissal");
-  const dismissRecoveryAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace recovery dismissal");
-  if (dismissRecoveryAgentClient) workspaceAgentClients.push(dismissRecoveryAgentClient);
-  await poll(cdp, "Boolean(document.querySelector('.recovery-banner'))", "recovery banner before dismissal");
-  if (!await cdp.evaluate(clickExactButton("Dismiss"))) throw new Error("Recovery dismissal was unavailable.");
-  await poll(cdp, "!document.querySelector('.recovery-banner')", "dismissed recovery banner");
-  const dismissedRecoveryStorage = await readWorkspaceRecoveryStorage(cdp);
-  if (dismissedRecoveryStorage.slots.length !== 0 || dismissedRecoveryStorage.fallbackPresent || dismissedRecoveryStorage.legacyPresent) {
-    throw new Error(`Dismiss did not clear every recovery store: ${JSON.stringify(dismissedRecoveryStorage)}`);
-  }
+  await poll(cdp, "!document.querySelector('.recovery-banner')", "no manual recovery prompt");
+  // Explicit New remains a hard boundary: refreshing must not resurrect the
+  // previous project that automatic recovery would otherwise choose.
+  await clearRecoveryWithNewProject(cdp);
+  await reloadWorkspaceApp(cdp, "Workspace reload after explicit New");
+  const blankAfterRecoveryAgentClient = await unlockWorkspaceThroughAgent(cdp, "Workspace explicit New persisted");
+  if (blankAfterRecoveryAgentClient) workspaceAgentClients.push(blankAfterRecoveryAgentClient);
+  await poll(cdp, "document.querySelectorAll('.workspace-component-tree [role=treeitem]').length === 0 && !document.querySelector('.recovery-banner')", "explicit New stays empty after reload");
 
   if (!await cdp.evaluate(clickExactButton("Manage"))) throw new Error("Final Agent management was unavailable.");
   await poll(cdp, "Boolean(document.querySelector('.agent-connection-page.status-connected'))", "final connected Agent management");
@@ -1510,7 +1510,7 @@ try {
   }
 
   if (problems.length) throw new Error(`Browser reported warnings/errors:\n${problems.join("\n")}`);
-  console.log("Workspace browser smoke passed: exclusive pre-handshake Agent gate, authenticated Workspace unlock, unified hybrid canvas, one-batch 3D desk + presenter + 2D timer, normal-path active video creation, one-command aspect-locked resize, universal 2D halo and 3D emission/bloom effects, microscopic-to-planetary hybrid zoom with adaptive clipping and Frame recovery, screen-fixed iframe preservation and unchanged Workspace history, desktop/mobile full screen with native fallback, explicit/Escape exit, exact stage dimensions and 3D scale, semantic timer action/live projection, Protocol 1.3 universal save validation, gated blank reset/open round trip, corrupt-current reload fallback, verified recovery dismissal, connected Agent management, and responsive layout.");
+  console.log("Workspace browser smoke passed: exclusive pre-handshake Agent gate, authenticated Workspace unlock, unified hybrid canvas, one-batch 3D desk + presenter + 2D timer, normal-path active video creation, one-command aspect-locked resize, universal 2D halo and 3D emission/bloom effects, microscopic-to-planetary hybrid zoom with adaptive clipping and Frame recovery, screen-fixed iframe preservation and unchanged Workspace history, desktop/mobile full screen with native fallback, explicit/Escape exit, exact stage dimensions and 3D scale, semantic timer action/live projection, Protocol 1.3 universal save validation, gated blank reset/open round trip, automatic corrupt-current reload fallback, explicit New survives reload, connected Agent management, and responsive layout.");
   console.log(`Screenshots: ${join(artifacts, "workspace-smoke-mixed.png")}, ${join(artifacts, "workspace-smoke-fullscreen.png")}, ${join(artifacts, "workspace-smoke-fullscreen-mobile.png")}, ${join(artifacts, "workspace-smoke-agent.png")}, ${join(artifacts, "workspace-smoke-agent-mobile.png")}`);
 } catch (error) {
   if (error === RECOVERY_SMOKE_COMPLETE) {

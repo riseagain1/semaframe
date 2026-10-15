@@ -81,4 +81,78 @@ describe("Spatial agent operation clarity", () => {
     expect(store.getRevision()).toBe(1);
     expect(store.getState().components.get("PANEL")?.placement).toEqual(original);
   });
+
+  it("explains the real lamp/tabletop margin conflict without changing safety or the scene", async () => {
+    const store = new WorkspaceStore();
+    const contact = { enabled: true, role: "solid", shape: "asset_bounds", margin: 0 };
+    const at = (x: number, y: number) => ({ ...world(), position: { x, y, z: 0 } });
+    store.apply(workspaceBatch(store, "table", [
+      { op: "create_component", op_id: "stage", id: "STAGE",
+        component_type: DEFAULT_COMPONENT_REGISTRY.ref("stage-3d"), placement: world() },
+      { op: "create_component", op_id: "table", id: "TABLE",
+        component_type: DEFAULT_COMPONENT_REGISTRY.ref("model-assembly"), placement: world(), props: { collisionPolicy: "all" } },
+      { op: "create_component", op_id: "top", id: "TOP", parent_id: "TABLE",
+        component_type: DEFAULT_COMPONENT_REGISTRY.ref("spatial-primitive"), placement: at(0, 0.725),
+        props: { geometry: { kind: "box", sizeM: { x: 1.6, y: 0.05, z: 0.8 } }, collision: contact } },
+    ]));
+    const adapter = new WorkspaceStoreEngineAdapter(store);
+    const candidate = { geometry: { kind: "cylinder", radiusM: 0.07, heightM: 0.02, axis: "y" }, placement: at(0.62, 0.76) };
+    const before = store.getState();
+    const check = (await adapter.querySpatialPlacement(candidate, reader)).placementCheck;
+    expect(check).toMatchObject({
+      valid: false,
+      candidate_world_bounds: { min: { y: expect.closeTo(0.75) }, max: { y: expect.closeTo(0.77) } },
+      collision_evidence: expect.arrayContaining([
+        expect.objectContaining({
+          component_id: "__SPATIAL_CANDIDATE__", config_source: "default", feasibility_enabled: true,
+          effective_collision: { enabled: true, role: "solid", shape: "asset_bounds", margin: 0.02 },
+          resolved_source: "parametric_bounds",
+          collision_world_bounds: expect.objectContaining({ min: { x: expect.closeTo(0.53), y: expect.closeTo(0.73), z: expect.closeTo(-0.09) },
+            size: { x: expect.closeTo(0.18), y: expect.closeTo(0.06), z: expect.closeTo(0.18) } }),
+        }),
+        expect.objectContaining({ component_id: "TOP", config_source: "existing_component", effective_collision: contact }),
+      ]),
+      collision_conflict_details: [expect.objectContaining({ kind: "safety_margin_only" })],
+      collision_assessment_basis: "oriented_box_colliders_not_exact_mesh_or_static_stability",
+      mutates_workspace: false,
+    });
+    const lamp = {
+      op: "create_component" as const, op_id: "lamp", id: "BASE",
+      component_type: DEFAULT_COMPONENT_REGISTRY.ref("spatial-primitive"), placement: candidate.placement,
+      props: { geometry: candidate.geometry },
+    };
+    expect(() => store.apply(workspaceBatch(store, "padded_lamp", [lamp])))
+      .toThrowError(expect.objectContaining({ code: "spatial_collision" }));
+    expect(store.getState()).toEqual(before);
+
+    await expect(adapter.querySpatialPlacement({ ...candidate, collision: contact }, reader)).resolves.toMatchObject({ placementCheck: {
+      valid: true, conflicts: [], collision_conflict_details: [], collision_evidence: [expect.objectContaining({
+        config_source: "candidate_override", effective_collision: contact,
+        collision_world_bounds: expect.objectContaining({ min: expect.objectContaining({ y: expect.closeTo(0.75) }) }),
+      })],
+    } });
+    await expect(adapter.queryStablePlacement({ ...candidate, collision: contact }, reader)).resolves.toMatchObject({ stabilityCheck: {
+      collision_check: { valid: true, collision_evidence: [expect.objectContaining({ config_source: "candidate_override", effective_collision: contact })] },
+    } });
+    // An actual 5 mm overlap still fails with no margin: no disabled collisions,
+    // shifted tabletop, or weakened validation are needed for intended contact.
+    await expect(adapter.querySpatialPlacement({ ...candidate, placement: at(0.62, 0.755), collision: contact }, reader))
+      .resolves.toMatchObject({ placementCheck: { valid: false, collision_conflict_details: [expect.objectContaining({ kind: "collider_penetration" })] } });
+    expect(store.getState()).toEqual(before);
+    store.apply(workspaceBatch(store, "contact_lamp", [{ ...lamp, props: { ...lamp.props, collision: contact } }]));
+    expect(store.getRevision()).toBe(2);
+    expect(store.getState().components.get("TOP")).toEqual(before.components.get("TOP"));
+    await expect(adapter.querySpatialPlacement({ component_id: "BASE", placement: candidate.placement }, reader)).resolves.toMatchObject({ placementCheck: {
+      valid: true, collision_evidence: [expect.objectContaining({ component_id: "BASE", config_source: "existing_component", effective_collision: contact })],
+    } });
+    await expect(adapter.querySpatialPlacement({ component_id: "TOP", placement: at(0, 0.725), collision: { ...contact, margin: 0.02 } }, reader))
+      .resolves.toMatchObject({ placementCheck: {
+        valid: false, collision_conflict_details: [expect.objectContaining({ kind: "safety_margin_only" })],
+        collision_evidence: expect.arrayContaining([
+          expect.objectContaining({ component_id: "TOP", config_source: "candidate_override", effective_collision: { ...contact, margin: 0.02 } }),
+          expect.objectContaining({ component_id: "BASE", config_source: "existing_component", effective_collision: contact }),
+        ]),
+      } });
+    expect(store.getRevision()).toBe(2);
+  });
 });

@@ -2,8 +2,10 @@ import type {
   WorkspaceRecoveryReadResult,
   WorkspaceRecoveryRepository,
   WorkspaceRecoverySnapshot,
+  WorkspaceRecoveryInspection,
+  WorkspaceRecoveryReadIssue,
 } from "./WorkspaceRecoveryRepository";
-import { migrateLegacyWorkspaceRecovery } from "./WorkspaceRecoveryRepository";
+import { inspectWorkspaceRecoveryRepository, migrateLegacyWorkspaceRecovery } from "./WorkspaceRecoveryRepository";
 
 export type WorkspaceRecoveryWriteResult =
   | Readonly<{ status: "stored"; generation: number; sequence: number }>
@@ -27,8 +29,12 @@ export class WorkspaceRecoveryCoordinator {
   private draining: Promise<void> | undefined;
   private barrier: Promise<void> = Promise.resolve();
   private disposed = false;
+  private writeProtection: string | undefined;
 
-  constructor(private readonly repository: WorkspaceRecoveryRepository) {}
+  constructor(
+    private readonly repository: WorkspaceRecoveryRepository,
+    private readonly startupIssues: readonly WorkspaceRecoveryReadIssue[] = [],
+  ) {}
 
   currentGeneration(): number { return this.generation; }
 
@@ -44,14 +50,35 @@ export class WorkspaceRecoveryCoordinator {
     return this.repository.readCandidates();
   }
 
+  async inspectStartupRecovery(): Promise<WorkspaceRecoveryInspection> {
+    this.assertOpen();
+    await this.flush();
+    const result = await inspectWorkspaceRecoveryRepository(this.repository);
+    return { candidates: result.candidates, issues: [...this.startupIssues, ...result.issues] };
+  }
+
+  /** Protect unresolved startup data independently of UI/Agent readiness. */
+  suspendWrites(reason: string): void {
+    this.writeProtection = reason;
+    if (this.pending) {
+      this.pending.reject(new Error(reason));
+      this.pending = undefined;
+    }
+  }
+
+  /** Only call after a successful explicit project/recovery replacement. */
+  resumeWrites(): void { this.writeProtection = undefined; }
+
   async migrateLegacy(raw: string, removeLegacy: () => void | Promise<void>): Promise<boolean> {
     this.assertOpen();
+    if (this.writeProtection) throw new Error(this.writeProtection);
     await this.flush();
     return migrateLegacyWorkspaceRecovery(this.repository, raw, removeLegacy);
   }
 
   schedule(snapshot: Omit<WorkspaceRecoverySnapshot, "generation" | "sequence">): Promise<WorkspaceRecoveryWriteResult> {
     this.assertOpen();
+    if (this.writeProtection) return Promise.reject(new Error(this.writeProtection));
     const generation = this.generation;
     const sequence = ++this.sequence;
     return new Promise<WorkspaceRecoveryWriteResult>((resolve, reject) => {
@@ -85,8 +112,15 @@ export class WorkspaceRecoveryCoordinator {
     }
     await this.flush();
     if (options.clear) {
+      if (this.startupIssues.some((issue) => issue.kind === "unavailable")) {
+        throw new Error("Some browser recovery storage could not be initialized and cannot be confirmed cleared. Restore storage access and refresh before retrying.");
+      }
       this.barrier = this.barrier.then(() => this.repository.clear());
-      await this.barrier;
+      try { await this.barrier; }
+      catch (error) {
+        this.barrier = Promise.resolve();
+        throw error;
+      }
     }
     return this.generation;
   }
@@ -118,6 +152,7 @@ export class WorkspaceRecoveryCoordinator {
       try {
         this.barrier = this.barrier.then(async () => {
           if (job.snapshot.generation !== this.generation) return;
+          if (this.writeProtection) throw new Error(this.writeProtection);
           await this.repository.write(job.snapshot);
         });
         await this.barrier;
@@ -127,6 +162,9 @@ export class WorkspaceRecoveryCoordinator {
           sequence: job.snapshot.sequence,
         });
       } catch (error) {
+        // A rejected write/protection barrier must not poison all later
+        // writes after the user explicitly resumes recovery.
+        this.barrier = Promise.resolve();
         job.reject(error);
       }
     }
@@ -146,4 +184,12 @@ export class WorkspaceRecoveryCoordinator {
   private assertOpen(): void {
     if (this.disposed) throw new Error("Workspace recovery coordinator is disposed");
   }
+}
+
+/** A missing backend is not evidence that the user's stored data was cleared. */
+export async function clearWorkspaceRecovery(
+  coordinator: Pick<WorkspaceRecoveryCoordinator, "clear"> | null | undefined,
+): Promise<void> {
+  if (!coordinator) throw new Error("Browser recovery storage is unavailable and cannot be confirmed cleared.");
+  await coordinator.clear();
 }

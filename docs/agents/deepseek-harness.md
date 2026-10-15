@@ -14,7 +14,7 @@ for the other clients and shared approval behavior.
 
 This integration targets the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), whose executable is `dsh`, and its [`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md). It is not a DeepSeek API proxy, a built-in chat system, or an integration with an unrelated executable also named `dsh`.
 
-The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.1 for reproducibility; this patch presents the three Agent clients together without changing the connection protocol. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
+The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.3 for reproducibility, including Agent Guide 3.5 and automatic scene recovery without changing the connection protocol. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ The commands below are included from `semaframe@0.5.0`; the historical `semafram
 With the official DSH runtime installed and SemaFrame open:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.1 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.3 -- semaframe agent launch --client dsh
 ```
 
 This runs the installed `dsh web --patch <temporary-overlay>` as a foreground child. The working directory remains the one you launched from; the existing DSH model/provider environment remains DSH's responsibility. SemaFrame writes only its own temporary overlay and removes it after the child exits. Interrupting the launcher forwards shutdown to the child. The wrapper does not modify `~/.dsh`, select a different model, enter credentials, or bypass browser approval. DSH may perform its own normal first-run initialization.
@@ -51,7 +51,7 @@ dsh web --patch ./semaframe.dsh.json
 Alternatively, the following command prints only the overlay JSON to stdout:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.1 -- semaframe agent config --client dsh
+npm exec --yes --package=semaframe@0.5.3 -- semaframe agent config --client dsh
 ```
 
 Save that output in a new file of your choice. JSON is valid YAML for the official Cordis overlay loader, so no YAML conversion or executable `!!js` expressions are required.
@@ -102,7 +102,7 @@ SEMAFRAME_DSH_RUNTIME_ROOT=/absolute/path/to/isolated-prefix npm run test:agent:
 
 The verifier does not download dependencies, read DSH profiles, call a model, or approve a real Workspace. It checks approval gating, delayed redemption beyond the fixture's original pending/offer deadlines using an isolated injected clock, compact guide/catalog byte budgets, targeted full-schema discovery, error propagation/recovery, revision-bound mutation, and tool catalog refresh. It is not part of the default test run because it requires an explicitly prepared third-party runtime. Pin the stated version rather than relying on the MCP package's `latest` tag.
 
-### Progressive discovery (guide 3.4)
+### Progressive discovery (guide 3.5)
 
 The default instruction response contains the mandatory core rules, not every
 subsystem's schema. `inspect_workspace` and `begin_workspace_update` return an
@@ -112,6 +112,15 @@ a type or operation, request its full contract with
 `guide_topics`, and eight `operation_names` per call. Cache them only while the
 registry digest matches the preparation. Existing instances stay pinned; use
 `inspect_workspace_component` for their exact manifests.
+
+The modeling topic distinguishes geometry bounds from padded collision bounds.
+Read `collision_evidence` and `collision_conflict_details` before diagnosing a
+placement rejection: a new part's omitted collision configuration includes a
+0.02 m margin. Intentional face contact may use an explicit, geometry-matching
+enabled solid collider with zero margin in both preflight and commit; this is
+not permission to remove unrelated clearances or suppress true penetration.
+Each requested multipart object needs its own `model-assembly`, with its part
+count, child IDs, parent relationships and world bounds checked after commit.
 
 Selected discovery has a 48,000-byte result cap and fails explicitly rather than
 truncating a schema. Split an oversized selection. For intentionally large

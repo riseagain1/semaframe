@@ -28,12 +28,66 @@ export type WorkspaceRecoveryReadResult = Readonly<{
   recoveredFromPrevious: boolean;
 }>;
 
+export type WorkspaceRecoveryReadIssue = Readonly<{
+  kind: "invalid" | "unavailable";
+  message: string;
+}>;
+
+export type WorkspaceRecoveryInspection = Readonly<{
+  candidates: readonly WorkspaceRecoveryReadResult[];
+  issues: readonly WorkspaceRecoveryReadIssue[];
+}>;
+
 export interface WorkspaceRecoveryRepository {
   read(): Promise<WorkspaceRecoveryReadResult | undefined>;
   readCandidates(): Promise<readonly WorkspaceRecoveryReadResult[]>;
+  /** Diagnostic startup read; unlike the legacy read API, never equates damaged/unreadable data with an empty store. */
+  inspectStartupRecovery?(): Promise<WorkspaceRecoveryInspection>;
   write(snapshot: WorkspaceRecoverySnapshot): Promise<WorkspaceRecoveryRecord>;
   clear(): Promise<void>;
   dispose(): void;
+}
+
+export async function inspectWorkspaceRecoveryRepository(
+  repository: Pick<WorkspaceRecoveryRepository, "readCandidates" | "inspectStartupRecovery">,
+): Promise<WorkspaceRecoveryInspection> {
+  try {
+    return repository.inspectStartupRecovery
+      ? await repository.inspectStartupRecovery()
+      : { candidates: await repository.readCandidates(), issues: [] };
+  } catch {
+    return { candidates: [], issues: [{ kind: "unavailable", message: "Browser recovery storage could not be read." }] };
+  }
+}
+
+async function inspectRecoveryRecords(
+  current: unknown,
+  previous: unknown,
+  verify: (value: unknown) => Promise<WorkspaceRecoveryRecord | undefined>,
+): Promise<WorkspaceRecoveryInspection> {
+  const candidates: WorkspaceRecoveryReadResult[] = [];
+  const issues: WorkspaceRecoveryReadIssue[] = [];
+  for (const [source, value] of [[CURRENT_SLOT, current], [PREVIOUS_SLOT, previous]] as const) {
+    if (value === undefined) continue;
+    try {
+      const record = await verify(value);
+      if (record) candidates.push({ snapshot: publicSnapshot(record), source, recoveredFromPrevious: source === PREVIOUS_SLOT });
+      else issues.push({ kind: "invalid", message: `The ${source} browser recovery snapshot failed integrity validation.` });
+    } catch {
+      issues.push({ kind: "unavailable", message: `The ${source} browser recovery snapshot could not be verified.` });
+    }
+  }
+  return { candidates: sortRecoveryReadResults(candidates), issues };
+}
+
+function mergeRecoveryCandidates(candidates: readonly WorkspaceRecoveryReadResult[]): readonly WorkspaceRecoveryReadResult[] {
+  const unique = new Map<string, WorkspaceRecoveryReadResult>();
+  for (const candidate of candidates) {
+    const key = snapshotIdentity(candidate.snapshot);
+    const existing = unique.get(key);
+    if (!existing || (existing.recoveredFromPrevious && !candidate.recoveredFromPrevious)) unique.set(key, candidate);
+  }
+  return sortRecoveryReadResults([...unique.values()]);
 }
 
 export class FallbackWorkspaceRecoveryRepository implements WorkspaceRecoveryRepository {
@@ -61,15 +115,18 @@ export class FallbackWorkspaceRecoveryRepository implements WorkspaceRecoveryRep
       if (primaryCandidates.length === 0) throw error;
     }
 
-    const unique = new Map<string, WorkspaceRecoveryReadResult>();
-    for (const candidate of [...primaryCandidates, ...fallbackCandidates]) {
-      const key = snapshotIdentity(candidate.snapshot);
-      const existing = unique.get(key);
-      if (!existing || (existing.recoveredFromPrevious && !candidate.recoveredFromPrevious)) {
-        unique.set(key, candidate);
-      }
-    }
-    return sortRecoveryReadResults([...unique.values()]);
+    return mergeRecoveryCandidates([...primaryCandidates, ...fallbackCandidates]);
+  }
+
+  async inspectStartupRecovery(): Promise<WorkspaceRecoveryInspection> {
+    const [primary, fallback] = await Promise.all([
+      inspectWorkspaceRecoveryRepository(this.primary),
+      inspectWorkspaceRecoveryRepository(this.fallback),
+    ]);
+    return {
+      candidates: mergeRecoveryCandidates([...primary.candidates, ...fallback.candidates]),
+      issues: [...primary.issues, ...fallback.issues],
+    };
   }
 
   async write(snapshot: WorkspaceRecoverySnapshot): Promise<WorkspaceRecoveryRecord> {
@@ -221,6 +278,7 @@ export class LocalStorageWorkspaceRecoveryRepository implements WorkspaceRecover
   private readonly key: string;
   private readonly digest: (value: string) => Promise<`sha256:${string}`>;
   private disposed = false;
+  private readonly invalidRecordIdentities = new Set<string>();
 
   constructor(options: LocalStorageWorkspaceRecoveryRepositoryOptions = {}) {
     const storage = options.storage ?? globalThis.localStorage;
@@ -249,6 +307,24 @@ export class LocalStorageWorkspaceRecoveryRepository implements WorkspaceRecover
     return sortRecoveryReadResults(candidates);
   }
 
+  async inspectStartupRecovery(): Promise<WorkspaceRecoveryInspection> {
+    this.assertOpen();
+    let raw: string | null;
+    try { raw = this.storage.getItem(this.key); }
+    catch { return { candidates: [], issues: [{ kind: "unavailable", message: "Local browser recovery storage is inaccessible." }] }; }
+    if (raw === null) return { candidates: [], issues: [] };
+    let envelope: { current?: unknown; previous?: unknown };
+    try {
+      const value: unknown = JSON.parse(raw);
+      if (!value || typeof value !== "object" || Array.isArray(value)
+        || !("current" in value || "previous" in value)) throw new Error("Invalid recovery envelope");
+      envelope = value;
+    } catch {
+      return { candidates: [], issues: [{ kind: "invalid", message: "Local browser recovery data is malformed." }] };
+    }
+    return inspectRecoveryRecords(envelope.current, envelope.previous, (value) => this.verifiedRecord(value));
+  }
+
   async write(snapshot: WorkspaceRecoverySnapshot): Promise<WorkspaceRecoveryRecord> {
     this.assertOpen();
     const record: WorkspaceRecoveryRecord = Object.freeze({
@@ -265,7 +341,8 @@ export class LocalStorageWorkspaceRecoveryRepository implements WorkspaceRecover
       if (raw) envelope = JSON.parse(raw) as typeof envelope;
     } catch { /* the new verified snapshot can still replace an unreadable envelope */ }
     const existing = [parseRecord(envelope.current), parseRecord(envelope.previous)]
-      .filter((candidate): candidate is WorkspaceRecoveryRecord => Boolean(candidate));
+      .filter((candidate): candidate is WorkspaceRecoveryRecord => Boolean(candidate)
+        && !this.invalidRecordIdentities.has(recordIdentity(candidate!)));
     const ranked = newestDistinctRecords([record, ...existing]);
     const current = ranked[0] ? Object.freeze({ ...ranked[0], slot: CURRENT_SLOT }) : undefined;
     const previous = ranked[1] ? Object.freeze({ ...ranked[1], slot: PREVIOUS_SLOT }) : undefined;
@@ -288,7 +365,9 @@ export class LocalStorageWorkspaceRecoveryRepository implements WorkspaceRecover
   private async verifiedRecord(value: unknown): Promise<WorkspaceRecoveryRecord | undefined> {
     const record = parseRecord(value);
     if (!record) return undefined;
-    return await this.digest(record.serializedProject) === record.sha256 ? record : undefined;
+    if (await this.digest(record.serializedProject) === record.sha256) return record;
+    this.invalidRecordIdentities.add(recordIdentity(record));
+    return undefined;
   }
 }
 
@@ -298,6 +377,7 @@ export class IndexedDbWorkspaceRecoveryRepository implements WorkspaceRecoveryRe
   private readonly digest: (value: string) => Promise<`sha256:${string}`>;
   private databasePromise: Promise<IDBDatabase> | undefined;
   private disposed = false;
+  private readonly invalidRecordIdentities = new Set<string>();
 
   constructor(options: IndexedDbWorkspaceRecoveryRepositoryOptions = {}) {
     const factory = options.indexedDBFactory ?? globalThis.indexedDB;
@@ -315,16 +395,7 @@ export class IndexedDbWorkspaceRecoveryRepository implements WorkspaceRecoveryRe
   }
 
   async readCandidates(): Promise<readonly WorkspaceRecoveryReadResult[]> {
-    this.assertOpen();
-    const database = await this.database();
-    const transaction = database.transaction(STORE_NAME, "readonly");
-    const done = transactionDone(transaction);
-    const store = transaction.objectStore(STORE_NAME);
-    const [currentValue, previousValue] = await Promise.all([
-      requestResult(store.get(CURRENT_SLOT)),
-      requestResult(store.get(PREVIOUS_SLOT)),
-    ]);
-    await done;
+    const [currentValue, previousValue] = await this.readStoredValues();
     const candidates: WorkspaceRecoveryReadResult[] = [];
     const current = await this.verifiedRecord(currentValue);
     if (current) candidates.push(Object.freeze({
@@ -335,6 +406,25 @@ export class IndexedDbWorkspaceRecoveryRepository implements WorkspaceRecoveryRe
       snapshot: publicSnapshot(previous), source: PREVIOUS_SLOT, recoveredFromPrevious: true,
     }));
     return sortRecoveryReadResults(candidates);
+  }
+
+  async inspectStartupRecovery(): Promise<WorkspaceRecoveryInspection> {
+    const [current, previous] = await this.readStoredValues();
+    return inspectRecoveryRecords(current, previous, (value) => this.verifiedRecord(value));
+  }
+
+  private async readStoredValues(): Promise<readonly [unknown, unknown]> {
+    this.assertOpen();
+    const database = await this.database();
+    const transaction = database.transaction(STORE_NAME, "readonly");
+    const done = transactionDone(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+    const values = await Promise.all([
+      requestResult(store.get(CURRENT_SLOT)),
+      requestResult(store.get(PREVIOUS_SLOT)),
+    ]);
+    await done;
+    return values;
   }
 
   async write(snapshot: WorkspaceRecoverySnapshot): Promise<WorkspaceRecoveryRecord> {
@@ -370,7 +460,8 @@ export class IndexedDbWorkspaceRecoveryRepository implements WorkspaceRecoveryRe
             record,
             parseRecord(currentRequest.result),
             parseRecord(previousRequest.result),
-          ].filter((candidate): candidate is WorkspaceRecoveryRecord => Boolean(candidate));
+          ].filter((candidate): candidate is WorkspaceRecoveryRecord => Boolean(candidate)
+            && !this.invalidRecordIdentities.has(recordIdentity(candidate!)));
           const ranked = newestDistinctRecords(candidates);
           const current = Object.freeze({ ...ranked[0]!, slot: CURRENT_SLOT });
           const previous = ranked[1] ? Object.freeze({ ...ranked[1], slot: PREVIOUS_SLOT }) : undefined;
@@ -419,7 +510,9 @@ export class IndexedDbWorkspaceRecoveryRepository implements WorkspaceRecoveryRe
     const record = parseRecord(value);
     if (!record) return undefined;
     const digest = await this.digest(record.serializedProject);
-    return digest === record.sha256 ? record : undefined;
+    if (digest === record.sha256) return record;
+    this.invalidRecordIdentities.add(recordIdentity(record));
+    return undefined;
   }
 
   private database(): Promise<IDBDatabase> {

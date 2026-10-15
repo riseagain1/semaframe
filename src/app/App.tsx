@@ -224,10 +224,13 @@ import {
 import { historyEntriesForStore } from "./workspaceHistory";
 import { safeStorageGet, safeStorageRemove } from "./browserStorage";
 import {
+  clearWorkspaceRecovery,
   FallbackWorkspaceRecoveryRepository,
   IndexedDbWorkspaceRecoveryRepository,
   LocalStorageWorkspaceRecoveryRepository,
+  restoreWorkspaceOnStartup,
   WorkspaceRecoveryCoordinator,
+  type WorkspaceRecoveryReadIssue,
 } from "./recovery";
 import {
   assertRealityAssetCandidatePurpose,
@@ -577,16 +580,18 @@ function agentConfigTrustIdentity(config: AgentGatewayConfig): string {
 }
 
 function createAppRecoveryCoordinator(): WorkspaceRecoveryCoordinator | undefined {
+  const startupIssues: WorkspaceRecoveryReadIssue[] = [];
   let localRepository: LocalStorageWorkspaceRecoveryRepository | undefined;
-  try { localRepository = new LocalStorageWorkspaceRecoveryRepository(); } catch { /* storage may be blocked */ }
+  try { localRepository = new LocalStorageWorkspaceRecoveryRepository(); }
+  catch { startupIssues.push({ kind: "unavailable", message: "Local browser recovery storage could not be initialized." }); }
   let indexedRepository: IndexedDbWorkspaceRecoveryRepository | undefined;
   try {
     if (globalThis.indexedDB) indexedRepository = new IndexedDbWorkspaceRecoveryRepository();
-  } catch { /* IndexedDB may be unavailable in a restricted browser */ }
+  } catch { startupIssues.push({ kind: "unavailable", message: "IndexedDB recovery storage could not be initialized." }); }
   const repository = indexedRepository && localRepository
     ? new FallbackWorkspaceRecoveryRepository(indexedRepository, localRepository)
     : indexedRepository ?? localRepository;
-  return repository ? new WorkspaceRecoveryCoordinator(repository) : undefined;
+  return repository ? new WorkspaceRecoveryCoordinator(repository, startupIssues) : undefined;
 }
 
 export default function App() {
@@ -714,6 +719,10 @@ export default function App() {
   const [busyCount, setBusyCount] = useState(0);
   const busyRef = useRef(false);
   const recoveryStorageWarningRef = useRef(false);
+  const projectIntentRef = useRef(0);
+  const startupRecoveryReadyRef = useRef(false);
+  const [startupRecoveryReady, setStartupRecoveryReady] = useState(false);
+  const [recoveryWriteProtection, setRecoveryWriteProtection] = useState<string>();
   const [recoveryAvailable, setRecoveryAvailable] = useState(() => Boolean(safeStorageGet(RECOVERY_KEY)));
   const [agentSessionReady, setAgentSessionReady] = useState(false);
   const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
@@ -765,7 +774,7 @@ export default function App() {
   const workspaceGenerationRef = useRef(0);
   const [workspaceRenderGeneration, setWorkspaceRenderGeneration] = useState(0);
   const [realityRenderGeneration, setRealityRenderGeneration] = useState(0);
-  const busy = busyCount > 0;
+  const busy = busyCount > 0 || !startupRecoveryReady;
 
   const invalidatePendingHostAction = useCallback((updateUi = true) => {
     hostActionTrustEpochRef.current += 1;
@@ -919,48 +928,15 @@ export default function App() {
     window.setTimeout(() => setNotices((current) => current.filter((entry) => entry.id !== item.id)), 4_500);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const initializeRecovery = async () => {
-      const coordinator = recoveryCoordinatorRef.current;
-      if (!coordinator) {
-        if (!cancelled) setRecoveryAvailable(false);
-        return;
-      }
-      try {
-        const legacy = safeStorageGet(RECOVERY_KEY);
-        if (legacy) {
-          await coordinator.migrateLegacy(legacy, () => {
-            if (!safeStorageRemove(RECOVERY_KEY)) throw new Error("Legacy recovery could not be cleared after migration");
-          });
-        }
-        const available = Boolean(await coordinator.read());
-        if (!cancelled) setRecoveryAvailable(available);
-        // estimate() is passive: unlike persist(), it never asks the user for
-        // storage permission. Two maximum-size snapshots are needed to keep a
-        // real current/previous recovery pair.
-        try {
-          const estimate = await globalThis.navigator?.storage?.estimate?.();
-          const remaining = estimate?.quota !== undefined && estimate.usage !== undefined
-            ? estimate.quota - estimate.usage
-            : undefined;
-          if (!cancelled && remaining !== undefined && remaining < MAX_WORKSPACE_PROJECT_BYTES * 2) {
-            notice("Browser storage is nearly full. Local recovery may not retain both current and previous snapshots; download a project copy.", "warning");
-          }
-        } catch { /* storage estimates are advisory and unavailable in some browsers */ }
-      } catch (error) {
-        if (!cancelled) {
-          setRecoveryAvailable(Boolean(safeStorageGet(RECOVERY_KEY)));
-          if (!recoveryStorageWarningRef.current) {
-            recoveryStorageWarningRef.current = true;
-            notice(`Local recovery could not be initialized: ${friendlyError(error)}`, "warning");
-          }
-        }
-      }
-    };
-    void initializeRecovery();
-    return () => { cancelled = true; };
-  }, [notice]);
+  const protectRecoveryWrites = useCallback((reason: string) => {
+    recoveryCoordinatorRef.current?.suspendWrites(reason);
+    setRecoveryWriteProtection(reason);
+  }, []);
+
+  const resumeRecoveryWrites = useCallback(() => {
+    recoveryCoordinatorRef.current?.resumeWrites();
+    setRecoveryWriteProtection(undefined);
+  }, []);
 
   const runConfirmedVoiceRelayHostAction = useCallback(async <T,>(
     action: "voice_relay_accessibility" | "voice_relay_configure_target" | "voice_relay_draft_round_trip" | "voice_relay_arm",
@@ -1437,6 +1413,68 @@ export default function App() {
     };
   }, [connectWorkspaceStore, installWorkspaceAgentController]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const initialStore = workspaceStoreRef.current;
+    const intent = projectIntentRef.current;
+    const isCurrent = () => !cancelled && projectIntentRef.current === intent
+      && workspaceStoreRef.current === initialStore
+      && initialStore?.getState().revision === 0 && initialStore.getState().components.size === 0;
+    void restoreWorkspaceOnStartup({
+      coordinator: recoveryCoordinatorRef.current ?? undefined,
+      serializer: workspaceSerializerRef.current,
+      legacy: safeStorageGet(RECOVERY_KEY),
+      isCurrent,
+      commit: (project, nextStore, recovered) => {
+        // The Agent bridge cannot start until this effect settles. Installing
+        // fresh controllers restores project data, never persisted authority.
+        workspaceStoreRef.current = nextStore;
+        installWorkspaceAgentController(nextStore);
+        connectWorkspaceStore(nextStore);
+        setProjectId(project.projectId);
+        setProjectName(recovered.snapshot.projectName || "Recovered world");
+        createdAtRef.current = project.createdAt;
+        setEntries(historyEntriesForStore(nextStore));
+        setDirty(true);
+        setRecoveryAvailable(false);
+      },
+    }).then((result) => {
+      if (cancelled) return;
+      if (result.status === "restored") {
+        if (result.writeProtection) protectRecoveryWrites(result.writeProtection);
+        notice(result.recoveredFromPrevious
+          ? "Recovered the last-known-good Workspace snapshot because the current recovery was invalid or older."
+          : "Automatically restored your last local Workspace, including its edit history.", "success");
+      } else if (result.status === "invalid" || result.status === "unavailable") {
+        protectRecoveryWrites("Recovery could not be validated. Existing snapshots are protected until you explicitly open or start a project.");
+        setRecoveryAvailable(result.status === "invalid");
+        recoveryStorageWarningRef.current = true;
+        notice(`Automatic recovery is unavailable: ${friendlyError(result.error)} Your stored snapshots have not been cleared.`, "warning");
+      } else if (result.status === "empty") {
+        setRecoveryAvailable(false);
+      }
+    }).catch((error) => {
+      if (!cancelled) {
+        protectRecoveryWrites("Recovery could not finish. Existing snapshots are protected until you explicitly open or start a project.");
+        notice(`Automatic recovery could not finish: ${friendlyError(error)} Your stored snapshots have not been cleared.`, "warning");
+      }
+    }).finally(() => {
+      if (!cancelled) {
+        startupRecoveryReadyRef.current = true;
+        setStartupRecoveryReady(true);
+      }
+    });
+    // estimate() is passive and must never delay Agent readiness.
+    void globalThis.navigator?.storage?.estimate?.().then((estimate) => {
+      const remaining = estimate.quota !== undefined && estimate.usage !== undefined
+        ? estimate.quota - estimate.usage : undefined;
+      if (!cancelled && remaining !== undefined && remaining < MAX_WORKSPACE_PROJECT_BYTES * 2) {
+        notice("Browser storage is nearly full. Local recovery may not retain both current and previous snapshots; download a project copy.", "warning");
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [connectWorkspaceStore, installWorkspaceAgentController, notice, protectRecoveryWrites, setEntries]);
+
   const storeRecoveryProject = useCallback(async (
     recoveryProjectName: string,
     project: WorkspaceProjectFile,
@@ -1456,6 +1494,9 @@ export default function App() {
   }, []);
 
   const recoverySnapshot = useCallback(() => {
+    // In particular, never overwrite a real recovery with the empty bootstrap
+    // store while its asynchronous read/replay is still in progress.
+    if (!startupRecoveryReadyRef.current) return;
     try {
       const store = workspaceStoreRef.current;
       if (!store) return;
@@ -1503,7 +1544,7 @@ export default function App() {
   }, [sceneBridgeBusy, sceneBridgeSession]);
 
   const save = useCallback(() => {
-    if (busyRef.current) return;
+    if (busyRef.current || !startupRecoveryReadyRef.current) return;
     try {
       const store = workspaceStoreRef.current;
       if (!store) throw new Error("The workspace is not ready.");
@@ -1584,6 +1625,7 @@ export default function App() {
   }, [notice, projectName, runExclusive]);
 
   const loadProject = useCallback(async (file: File) => {
+    projectIntentRef.current += 1;
     await runExclusive(async () => {
       try {
         const restoredName = workspaceProjectNameFromFilename(file.name);
@@ -1605,6 +1647,7 @@ export default function App() {
             setEntries(historyEntriesForStore(nextWorkspaceStore));
             setDirty(false);
             setRecoveryAvailable(false);
+            resumeRecoveryWrites();
           },
         });
 
@@ -1622,9 +1665,10 @@ export default function App() {
         notice(`This Workspace project could not be opened. Your current project is unchanged. ${friendlyError(error)}`, "error");
       }
     });
-  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange, storeRecoveryProject]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, resumeRecoveryWrites, runExclusive, stopAgentForProjectChange, storeRecoveryProject]);
 
   const resetProject = useCallback(async () => {
+    projectIntentRef.current += 1;
     await runExclusive(async () => {
       await closeSceneBridgeForProjectChange();
       await stopAgentForProjectChange("new_project");
@@ -1640,19 +1684,21 @@ export default function App() {
       setDirty(false);
       createdAtRef.current = new Date().toISOString();
       try {
-        await recoveryCoordinatorRef.current?.clear();
+        await clearWorkspaceRecovery(recoveryCoordinatorRef.current);
         const legacyRecoveryPresent = safeStorageGet(RECOVERY_KEY) !== null;
         if (!safeStorageRemove(RECOVERY_KEY) && legacyRecoveryPresent) {
           throw new Error("Legacy browser recovery storage could not be cleared.");
         }
       } catch (error) {
+        protectRecoveryWrites("New Workspace could not clear the previous recovery. Browser autosave remains paused to preserve it.");
         notice(`New Workspace created, but browser recovery storage could not be cleared. ${friendlyError(error)}`, "warning");
         setRecoveryAvailable(true);
         return;
       }
+      resumeRecoveryWrites();
       setRecoveryAvailable(false);
     });
-  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, protectRecoveryWrites, resumeRecoveryWrites, runExclusive, stopAgentForProjectChange]);
 
   const restoreRecovery = useCallback(async () => {
     await runExclusive(async () => {
@@ -1683,6 +1729,7 @@ export default function App() {
           setEntries(historyEntriesForStore(nextWorkspaceStore));
           setDirty(true);
           setRecoveryAvailable(false);
+          resumeRecoveryWrites();
           notice(recovered.recoveredFromPrevious
             ? "Recovered the last-known-good Workspace snapshot because the current recovery was invalid or older."
             : "Recovered your last local Workspace snapshot.", "success");
@@ -1691,27 +1738,15 @@ export default function App() {
           lastError = error;
         }
       }
-      try {
-        await coordinator?.clear();
-        const legacyRecoveryPresent = safeStorageGet(RECOVERY_KEY) !== null;
-        if (!safeStorageRemove(RECOVERY_KEY) && legacyRecoveryPresent) {
-          throw new Error("Legacy browser recovery storage could not be cleared.");
-        }
-        setRecoveryAvailable(false);
-        notice(`Recovery could not be opened: ${friendlyError(lastError)}`, "error");
-      } catch (clearError) {
-        setRecoveryAvailable(true);
-        notice(
-          `Recovery could not be opened or cleared. ${friendlyError(lastError)} ${friendlyError(clearError)}`,
-          "error",
-        );
-      }
+      protectRecoveryWrites("Recovery could not be opened. Existing snapshots remain protected; open or start a project to replace them explicitly.");
+      setRecoveryAvailable(true);
+      notice(`Recovery could not be opened: ${friendlyError(lastError)} Your stored snapshots have not been cleared.`, "error");
     });
-  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, runExclusive, stopAgentForProjectChange]);
+  }, [closeSceneBridgeForProjectChange, connectWorkspaceStore, installWorkspaceAgentController, notice, protectRecoveryWrites, resumeRecoveryWrites, runExclusive, stopAgentForProjectChange]);
 
   const dismissRecovery = useCallback(async () => {
     try {
-      await recoveryCoordinatorRef.current?.clear();
+      await clearWorkspaceRecovery(recoveryCoordinatorRef.current);
       const legacyRecoveryPresent = safeStorageGet(RECOVERY_KEY) !== null;
       if (!safeStorageRemove(RECOVERY_KEY) && legacyRecoveryPresent) {
         throw new Error("Legacy browser recovery storage could not be cleared.");
@@ -1720,11 +1755,12 @@ export default function App() {
       notice(`Recovery could not be dismissed: ${friendlyError(error)}`, "warning");
       return;
     }
+    resumeRecoveryWrites();
     setRecoveryAvailable(false);
-  }, [notice]);
+  }, [notice, resumeRecoveryWrites]);
 
   const undo = useCallback(() => {
-    if (busyRef.current) return;
+    if (busyRef.current || !startupRecoveryReadyRef.current) return;
     revokeAgentContexts("human_undo");
     const delta = workspaceStoreRef.current?.undoUserCommand() ?? null;
     if (!delta) return;
@@ -1739,7 +1775,7 @@ export default function App() {
     window.setTimeout(recoverySnapshot, 0);
   }, [recoverySnapshot, revokeAgentContexts]);
   const redo = useCallback(() => {
-    if (busyRef.current) return;
+    if (busyRef.current || !startupRecoveryReadyRef.current) return;
     revokeAgentContexts("human_redo");
     const delta = workspaceStoreRef.current?.redoUserCommand() ?? null;
     if (!delta) return;
@@ -4766,7 +4802,7 @@ export default function App() {
   }, [startAgentBridge]);
 
   useEffect(() => {
-    if (!AGENT_CONTROL_ENDPOINT) return;
+    if (!AGENT_CONTROL_ENDPOINT || !startupRecoveryReady) return;
     let cancelled = false;
     const client = new AgentGatewayClient({
       handler: stableAgentCommandHandler,
@@ -4856,7 +4892,7 @@ export default function App() {
       client.stop("disconnected");
       if (agentGatewayRef.current === client) agentGatewayRef.current = null;
     };
-  }, [bestEffortDisarmVoiceRelay, claimAndStartAgentBridge, invalidatePendingHostAction, stableAgentCommandHandler]);
+  }, [bestEffortDisarmVoiceRelay, claimAndStartAgentBridge, invalidatePendingHostAction, stableAgentCommandHandler, startupRecoveryReady]);
 
   const enableAgentConnection = useCallback(async (allowDeleteAndClear: boolean) => {
     const client = agentGatewayRef.current;
@@ -5719,7 +5755,15 @@ export default function App() {
       /></div>
       <div style={{ display: "contents" }} data-workspace-runtime-region="agent-history" data-workspace-runtime-children="true"><AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} /></div>
     </AgentWorkspaceGate>
-    {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery" data-workspace-runtime-region="project-recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => void dismissRecovery()}>Dismiss</button></div>}
+    {recoveryWriteProtection && <div className="recovery-banner" role="status" aria-label="Browser autosave paused" data-workspace-runtime-region="recovery-protection">
+      <span>Browser autosave is paused. {recoveryWriteProtection} Download a project copy to protect any new edits.</span>
+      {externalControlActive && <button type="button" onClick={save}>Download current copy</button>}
+      {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <>
+        <button type="button" onClick={() => void restoreRecovery()}>Retry recovery</button>
+        <button type="button" onClick={() => void dismissRecovery()}>Dismiss recovery</button>
+      </>}
+    </div>}
+    {!recoveryWriteProtection && externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery" data-workspace-runtime-region="project-recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => void dismissRecovery()}>Dismiss</button></div>}
     <input ref={fileRef} hidden type="file" accept={WORKSPACE_PROJECT_FILE_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
     <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />

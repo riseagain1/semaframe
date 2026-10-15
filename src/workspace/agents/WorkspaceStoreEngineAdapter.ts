@@ -56,6 +56,7 @@ import {
   spatialCollisionConfigFromProps,
   type SpatialCollisionConfig,
   type SpatialPlacementCandidate,
+  type SpatialPlacementCheck,
 } from "../spatial";
 import {
   buildSemaFrameLayoutGraph,
@@ -243,6 +244,26 @@ function spatialConflictForAgent(conflict: {
     component_id: conflict.componentId,
     conflicts_with: conflict.conflictsWith,
     overlap: conflict.overlap,
+  };
+}
+
+function spatialCollisionEvidenceForAgent(check: SpatialPlacementCheck) {
+  return {
+    collision_evidence: check.collisionEvidence.map((entry) => ({
+      component_id: entry.componentId,
+      config_source: entry.configSource,
+      effective_collision: entry.effectiveCollision,
+      feasibility_enabled: entry.feasibilityEnabled,
+      ...(entry.resolvedSource ? { resolved_source: entry.resolvedSource } : {}),
+      ...(entry.worldBounds ? { collision_world_bounds: entry.worldBounds } : {}),
+    })),
+    collision_conflict_details: check.collisionConflictDetails.map((entry) => ({
+      component_id: entry.componentId,
+      conflicts_with: entry.conflictsWith,
+      kind: entry.kind,
+    })),
+    collision_assessment_basis: "oriented_box_colliders_not_exact_mesh_or_static_stability",
+    bounds_note: "candidate_world_bounds is unpadded geometry; collision_world_bounds includes each collider's world-metre margin. safety_margin_only still blocks: inspect both effective_collision values before deliberately choosing intended contact clearance. Never disable collision or shift existing colliders to silence a conflict.",
   };
 }
 
@@ -2334,6 +2355,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
             suggested_placements_coordinate_frame: check.coordinateFrame,
             mutates_workspace: false,
             conflicts: check.conflicts.map(spatialConflictForAgent),
+            ...spatialCollisionEvidenceForAgent(check),
             suggested_placements: check.suggestedPlacements,
           }),
         };
@@ -2512,6 +2534,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
             collision_check: {
               valid: check.collisionCheck.valid,
               conflicts: check.collisionCheck.conflicts.map(spatialConflictForAgent),
+              ...spatialCollisionEvidenceForAgent(check.collisionCheck),
             },
             body: check.body ? physicsBodyForAgent(check.body) : null,
             issues: check.issues.map((issue) => ({

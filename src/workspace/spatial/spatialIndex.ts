@@ -948,6 +948,18 @@ function aabbOverlap(left: SpatialBounds, right: SpatialBounds): Vec3 {
   };
 }
 
+/** Match the collision engine's world-metre margin removal, not visual AABBs. */
+function unpaddedCollisionPart(part: SpatialResolvedCollisionPart, margin: number): SpatialResolvedCollisionPart {
+  return {
+    ...part,
+    halfExtents: {
+      x: Math.max(EPSILON, part.halfExtents.x - margin),
+      y: Math.max(EPSILON, part.halfExtents.y - margin),
+      z: Math.max(EPSILON, part.halfExtents.z - margin),
+    },
+  };
+}
+
 function collisionPairs(
   nodes: readonly SemaFrameSpatialGraphNode[],
   options: Readonly<{ maxConflicts?: number; targetIds?: ReadonlySet<string> }> = {},
@@ -977,22 +989,8 @@ function collisionPairs(
         // configured safety margins preserves face attachment while detecting
         // actual parent/child penetration.
         return boxesIntersect(
-          {
-            ...leftPart,
-            halfExtents: {
-              x: Math.max(EPSILON, leftPart.halfExtents.x - left.collision!.margin),
-              y: Math.max(EPSILON, leftPart.halfExtents.y - left.collision!.margin),
-              z: Math.max(EPSILON, leftPart.halfExtents.z - left.collision!.margin),
-            },
-          },
-          {
-            ...rightPart,
-            halfExtents: {
-              x: Math.max(EPSILON, rightPart.halfExtents.x - right.collision!.margin),
-              y: Math.max(EPSILON, rightPart.halfExtents.y - right.collision!.margin),
-              z: Math.max(EPSILON, rightPart.halfExtents.z - right.collision!.margin),
-            },
-          },
+          unpaddedCollisionPart(leftPart, left.collision!.margin),
+          unpaddedCollisionPart(rightPart, right.collision!.margin),
         );
       }));
     if (!intersects) continue;
@@ -1381,6 +1379,40 @@ export function querySpatialPlacement(
       targetIds: targets,
     }).length === 0;
   });
+  const evidenceIds = new Set([...targets, ...conflictIds]);
+  const collisionEvidence: SpatialPlacementCheck["collisionEvidence"] = nodes
+    .filter((node) => evidenceIds.has(node.id))
+    .flatMap((node) => {
+      const component = prepared.state.components.get(node.id);
+      const config = component && spatialCollisionConfigFromProps(component.props);
+      if (!config) return [];
+      return [{
+        componentId: node.id,
+        configSource: node.id === prepared.candidateId && candidate.collision
+          ? "candidate_override" as const
+          : state.components.has(node.id) ? "existing_component" as const : "default" as const,
+        effectiveCollision: structuredClone(config),
+        feasibilityEnabled: Boolean(node.collision?.role === "solid" && collisionFeasibilityEnabled(node)),
+        ...(node.collision ? { resolvedSource: node.collision.source, worldBounds: node.collision.aabb } : {}),
+      }];
+    })
+    .sort((left, right) => left.componentId.localeCompare(right.componentId));
+  const collisionConflictDetails: SpatialPlacementCheck["collisionConflictDetails"] = conflicts.map((conflict) => {
+    // Every blocking pair necessarily has resolved colliders. SAT against their
+    // unpadded OBB parts distinguishes clearance from penetration of the proxy
+    // solids; it does not claim exact mesh/B-rep intersection or static stability.
+    const left = byId.get(conflict.componentId)!.collision!;
+    const right = byId.get(conflict.conflictsWith)!.collision!;
+    const penetrates = left.parts.some((leftPart) => right.parts.some((rightPart) => boxesIntersect(
+      unpaddedCollisionPart(leftPart, left.margin),
+      unpaddedCollisionPart(rightPart, right.margin),
+    )));
+    return {
+      componentId: conflict.componentId,
+      conflictsWith: conflict.conflictsWith,
+      kind: penetrates ? "collider_penetration" : "safety_margin_only",
+    };
+  });
   return {
     valid: conflicts.length === 0,
     candidateId: prepared.candidateId,
@@ -1389,6 +1421,8 @@ export function querySpatialPlacement(
     checkedComponentIds: [...targets].sort((left, right) => left.localeCompare(right)),
     ...(candidateNode ? { worldTransform: candidateNode.worldTransform, worldBounds: candidateNode.worldBounds } : {}),
     conflicts,
+    collisionEvidence,
+    collisionConflictDetails,
     suggestedPlacements: safeSuggestions,
   };
 }

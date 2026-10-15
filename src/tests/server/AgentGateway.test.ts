@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentGateway } from "../../../server/agent/AgentGateway";
+import { WORKSPACE_AGENT_GUIDE_VERSION } from "../../workspace/agents/contracts";
 import {
   createAgentGatewayHttpHandler,
   createNodeAgentGatewayHttpHandler,
@@ -149,7 +150,7 @@ describe("Agent Gateway browser boundary", () => {
       enabled: false,
       connected: false,
       engineConnected: false,
-      instructionVersion: "3.4",
+      instructionVersion: WORKSPACE_AGENT_GUIDE_VERSION,
       csrfToken: expect.any(String),
     }));
     expect(JSON.stringify(payload)).not.toMatch(/pairing|bearer|mcpServers/u);

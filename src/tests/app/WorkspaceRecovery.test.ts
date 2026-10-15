@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearWorkspaceRecovery,
   FallbackWorkspaceRecoveryRepository,
   IndexedDbWorkspaceRecoveryRepository,
   WorkspaceRecoveryCoordinator,
@@ -219,6 +220,91 @@ class ControllableRepository extends MemoryRepository {
 }
 
 describe("Workspace recovery", () => {
+  it("distinguishes missing IndexedDB slots from two corrupt slots without changing legacy reads", async () => {
+    const factory = new FakeFactory();
+    const repository = new IndexedDbWorkspaceRecoveryRepository({ indexedDBFactory: factory as unknown as IDBFactory, digest });
+    expect(await repository.inspectStartupRecovery()).toEqual({ candidates: [], issues: [] });
+    await repository.write(snapshot({ sequence: 1 }));
+    await repository.write(snapshot({ sequence: 2 }));
+    for (const slot of ["current", "previous"]) {
+      const record = factory.database.records.get(slot) as WorkspaceRecoveryRecord;
+      factory.database.records.set(slot, { ...record, sha256: `sha256:${"f".repeat(64)}` });
+    }
+    const before = new Map(factory.database.records);
+    expect(await repository.readCandidates()).toEqual([]);
+    const result = await repository.inspectStartupRecovery();
+    expect(result.candidates).toEqual([]);
+    expect(result.issues.map((issue) => issue.kind)).toEqual(["invalid", "invalid"]);
+    expect(factory.database.records).toEqual(before);
+  });
+
+  it("keeps the verified previous IndexedDB snapshot after the first edit following corrupt-head recovery", async () => {
+    const factory = new FakeFactory();
+    const repository = new IndexedDbWorkspaceRecoveryRepository({ indexedDBFactory: factory as unknown as IDBFactory, digest });
+    await repository.write(snapshot({ sequence: 1, serializedProject: "valid previous" }));
+    await repository.write(snapshot({ sequence: 2, serializedProject: "corrupt head" }));
+    const head = factory.database.records.get("current") as WorkspaceRecoveryRecord;
+    factory.database.records.set("current", { ...head, sha256: `sha256:${"f".repeat(64)}` });
+    expect((await repository.inspectStartupRecovery()).candidates[0]?.source).toBe("previous");
+    await repository.write(snapshot({ sequence: 3, serializedProject: "new edit" }));
+    expect((await repository.readCandidates()).map(({ snapshot: value }) => value.serializedProject))
+      .toEqual(["new edit", "valid previous"]);
+  });
+
+  it("blocks all scheduled writes until explicit resume without clearing recovery, including rejected clear boundaries", async () => {
+    const repository = new ControllableRepository();
+    const coordinator = new WorkspaceRecoveryCoordinator(repository);
+    await coordinator.schedule(snapshot());
+    const existing = [...repository.records];
+    coordinator.suspendWrites("Unreadable recovery is protected");
+    await expect(coordinator.schedule(snapshot({ serializedProject: "Agent edit" }))).rejects.toThrow("protected");
+    await expect(coordinator.schedule(snapshot({ serializedProject: "rename or timer autosave" }))).rejects.toThrow("protected");
+    await coordinator.replaceGeneration({ clear: false });
+    await expect(coordinator.schedule(snapshot({ serializedProject: "failed Open must stay blocked" }))).rejects.toThrow("protected");
+    repository.failClears = true;
+    await expect(coordinator.clear()).rejects.toThrow("clear unavailable");
+    await expect(coordinator.schedule(snapshot({ serializedProject: "failed New" }))).rejects.toThrow("protected");
+    expect(repository.records).toEqual(existing);
+    repository.failClears = false;
+    await coordinator.clear();
+    coordinator.resumeWrites();
+    await expect(coordinator.schedule(snapshot({ serializedProject: "explicit replacement" }))).resolves.toMatchObject({ status: "stored" });
+    expect(repository.records.map((value) => value.serializedProject)).toEqual(["explicit replacement"]);
+  });
+
+  it("retains constructor/backend failures even when the available repository is genuinely empty", async () => {
+    const repository = new MemoryRepository();
+    const coordinator = new WorkspaceRecoveryCoordinator(repository, [
+      { kind: "unavailable", message: "Local storage constructor denied" },
+    ]);
+    expect(await coordinator.inspectStartupRecovery()).toEqual({ candidates: [], issues: [
+      { kind: "unavailable", message: "Local storage constructor denied" },
+    ] });
+    expect(await coordinator.readCandidates()).toEqual([]);
+    await expect(clearWorkspaceRecovery(coordinator)).rejects.toThrow("cannot be confirmed cleared");
+    expect(repository.clears).toBe(0);
+  });
+
+  it("cannot claim that New/Dismiss cleared recovery when no backend exists", async () => {
+    await expect(clearWorkspaceRecovery(undefined)).rejects.toThrow("cannot be confirmed cleared");
+    await expect(clearWorkspaceRecovery(null)).rejects.toThrow("cannot be confirmed cleared");
+    const repository = new MemoryRepository();
+    await expect(clearWorkspaceRecovery(new WorkspaceRecoveryCoordinator(repository))).resolves.toBeUndefined();
+    expect(repository.clears).toBe(1);
+  });
+
+  it("does not let a pending protected write poison recovery after explicit resume", async () => {
+    const repository = new MemoryRepository();
+    const coordinator = new WorkspaceRecoveryCoordinator(repository);
+    const pending = coordinator.schedule(snapshot());
+    coordinator.suspendWrites("Protected");
+    await expect(pending).rejects.toThrow("Protected");
+    await coordinator.flush();
+    expect(repository.records).toEqual([]);
+    coordinator.resumeWrites();
+    await expect(coordinator.schedule(snapshot({ serializedProject: "new" }))).resolves.toMatchObject({ status: "stored" });
+  });
+
   it("commits current and previous atomically and falls back from corrupt current", async () => {
     const factory = new FakeFactory();
     const repository = new IndexedDbWorkspaceRecoveryRepository({

@@ -4,6 +4,23 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-15
+
+### Fixed
+
+- Restore the last validated local Workspace and edit history automatically before Agent requests or autosave start; explicit New/Open takes precedence over pending startup recovery.
+- Distinguish absent recovery from corrupt or unavailable storage. Protect unresolved snapshots against autosave, show a persistent warning, preserve verified fallback records during rotation, and allow safe retries after failed clears. Failed Open/New/Dismiss operations cannot silently release protection or claim inaccessible data was cleared.
+- Clarify default collision padding, intended face contact, and independent multipart assembly roots in Agent Guide 3.5, DSH instructions, and the distributed Agent skill. Collisions remain enabled and blocking; assembly membership must be verified after a commit.
+
+### Added
+
+- Add effective collision configuration, padded collider bounds, and margin-only versus unpadded-collider penetration diagnostics to spatial and stable-placement preflights. These remain conservative OBB-proxy checks, not exact mesh intersection or engineering certification.
+
+### Verification
+
+- Completed local gates: 277 Vitest files / 2,310 tests, 45 CLI tests, lint, TypeScript checks, and desktop/XR production builds. Independent recovery review passed 83 focused tests.
+- A fresh DeepSeek V4.1 Flash run built 19 components with three correct assembly roots, then verified button-driven chair movement, automatic refresh recovery, continued edits, undo/redo, and disk save/reopen. Exact project comparisons excluded only export timestamps. The Agent self-corrected rejected preflight/view calls; this is not a zero-error or universal Agent claim. See the [verification report](https://github.com/riseagain1/semaframe/blob/v0.5.3/docs/verification/agent-modeling-recovery-2026-10-15.md).
+
 ## [0.5.2] - 2026-10-15
 
 ### Fixed
@@ -177,7 +194,8 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/riseagain1/semaframe/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/riseagain1/semaframe/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/riseagain1/semaframe/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0...v0.5.0

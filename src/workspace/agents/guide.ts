@@ -286,12 +286,26 @@ export const WORKSPACE_MODELING_QUICKSTART: JSONValue = Object.freeze(jsonContra
     },
     rule: "Use the existing assembly ID alone with its proposed parent-local placement. The host moves and checks the real descendant colliders read-only; do not invent an aggregate box, asset ID, geometry or collision override for the assembly. Inspect input_coordinate_frame and composed world evidence. This checks the endpoint, not a swept motion path.",
   },
+  contact_and_clearance: {
+    defaults: "Omitting candidate.collision for a NEW part uses enabled solid asset_bounds with margin 0.02 metres, just like creation defaults. For an EXISTING component it preserves that component's collision config. Margin pads every OBB half-extent in world metres; it is not geometry thickness and is not included in candidate_world_bounds.",
+    evidence: "Read collision_evidence: config_source, effective_collision, resolved_source and collision_world_bounds for the candidate and blockers. Assembly queries list actual descendant colliders, not an invented root collider. collision_conflict_details kind safety_margin_only means only padded colliders overlap; collider_penetration means unpadded collider solids overlap. Both still block. These are OBB-proxy tests, not exact mesh or B-rep intersection.",
+    intentional_contact: "For intended face contact, explicitly use a geometry-matching, enabled solid collider with margin 0 in BOTH preflight and creation/update. Check the other object's margin too; do not blindly zero unrelated clearances. Keep existing collider centers and geometry unchanged unless inspection independently proves an error. Never disable collision/physics or move old colliders just to force a pass.",
+    contact_collision_example: { enabled: true, role: "solid", shape: "asset_bounds", margin: 0 },
+    arithmetic_example: "A tabletop centered at y=0.725 with height 0.05 has bottom 0.70 and top 0.75. A lamp base of height 0.02 centered at 0.76 touches it at 0.75; its default margin 0.02 extends the collider down to 0.73. That clearance conflict is not proof that the tabletop is miscentered.",
+    limits: "A valid placement is only collision clearance under current policies, not proof of support, stability, attachment strength or load capacity. Inspect physics when relevant and report unsupported/unknown evidence; fixed constraints and static bodies do not establish structural certification.",
+  },
   authoring: [
-    "Create exactly one stage-3d first.",
-    "Create a model-assembly root before its spatial-primitive or cad-part children.",
+    "Reuse the existing stage-3d; create exactly one first only when absent.",
+    "Each requested multipart object needs its OWN model-assembly root before its separately editable spatial-primitive or cad-part children. A lamp on a table needs a lamp assembly even if the table already has an assembly. Stage siblings, loose parts under a table, labels and tags are not a lamp assembly.",
     "Copy spatial-primitive geometry/material/collision/physics defaults from its exact advertised manifest and replace complete nested objects only.",
     "Use box, sphere, cylinder, cone, capsule, or plane canonical geometry and keep primitive placement scale identity; edit dimensions through update_component props.geometry.",
     "For editable manufacturing geometry, create cad-part and replace props.definition with a complete CadPartDefinition 1.0. The host evaluates it with OCCT and replaces definitionDigest/evaluation in the resolved atomic batch; never invent evidence.",
+  ],
+  completion_checklist: [
+    "Before preparing, map each requested whole to an assembly root and list its part count. Reserve enough IDs for the roots AND all parts; create parents first and set each child's parent_id explicitly in parent-local coordinates.",
+    "After commit, inspect the actual root type, root ID, child IDs, parent_id relationships, requested part count and composed world bounds. Report the real hierarchy; never relabel loose primitives as an assembly in the final answer.",
+    "For existing loose parts, create the missing model-assembly and attach_component each intended part with transform_mode preserve_world; inspect the standalone operation schema first. Verify unchanged world transforms and geometry after regrouping.",
+    "Verify requested dimensions/materials, collision config and any required physical evidence. Preserve unrelated components, event connections and user state; a committed batch alone does not prove the user's task is complete.",
   ],
   cad_part: {
     placement_preflight: "Pass cad_definition plus the exact world3d placement to query_spatial_placement before create/update; use the same candidate with query_stable_placement when support and center-of-mass evidence is required. An invalid, empty, unsupported, or geometrically no-op document fails without changing Workspace revision or history.",
@@ -637,6 +651,15 @@ Component and placement rules
   cad_definition. CAD preflight is host-evaluated with bounded OCCT work and does
   not accept digest/evidence fields. Use a returned suggestion or deliberately revise the layout; never
   disable collision merely to force an object through another solid object.
+- New candidates with omitted collision use an enabled solid collider with a
+  0.02 metre safety margin; existing candidates preserve their own config.
+  candidate_world_bounds is unpadded geometry, not the collision envelope.
+  Inspect collision_evidence and collision_conflict_details before diagnosing a
+  clash. safety_margin_only still blocks, but is not solid penetration. Intended
+  face contact may use an explicit geometry-matching enabled solid collider with
+  margin 0, consistently in preflight and creation/update. Check both objects'
+  margins; never shift existing collider centers or disable collision/physics
+  just to silence a failed preflight. Clearance is not proof of static stability.
 - Exact modeling uses spatial-primitive, cad-part, and model-assembly. Primitive geometry
   is one closed SI-metre descriptor: box sizeM; sphere radiusM; cylinder/cone
   radiusM, heightM, axis; capsule radiusM, cylinderHeightM, axis; or plane sizeM
@@ -648,6 +671,12 @@ Component and placement rules
   among parts of the same assembly while retaining collisions with everything
   outside it; all validates every pair; none excludes its descendants from
   collision feasibility. Never use none to conceal an external clash.
+  Every requested multipart whole needs its own model-assembly root, including
+  nested objects such as a lamp on a table. Loose parts under the table are not
+  a lamp assembly. Reserve IDs for root plus parts, set parent_id explicitly,
+  and verify root type, child IDs, part count and parent relationships after
+  commit. To regroup existing parts without moving them use attach_component
+  transform_mode preserve_world and verify their composed world transforms.
 - A cad-part is a versioned editable parameter/sketch/feature document plus
   compact host-authored OCCT evidence. The host evaluates non-empty CAD
   definitions before commit, overwrites forged definitionDigest/evaluation,
@@ -1015,7 +1044,8 @@ export const WORKSPACE_AGENT_CORE_GUIDE = Object.freeze({
   essential_rules: [
     "An empty workspace has no implicit Stage. Create exactly one stage-3d before 3D content. Parents precede children; omit parent_id on the root Stage.",
     "All 3D dimensions are SI metres, +Y up. world3d denotes a domain: root placements are Stage/world, child placements and move_to targets are parent-local. Do not duplicate parent translations. Primitive dimensions belong in props.geometry with unit placement.scale. Read modeling for examples and assembly preflight.",
-    "Preflight collision-enabled endpoints with query_spatial_placement. Existing assembly ID + proposed placement checks real descendants. Never turn off collision to hide a clash. 3D solid penetration and 2D overlap are separate checks; 2D may cover 3D visually.",
+    "Preflight with query_spatial_placement. New parts default to margin 0.02m; inspect collision_evidence, not just unpadded candidate_world_bounds. Intended face contact may explicitly use enabled solid margin 0 with matching geometry in query AND commit. Never disable collision to hide a clash. Existing assembly ID checks real descendants. 2D overlap is separate; 2D may cover 3D.",
+    "Each multipart whole needs a model-assembly root, even a lamp on a table. Verify root type, child IDs, part count and parent_id after commit; loose parts are not an assembly. Regroup with attach_component transform_mode preserve_world. Read modeling.",
     "For 2D placement, query_layout_placement needs explicit size and new component_type binding or existing component_id. Default current_view checks host visibility; current_view_valid null is unknown. Carry ready view_graph view_id/view_epoch as view_guard into query and begin (layout_frame current_view). Canonical is logical-only. Read layout for units and place-then-resize rules.",
     "Props/defaults merge only at the top level. Omit a nested object to keep its full default, or replace it with a complete schema-valid value. Never invent fields/types/actions or copy redacted placeholders.",
     "Buttons do not wire themselves. Read interaction and the exact source event/target action schemas, add connect_event, and verify the connection and resulting action. move_to uses an absolute endpoint, not relative movement; preflight is not swept-path simulation.",

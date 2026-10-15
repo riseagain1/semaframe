@@ -235,5 +235,19 @@ export type SpatialPlacementCheck = Readonly<{
   worldTransform?: SpatialTransform;
   worldBounds?: SpatialBounds;
   conflicts: readonly SpatialCollisionConflict[];
+  /** Read-only explanations; these never relax the authoritative collision test. */
+  collisionEvidence: readonly Readonly<{
+    componentId: string;
+    configSource: "candidate_override" | "existing_component" | "default";
+    effectiveCollision: SpatialCollisionConfig;
+    feasibilityEnabled: boolean;
+    resolvedSource?: SpatialResolvedCollision["source"];
+    worldBounds?: SpatialBounds;
+  }>[];
+  collisionConflictDetails: readonly Readonly<{
+    componentId: string;
+    conflictsWith: string;
+    kind: "collider_penetration" | "safety_margin_only";
+  }>[];
   suggestedPlacements: readonly ComponentPlacement[];
 }>;
