@@ -49,9 +49,9 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## What's new in v0.5
 
-The current stable release is `v0.5.2`. This patch fixes native portable-project saving: picker-safe `.semaframe.zip` filenames, streaming completion and failure handling, and accurate unsaved state when edits occur during export. Existing `.semaframe-project` files still import without conversion. A real Codex-to-DeepSeek handoff verified native save/reopen, preserved asset bytes and IDs, editing, undo/redo, and final-package reopen. [Read the v0.5.2 release notes](./docs/release-v0.5.2.md) and [verification evidence and limits](./docs/verification/portable-agent-handoff-2026-10-15.md).
+The current stable release is `v0.5.3`. This patch improves collision-margin and multipart-assembly guidance, automatically restores the last local scene on refresh, and protects existing recovery snapshots when storage is corrupt or unavailable. A fresh DeepSeek run verified modeling, correct grouping, button-driven 3D behavior, continued edits, undo/redo, automatic refresh recovery, and disk save/reopen. Collision and permission checks remain enforced. [Read the v0.5.3 release notes](./docs/release-v0.5.3.md) and [verification evidence and limits](./docs/verification/agent-modeling-recovery-2026-10-15.md).
 
-The v0.5.1 connection experience remains: Codex, Claude Code, and DeepSeek Harness are peer, expandable choices under **Connect your Agent**. Setup instructions differ, not their Workspace authority; all use the same approval, instruction handshake, and scope checks. Neither patch requires API, protocol, permission, or project-schema migration.
+The v0.5.1 connection experience remains: Codex, Claude Code, and DeepSeek Harness are peer, expandable choices under **Connect your Agent**. Setup instructions differ, not their Workspace authority; all use the same approval, instruction handshake, and scope checks. These patches require no protocol, permission, or project-schema migration; v0.5.3 adds collision diagnostics and advances Agent Guide to 3.5.
 
 The v0.5.0 release introduced runtime-aware layout, smaller targeted Agent discovery, and the official DeepSeek Harness integration below. Those capabilities and the editable modeling, precision, Reality, XR, and portable-project foundation from v0.4 remain available.
 
@@ -63,7 +63,7 @@ The v0.5.0 release introduced runtime-aware layout, smaller targeted Agent disco
 | **Clearer approval recovery** | Initial approval starts a separate bounded 10-minute instruction-handshake window, with distinct approval/handshake status and expiry guidance. Completed sessions are not disconnected by those setup deadlines. |
 | **Assembly and control fixes** | Existing-assembly preflight uses real descendant colliders and explicit parent-local/world coordinates. Button content fits its panel; new button 1.3.0 provides a 44 px minimum target while older saved manifests remain supported. |
 
-The v0.5 surface is Workspace Protocol 1.3 with project schema 1.4, 27 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.4, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The stable package uses npm's default `latest` channel. Stable denotes the release channel, not universal model reliability, certified physical accuracy, or acceptance of every hardware combination.
+The current source surface is Workspace Protocol 1.3 with project schema 1.4, 27 Workspace MCP tools plus 10 ephemeral host-control tools, Agent Guide 3.5, MCP server 1.10.0, Agent Gateway OpenAPI 1.3.0, SemaFrame Layout Graph 1.0, and SemaFrame Spatial Graph 3.2. The stable package uses npm's default `latest` channel. Stable denotes the release channel, not universal model reliability, certified physical accuracy, or acceptance of every hardware combination.
 
 **Agent-client upgrade:** default responses no longer include every component and operation schema. Discover the contracts needed for the task before submitting edits, or opt into the documented full modes. For visible 2D placement, inspect a ready runtime view, carry its exact view guard through preflight and preparation, and re-inspect after a stale-view rejection. Canonical-only authoring remains available but does not certify screen visibility. See the [v0.5.0 release notes](./docs/release-v0.5.0.md) and [DSH setup and acceptance evidence](./docs/agents/deepseek-harness.md).
 
@@ -221,7 +221,7 @@ npm exec --yes --package=semaframe -- semaframe start
 ```
 
 For a reproducible installation, replace `--package=semaframe` with
-`--package=semaframe@0.5.2`. Older releases and candidates remain available by exact version;
+`--package=semaframe@0.5.3`. Older releases and candidates remain available by exact version;
 `next` is not required for this stable release.
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
@@ -453,7 +453,7 @@ installed on PATH (or the macOS DeepSeek Harness app installed), keep SemaFrame
 open and run:
 
 ```bash
-npm exec --yes --package=semaframe@0.5.2 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.3 -- semaframe agent launch --client dsh
 ```
 
 This launches DSH's Web profile with an independent temporary Cordis overlay and
@@ -466,7 +466,7 @@ scopes in SemaFrame when DSH first calls `get_workspace_instructions`.
 For an existing DSH launch workflow, use **Copy DSH configuration** inside the
 DeepSeek Harness details, save it as `semaframe.dsh.json`, and start
 `dsh web --patch ./semaframe.dsh.json`. The same JSON (a valid YAML subset) is
-available through `npm exec --yes --package=semaframe@0.5.2 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
+available through `npm exec --yes --package=semaframe@0.5.3 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
 contains only the launcher paths and fixed loopback Gateway origin, never model
 keys, pairing bearers, or short-lived connection URLs. Regenerate it if the
 SemaFrame installation moves. Do not load two SemaFrame overlays into one DSH
@@ -967,6 +967,10 @@ Protocol source of truth:
 Open validates the closed schema, registry digests, counters, command continuity, resource invariants, and replay before replacing the current project. It never reruns actions, models, Reality Asset imports, or connector reads.
 
 Projects from the removed pre-Workspace runtime and its dual-envelope format are intentionally unsupported. Local recovery uses the same Workspace-only representation. Provider credentials, feed approvals, MCP approvals, session tokens, and transaction tokens are never saved.
+
+On refresh, the application automatically validates and restores the last local Workspace before enabling Agent requests or autosave. If the newest recovery cannot be replayed, it tries the verified previous snapshot and reports the fallback. Explicitly starting a new project or opening a file takes precedence over a pending startup restore. Recovery restores project data, not authorization: the Agent connection gate and any required handshake still apply, and feed or host-control consent is never revived. Browser-local recovery is not a portable backup; keep a downloaded project copy, especially when storage is blocked or full.
+
+Unreadable storage or unresolved invalid recovery pauses browser autosave and shows a persistent warning instead of overwriting unknown snapshots with an empty workspace. A successful explicit project open, new project, or recovery action can release that protection; a failed operation cannot. An unavailable storage backend is never reported as successfully cleared.
 
 Project schema: [`src/workspace/persistence/workspaceProject.schema.json`](src/workspace/persistence/workspaceProject.schema.json).
 

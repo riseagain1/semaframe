@@ -28,6 +28,54 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("local recovery storage resilience", () => {
+  it.each(["{broken", "null", "[]", "{}", "", '{"current":null}', '{"current":{"sha256":"bad"}}'])("reports present but invalid local recovery instead of empty: %s", async (raw) => {
+    const repo = new LocalStorageWorkspaceRecoveryRepository({ key: recoveryKey, digest });
+    localStorage.setItem(recoveryKey, raw);
+    const inspection = await repo.inspectStartupRecovery();
+    expect(inspection.candidates).toEqual([]);
+    expect(inspection.issues[0]?.kind).toBe("invalid");
+    expect(localStorage.getItem(recoveryKey)).toBe(raw);
+  });
+
+  it("reports local storage access failure separately from an absent key", async () => {
+    const empty = new LocalStorageWorkspaceRecoveryRepository({ key: recoveryKey, digest });
+    expect(await empty.inspectStartupRecovery()).toEqual({ candidates: [], issues: [] });
+    const denied = new LocalStorageWorkspaceRecoveryRepository({ digest, storage: {
+      getItem: () => { throw new Error("denied"); }, setItem: vi.fn(), removeItem: vi.fn(),
+    } });
+    expect(await denied.readCandidates()).toEqual([]);
+    expect(await denied.inspectStartupRecovery()).toMatchObject({ candidates: [], issues: [{ kind: "unavailable" }] });
+    const combined = new FallbackWorkspaceRecoveryRepository(denied, empty);
+    expect(await combined.readCandidates()).toEqual([]);
+    expect(await combined.inspectStartupRecovery()).toMatchObject({ candidates: [], issues: [{ kind: "unavailable" }] });
+  });
+
+  it("does not hide an unreadable primary when fallback has a valid scene", async () => {
+    const primary = new LocalStorageWorkspaceRecoveryRepository({ digest, storage: {
+      getItem: () => { throw new Error("denied"); }, setItem: vi.fn(), removeItem: vi.fn(),
+    } });
+    const fallback = new LocalStorageWorkspaceRecoveryRepository({ key: recoveryKey, digest });
+    await fallback.write(snapshot());
+    const result = await new FallbackWorkspaceRecoveryRepository(primary, fallback).inspectStartupRecovery();
+    expect(result.candidates).toHaveLength(1);
+    expect(result.issues).toMatchObject([{ kind: "unavailable" }]);
+  });
+
+  it("keeps the valid local previous snapshot during the first post-recovery write", async () => {
+    const repo = new LocalStorageWorkspaceRecoveryRepository({ key: recoveryKey, digest });
+    await repo.write(snapshot({ sequence: 1, serializedProject: "valid previous" }));
+    await repo.write(snapshot({ sequence: 2, serializedProject: "corrupt head" }));
+    const envelope = JSON.parse(localStorage.getItem(recoveryKey)!);
+    envelope.current.sha256 = `sha256:${"f".repeat(64)}`;
+    localStorage.setItem(recoveryKey, JSON.stringify(envelope));
+    const result = await repo.inspectStartupRecovery();
+    expect(result.candidates[0]?.source).toBe("previous");
+    expect(result.issues).toMatchObject([{ kind: "invalid" }]);
+    await repo.write(snapshot({ sequence: 3, serializedProject: "new edit" }));
+    expect((await repo.readCandidates()).map(({ snapshot: value }) => value.serializedProject))
+      .toEqual(["new edit", "valid previous"]);
+  });
+
   it("stores UTF-8 byte lengths and real SHA-256, rotates only two distinct latest snapshots, then clears", async () => {
     vi.stubGlobal("crypto", webcrypto);
     const repo = new LocalStorageWorkspaceRecoveryRepository({ key: recoveryKey });

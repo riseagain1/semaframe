@@ -65,6 +65,18 @@ describe("Existing assembly collision preflight", () => {
     });
     expect(result.worldTransform?.position.x).toBeCloseTo(3);
     expect(result.worldTransform?.position.z).toBeCloseTo(-5);
+    expect(result.collisionEvidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        componentId: "LEG", configSource: "existing_component", effectiveCollision: expect.objectContaining({ margin: 0.02 }),
+        // 0.5 m geometry scales to 1 m, then receives 0.02 m on each
+        // world-space half-extent, not a second scaling of the margin.
+        worldBounds: expect.objectContaining({ size: { x: expect.closeTo(1.04), y: expect.closeTo(1.04), z: expect.closeTo(1.04) } }),
+      }),
+    ]));
+    expect(result.collisionEvidence.some((entry) => entry.componentId === "NESTED")).toBe(false);
+    expect(result.collisionConflictDetails).toEqual([
+      { componentId: "LEG", conflictsWith: "OUTSIDE", kind: "collider_penetration" },
+    ]);
     expect(result.suggestedPlacements.length).toBeGreaterThan(0);
     for (const suggestion of result.suggestedPlacements) {
       expect(querySpatialPlacement(state, { componentId: "NESTED", placement: suggestion }).valid).toBe(true);

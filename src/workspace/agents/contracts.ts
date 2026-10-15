@@ -6,7 +6,7 @@
  */
 
 export const WORKSPACE_PROTOCOL_VERSION = "1.3" as const;
-export const WORKSPACE_AGENT_GUIDE_VERSION = "3.4" as const;
+export const WORKSPACE_AGENT_GUIDE_VERSION = "3.5" as const;
 /** Exact progressive discovery result cap; text and structured MCP copies are budgeted separately in tests. */
 export const WORKSPACE_CAPABILITY_DISCOVERY_MAX_BYTES = 48_000;
 /** Final JSON cap for one public inspect_workspace_component result. */

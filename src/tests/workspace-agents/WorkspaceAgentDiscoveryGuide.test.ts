@@ -79,4 +79,28 @@ describe("Progressive Agent discovery guidance", () => {
     expect(JSON.stringify(WORKSPACE_LAYOUT_QUICKSTART)).toContain("NEW panel omit component_id and provide component_type");
     expect(JSON.stringify(WORKSPACE_MODELING_QUICKSTART)).toContain("full inverse parent transform");
   });
+
+  it("requires explicit contact clearance and verifiable multipart roots, including nested objects", () => {
+    const core = JSON.stringify(WORKSPACE_AGENT_CORE_GUIDE);
+    const modeling = WORKSPACE_MODELING_QUICKSTART as {
+      contact_and_clearance: { contact_collision_example: unknown; arithmetic_example: string };
+      authoring: string[];
+      completion_checklist: string[];
+    };
+    for (const text of ["margin 0.02m", "collision_evidence", "query AND commit", "lamp on a table", "parent_id", "preserve_world"]) {
+      expect(core).toContain(text);
+    }
+    expect(modeling.contact_and_clearance.contact_collision_example).toEqual({
+      enabled: true, role: "solid", shape: "asset_bounds", margin: 0,
+    });
+    const instructions = JSON.stringify(modeling);
+    for (const text of ["safety_margin_only", "collider_penetration", "not exact mesh", "static bodies", "Keep existing collider centers"]) {
+      expect(instructions).toContain(text);
+    }
+    expect(modeling.authoring.join(" ")).toContain("OWN model-assembly root");
+    expect(modeling.authoring.join(" ")).toContain("even if the table already has an assembly");
+    for (const text of ["roots AND all parts", "actual root type", "child IDs", "requested part count", "parent_id", "preserve_world", "unchanged world transforms"]) {
+      expect(modeling.completion_checklist.join(" ")).toContain(text);
+    }
+  });
 });
