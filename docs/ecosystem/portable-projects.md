@@ -5,7 +5,13 @@ SemaFrame has two project artifacts with different purposes:
 | Artifact | Contents | Use it when |
 | --- | --- | --- |
 | `.semaframe.json` | Workspace metadata, admitted measurement coordinates, descriptors, checkpoint, and resolved history; no original Reality or measurement source bytes | The destination already has the source objects, or relinking is acceptable |
-| `.semaframe-project` | The validated direct project plus required Reality and precision source-byte closures | Moving or archiving a project across browser profiles or machines without separate source relinking |
+| `.semaframe.zip` (formerly `.semaframe-project`) | The validated direct project plus required Reality and precision source-byte closures | Moving or archiving a project across browser profiles or machines without separate source relinking |
+
+New browser exports use `.semaframe.zip`, a suffix supported by native save dialogs.
+Chromium rejects the older suffix as a file-type filter and may strip it from an
+unfiltered suggested filename. Both filename forms remain accepted on import;
+this is a filename compatibility change, not a new archive format. Existing
+`.semaframe-project` archives do not need conversion or renaming.
 
 The portable media type is `application/vnd.semaframe.project+zip`. Version `1.0` is a deterministic, uncompressed ZIP/ZIP64 container with this canonical layout:
 

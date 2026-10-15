@@ -7,12 +7,31 @@ import {
   importWorkspaceProjectArtifact,
   inspectPortableArchive,
   PORTABLE_PROJECT_MANIFEST_PATH,
+  PORTABLE_PROJECT_EXTENSION,
+  LEGACY_PORTABLE_PROJECT_EXTENSION,
   PORTABLE_PROJECT_WORKSPACE_PATH,
 } from "../../workspace/persistence/portable";
 import { workspaceStateDigest } from "../../workspace/persistence";
 import { blobBytes, portableFixture } from "./helpers";
 
 describe("Portable Reality Project bundle", () => {
+  it.each([PORTABLE_PROJECT_EXTENSION, LEGACY_PORTABLE_PROJECT_EXTENSION])(
+    "imports the unchanged portable archive under a %s filename", async (extension) => {
+      const fixture = await portableFixture();
+      const exported = await createPortableProjectBundle(fixture.project, fixture.sourceVault);
+      const file = new File([await exported.toBlob()], `Compatibility${extension}`, {
+        type: "application/vnd.semaframe.project+zip",
+      });
+      const destination = new MemoryAssetVault();
+      const imported = await importWorkspaceProjectArtifact(file, {
+        vault: destination, serializer: fixture.serializer,
+      });
+      expect(imported.kind).toBe("portable");
+      expect(imported.importedAssetIds).toHaveLength(2);
+      expect(imported.project).toEqual(fixture.project);
+    },
+  );
+
   it("exports a deterministic replay-complete bundle and reopens it in an empty profile", async () => {
     const fixture = await portableFixture();
     expect(fixture.project.workspace.realityAssets?.map(([assetId]) => assetId))

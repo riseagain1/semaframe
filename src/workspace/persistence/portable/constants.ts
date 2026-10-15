@@ -6,7 +6,9 @@ import {
 
 export const PORTABLE_PROJECT_FORMAT = "semaframe-portable-project" as const;
 export const PORTABLE_PROJECT_FORMAT_VERSION = "1.0" as const;
-export const PORTABLE_PROJECT_EXTENSION = ".semaframe-project" as const;
+/** Picker-safe filename alias; the archive format and media type are unchanged. */
+export const PORTABLE_PROJECT_EXTENSION = ".semaframe.zip" as const;
+export const LEGACY_PORTABLE_PROJECT_EXTENSION = ".semaframe-project" as const;
 export const PORTABLE_PROJECT_MEDIA_TYPE = "application/vnd.semaframe.project+zip" as const;
 
 export const PORTABLE_PROJECT_MANIFEST_PATH = "manifest.json" as const;

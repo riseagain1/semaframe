@@ -1,7 +1,7 @@
 {
   "name": "semaframe",
   "private": false,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "license": "MIT",
   "description": "A semantic spatial workspace for AI agents.",
   "repository": {
@@ -37,6 +37,8 @@
     "docs/release-v0.4.0.md",
     "docs/release-v0.5.0.md",
     "docs/release-v0.5.1.md",
+    "docs/release-v0.5.2.md",
+    "docs/verification/portable-agent-handoff-2026-10-15.md",
     "examples/diagnostics/",
     "index.html",
     "xr.html",
