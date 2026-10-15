@@ -49,7 +49,9 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## What's new in v0.5
 
-The current stable release is `v0.5.0`. It adds runtime-aware layout and smaller, targeted Agent discovery, and packages the official DeepSeek Harness integration. It preserves the editable modeling, precision, Reality, XR, and portable-project foundation from v0.4.
+The current stable release is `v0.5.1`. This patch presents Codex, Claude Code, and DeepSeek Harness as peer, expandable choices under **Connect your Agent**. Setup instructions differ, not their Workspace authority: all three use the same approval, instruction handshake, and scope checks. No API, protocol, permission, or project-schema migration is required. [Read the v0.5.1 release notes](./docs/release-v0.5.1.md).
+
+The v0.5.0 release introduced runtime-aware layout, smaller targeted Agent discovery, and the official DeepSeek Harness integration below. Those capabilities and the editable modeling, precision, Reality, XR, and portable-project foundation from v0.4 remain available.
 
 | Capability | What changes |
 | --- | --- |
@@ -120,7 +122,7 @@ Together, these capabilities support one inspectable workflow: import captured c
 - [Quick start](#quick-start)
 - [Hardware and runtime support](./docs/hardware-support.md)
 - [XR and PCVR viewer](#xr-and-pcvr-viewer)
-- [First Agent connection](#first-agent-connection)
+- [Connect your Agent](#connect-your-agent)
 - [Product tour](#product-tour)
 - [Core model](#core-model)
 - [Parametric modeling and interchange](#parametric-modeling-and-interchange)
@@ -217,7 +219,7 @@ npm exec --yes --package=semaframe -- semaframe start
 ```
 
 For a reproducible installation, replace `--package=semaframe` with
-`--package=semaframe@0.5.0`. Older releases and candidates remain available by exact version;
+`--package=semaframe@0.5.1`. Older releases and candidates remain available by exact version;
 `next` is not required for this stable release.
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
@@ -390,58 +392,58 @@ npm run build:voice-relay
 
 `npm run dev` builds the optional helper when needed unless `SEMAFRAME_VOICE_RELAY_SKIP_BUILD=1`; if it cannot be built, the rest of SemaFrame remains available and Voice Relay reports unavailable. The launcher hashes the exact locally built helper before starting the Gateway. A launcher that supplies another helper must pin it with `SEMAFRAME_VOICE_RELAY_HELPER_SHA256` (and may select an absolute `SEMAFRAME_VOICE_RELAY_HELPER_PATH`). The public npm tarball excludes prebuilt native binaries. `SEMAFRAME_VOICE_RELAY_ALLOW_UNSIGNED_HELPER=1` is a development/test-only escape hatch, not a production setting. Native Voice Relay is unavailable on Linux; XR and all non-Relay Workspace behavior remain cross-platform.
 
-## First Agent connection
+<a id="first-agent-connection"></a>
 
-Codex and Claude Code can be connected once from the **Install once** section on
-the Agent connection screen. The equivalent source-distributed CLI commands are:
+## Connect your Agent
+
+The connection screen's **Connect your Agent** section presents **Codex**,
+**Claude Code**, and **DeepSeek Harness** as three peer, expandable choices.
+Open the details for the client you use. All three connect to the same Workspace
+tools and use the same human approval, instruction handshake, and scope checks;
+choosing a client does not grant additional permissions or create a different
+Workspace. Configure models, providers, and authentication in the chosen Agent
+client, not in SemaFrame.
+
+Setup methods differ, not access levels: Codex and Claude Code use managed MCP
+registration through their official CLIs, while DSH uses a Cordis overlay and a
+Web-profile launcher. Install your chosen client separately, keep SemaFrame open,
+and use its setup details below. CLI examples assume `semaframe` is on PATH; the
+[npm launcher](#install-and-run) can run the same commands.
+
+### Codex
+
+Expand **Codex** on the connection screen to inspect or manage its SemaFrame MCP
+registration. The equivalent CLI commands are:
 
 ```bash
 semaframe agent install --client codex
-semaframe agent install --client claude
 semaframe agent status --client codex
 semaframe agent update --client codex
 semaframe agent remove --client codex
 ```
 
-SemaFrame uses each client's official MCP CLI; it does not edit client config
-files directly or run a browser-supplied command. The installed stdio launcher
-stores only a fixed loopback Gateway origin—not an offer, approval token, or
-bearer. Restart the Agent client once after an install, update, or removal.
-After that, the same launcher process discovers fresh offers across Gateway
-restarts, requires a new human approval for the new Gateway lifetime, and
-refreshes added, changed, or removed MCP tools without a config rewrite or
-launcher restart. It never automatically replays a failed tool call whose
-mutation outcome may be ambiguous.
+### Claude Code
 
-Any other Streamable HTTP MCP-capable client can still use manual pairing:
+Expand **Claude Code** on the connection screen to inspect or manage its
+SemaFrame MCP registration. The equivalent CLI commands are:
 
-1. Start SemaFrame with `npm run dev`.
-2. Enable Agent control and copy the short-lived connection URL.
-3. Add that URL as an MCP server or connector in the external client.
-4. The client calls `get_workspace_instructions` first for the compact mandatory guide, then uses `inspect_workspace_capabilities` for the needed manifests, guidance topics, and operation schemas. `workspace://instructions/v1` remains the optional full reference.
-5. SemaFrame displays the client's name, fingerprint, requested scopes, and destructive capabilities.
-6. Approve the request in the authoritative browser.
-7. The Agent inspects and edits the same open project through revision-bound transactions.
+```bash
+semaframe agent install --client claude
+semaframe agent status --client claude
+semaframe agent update --client claude
+semaframe agent remove --client claude
+```
 
-The connection URL contains a random offer identifier, not authority. The first instruction request creates a separate approval claim. Approval, session, and transaction capabilities are never placed in the URL or project file. Stable local launchers discover only from the exact configured loopback origin; discovery cannot redirect a launcher to another local port or remote host.
-
-Incomplete expired or failed offers can be replaced with **Create fresh URL**. **Revoke pairing** invalidates the current offer and live sessions. If the authoritative browser disappears, the engine becomes unavailable rather than creating a second hidden Workspace.
-
-From v0.5.0, pending
-approval lasts up to 2 minutes, bounded by the connection offer. First approval
-starts a separate 10-minute window for the Agent to start or retry its instruction
-handshake; repeated approval cannot extend it. An in-flight request retains its
-own bounded command timeout. A completed handshake is not
-disconnected by these setup deadlines. If an incomplete request expires, ask the
-Agent to request fresh approval without its old approval token, compare the new
-fingerprint, and approve again. The connection page distinguishes waiting for the
-Agent from an instruction read already in progress and explains expiry recovery.
+For both managed-registration clients, SemaFrame calls the official MCP CLI; it
+does not edit client configuration files directly or execute a browser-supplied
+command. Restart the selected client once after an install, update, or removal.
 
 ### DeepSeek Harness (dsh)
 
-DeepSeek Harness can use the same approved Workspace tools as an external Agent.
-SemaFrame does not embed a DeepSeek chat UI or store a DeepSeek API key. Configure
-the model/provider in DSH itself.
+Expand **DeepSeek Harness** on the same connection screen for its launch and
+configuration details. DSH uses the same approved Workspace tools as Codex and
+Claude Code. Its model/provider configuration stays in DSH; SemaFrame does not
+embed a DeepSeek chat UI or store a DeepSeek API key.
 
 The DSH integration is included from `semaframe@0.5.0`; the older `0.4.0`
 package does not contain it. With the official `dsh` command
@@ -449,7 +451,7 @@ installed on PATH (or the macOS DeepSeek Harness app installed), keep SemaFrame
 open and run:
 
 ```bash
-npm exec --yes --package=semaframe@0.5.0 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.1 -- semaframe agent launch --client dsh
 ```
 
 This launches DSH's Web profile with an independent temporary Cordis overlay and
@@ -459,16 +461,62 @@ CLI without changing PATH; this still launches the Web profile, not the Desktop
 window's existing profile. Approve the client fingerprint and requested
 scopes in SemaFrame when DSH first calls `get_workspace_instructions`.
 
-For an existing DSH launch workflow, use **Copy DSH configuration** on the
-connection page, save it as `semaframe.dsh.json`, and start
+For an existing DSH launch workflow, use **Copy DSH configuration** inside the
+DeepSeek Harness details, save it as `semaframe.dsh.json`, and start
 `dsh web --patch ./semaframe.dsh.json`. The same JSON (a valid YAML subset) is
-available through `npm exec --yes --package=semaframe@0.5.0 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
+available through `npm exec --yes --package=semaframe@0.5.1 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
 contains only the launcher paths and fixed loopback Gateway origin, never model
 keys, pairing bearers, or short-lived connection URLs. Regenerate it if the
 SemaFrame installation moves. Do not load two SemaFrame overlays into one DSH
 scope or overwrite an existing DSH user patch.
 
 See [DSH setup, verification, and boundaries](./docs/agents/deepseek-harness.md).
+
+### Shared approval and session behavior
+
+Whichever client you choose, ask it to call `get_workspace_instructions`, compare
+its displayed identity/fingerprint and requested scopes, and approve only the
+access you intend to grant. The Agent retains the returned instruction digest,
+inspects current state, and discovers the needed contracts through
+`inspect_workspace_capabilities` before making revision-bound edits. Installing
+a launcher or copying an overlay is not approval.
+
+The persistent stdio bridge stores only a fixed loopback Gateway origin—not an
+offer, approval token, or bearer. It discovers fresh offers across Gateway
+restarts, requires new human approval for a new Gateway lifetime, and refreshes
+added, changed, or removed MCP tools without a configuration rewrite or launcher
+restart. It never automatically replays a failed tool call whose mutation outcome
+may be ambiguous.
+
+Incomplete expired or failed offers can be replaced with **Create fresh URL**.
+**Revoke pairing** invalidates the current offer and live sessions. If the
+authoritative browser disappears, the engine becomes unavailable rather than
+creating a second hidden Workspace.
+
+From v0.5.0, pending approval lasts up to 2 minutes, bounded by the connection
+offer. First approval starts a separate 10-minute window for the Agent to start
+or retry its instruction handshake; repeated approval cannot extend it. An
+in-flight request retains its own bounded command timeout. A completed handshake
+is not disconnected by these setup deadlines. If an incomplete request expires,
+ask the Agent to request fresh approval without its old approval token, compare
+the new fingerprint, and approve again. The connection page distinguishes waiting
+for the Agent from an instruction read already in progress and explains expiry
+recovery.
+
+### Other MCP clients
+
+Other Streamable HTTP MCP-capable clients can use manual pairing:
+
+1. Start SemaFrame with `semaframe start` or, from a development checkout, `npm run dev`.
+2. Enable Agent control and copy the short-lived connection URL.
+3. Add that URL as an MCP server or connector in the chosen client.
+4. Have the client call `get_workspace_instructions` and follow the same approval and contract-discovery workflow above. `workspace://instructions/v1` remains the optional full reference.
+
+The connection URL contains a random offer identifier, not authority. The first
+instruction request creates a separate approval claim. Approval, session, and
+transaction capabilities are never placed in the URL or project file. Stable
+local launchers discover only from the exact configured loopback origin;
+discovery cannot redirect a launcher to another local port or remote host.
 
 ## Product tour
 

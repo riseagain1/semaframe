@@ -777,16 +777,16 @@ export function AgentConnectionPage({
             </>
           )}
 
-          {(agentInstallations || agentInstallationsLoading || agentInstallationsUnavailable || onRefreshAgentInstallations) && <section
+          {status !== "booting" && status !== "approval" && status !== "approved" && status !== "occupied" && <section
             className="agent-installations"
             aria-labelledby={`${titleId}-installations`}
             aria-busy={agentInstallationsLoading || pendingInstallation !== null || undefined}
           >
             <div className="agent-installations-heading">
               <div>
-                <p className="eyebrow">Install once</p>
-                <h2 id={`${titleId}-installations`}>Connect your Agent client automatically</h2>
-                <p>The stable launcher discovers the current local Gateway after restarts. No temporary URL or custom Node script is needed.</p>
+                <p className="eyebrow">Agent clients</p>
+                <h2 id={`${titleId}-installations`}>Connect your Agent</h2>
+                <p>Choose your client for setup instructions. All three use the same SemaFrame tools, permission checks, and Workspace validation.</p>
               </div>
               {onRefreshAgentInstallations && <button
                 type="button"
@@ -798,70 +798,78 @@ export function AgentConnectionPage({
               </button>}
             </div>
             {agentInstallationsLoading && !agentInstallations ? <p className="agent-installations-loading" role="status">
-              <LoaderCircle className="spin-slow" size={15} aria-hidden="true" />Checking Codex and Claude Code…
+              <LoaderCircle className="spin-slow" size={15} aria-hidden="true" />Checking Codex and Claude Code registrations…
             </p> : agentInstallationsUnavailable && !agentInstallations ? <p className="agent-installations-unavailable" role="status">
               <CircleOff size={15} aria-hidden="true" />{agentInstallationsUnavailable}
-            </p> : <ul className="agent-installation-list">
-              {agentInstallations?.clients.map((client) => {
-                const operationBusy = pendingInstallation?.client === client.client
+            </p> : null}
+            <ul className="agent-client-list" aria-label="Agent clients">
+              {(["codex", "claude"] as const).map((clientId) => {
+                const displayName = clientId === "codex" ? "Codex" : "Claude Code";
+                const client = agentInstallations?.clients.find((entry) => entry.client === clientId);
+                const operationBusy = pendingInstallation?.client === clientId
                   && pendingInstallation.action !== "status";
-                return <li key={client.client} data-state={client.state}>
-                  <div className="agent-installation-health" aria-hidden="true">
-                    {client.state === "installed" ? <Check size={14} /> : client.state === "outdated" ? <RefreshCw size={14} /> : <CircleOff size={14} />}
-                  </div>
-                  <div>
-                    <strong>{client.displayName}</strong>
-                    <small>{client.detail}</small>
-                  </div>
-                  <div className="agent-installation-actions">
-                    {client.state === "not_installed" && onManageAgentInstallation && <button
-                      type="button"
-                      onClick={() => void manageInstallation(client.client, "install")}
-                      disabled={blocked}
-                    >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <Download size={14} aria-hidden="true" />}Install</button>}
-                    {client.state === "outdated" && onManageAgentInstallation && <button
-                      type="button"
-                      onClick={() => void manageInstallation(client.client, "update")}
-                      disabled={blocked}
-                    >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}Update</button>}
-                    {(client.state === "installed" || client.state === "outdated") && onManageAgentInstallation && <button
-                      type="button"
-                      className="agent-installation-remove"
-                      aria-label={`Remove SemaFrame from ${client.displayName}`}
-                      onClick={() => void manageInstallation(client.client, "remove")}
-                      disabled={blocked}
-                    ><Trash2 size={14} aria-hidden="true" />Remove</button>}
-                  </div>
+                return <li key={clientId}>
+                  <details className="agent-client-option" data-client={clientId} data-state={client?.state}>
+                    <summary><strong>{displayName}</strong><span>Register the MCP connection once</span></summary>
+                    <div className="agent-client-instructions" role="region" aria-label={`${displayName} setup`}>
+                      <p>Register SemaFrame with your installed {displayName} client, then restart the client once. The stable launcher discovers the local Gateway after restarts.</p>
+                      <code className="agent-client-command">semaframe agent install --client {clientId}</code>
+                      {client && <p className="agent-client-health">
+                        <span className="agent-installation-health" aria-hidden="true">
+                          {client.state === "installed" ? <Check size={14} /> : client.state === "outdated" ? <RefreshCw size={14} /> : <CircleOff size={14} />}
+                        </span>
+                        {client.detail}
+                      </p>}
+                      <div className="agent-installation-actions">
+                        {client?.state === "not_installed" && onManageAgentInstallation && <button
+                          type="button"
+                          onClick={() => void manageInstallation(client.client, "install")}
+                          disabled={blocked}
+                        >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <Download size={14} aria-hidden="true" />}Install</button>}
+                        {client?.state === "outdated" && onManageAgentInstallation && <button
+                          type="button"
+                          onClick={() => void manageInstallation(client.client, "update")}
+                          disabled={blocked}
+                        >{operationBusy ? <LoaderCircle className="spin-slow" size={14} aria-hidden="true" /> : <RefreshCw size={14} aria-hidden="true" />}Update</button>}
+                        {(client?.state === "installed" || client?.state === "outdated") && onManageAgentInstallation && <button
+                          type="button"
+                          className="agent-installation-remove"
+                          aria-label={`Remove SemaFrame from ${client.displayName}`}
+                          onClick={() => void manageInstallation(client.client, "remove")}
+                          disabled={blocked}
+                        ><Trash2 size={14} aria-hidden="true" />Remove</button>}
+                      </div>
+                    </div>
+                  </details>
                 </li>;
               })}
-            </ul>}
+              <li>
+                <details className="agent-client-option" data-client="dsh">
+                  <summary><strong>DeepSeek Harness (dsh)</strong><span>Launch with an MCP configuration overlay</span></summary>
+                  <div className="agent-client-instructions" role="region" aria-label="DeepSeek Harness (dsh) setup">
+                    <p>Launch your installed DSH Web profile with SemaFrame's MCP configuration. Your existing DSH profile stays unchanged.</p>
+                    <code className="agent-client-command">semaframe agent launch --client dsh</code>
+                    <div className="agent-client-manual">
+                      <p>Or copy an overlay, save it as <code>semaframe.dsh.json</code>, then run:</p>
+                      <code className="agent-client-command">dsh web --patch ./semaframe.dsh.json</code>
+                      <button
+                        type="button"
+                        onClick={() => void copyLocalSetup("dsh")}
+                        disabled={!canCopyDsh || blocked}
+                      >
+                        {pending === "copy" ? <LoaderCircle className="spin-slow" size={15} aria-hidden="true" /> : copied === "dsh" ? <Check size={15} aria-hidden="true" /> : <Clipboard size={15} aria-hidden="true" />}
+                        {copied === "dsh" ? "DSH configuration copied" : "Copy DSH configuration"}
+                      </button>
+                      {!canCopyDsh && <p>Enable Agent control and connect to the local Gateway to copy a configuration.</p>}
+                      {copied === "dsh" && <p role="status">Copied. Save as semaframe.dsh.json; your existing DSH configuration stays unchanged.</p>}
+                    </div>
+                  </div>
+                </details>
+              </li>
+            </ul>
             {installationNotice && <p className="agent-installation-notice" role="status">{installationNotice}</p>}
-          </section>}
-
-          {status !== "booting" && status !== "approval" && status !== "approved" && status !== "occupied" && <section
-            className="agent-dsh-setup"
-            aria-labelledby={`${titleId}-dsh`}
-          >
-            <p className="eyebrow">External Agent</p>
-            <h2 id={`${titleId}-dsh`}>DeepSeek Harness (dsh)</h2>
-            <p>Install and configure DSH and its DeepSeek provider separately. SemaFrame does not need your model API key.</p>
-            <p>With both CLIs installed, run this in a local terminal:</p>
-            <code className="agent-dsh-command">semaframe agent launch --client dsh</code>
-            <div className="agent-dsh-manual">
-              <p>Or copy a separate overlay, save it as <code>semaframe.dsh.json</code>, then run:</p>
-              <code className="agent-dsh-command">dsh web --patch ./semaframe.dsh.json</code>
-              <button
-                type="button"
-                onClick={() => void copyLocalSetup("dsh")}
-                disabled={!canCopyDsh || blocked}
-              >
-                {pending === "copy" ? <LoaderCircle className="spin-slow" size={15} aria-hidden="true" /> : copied === "dsh" ? <Check size={15} aria-hidden="true" /> : <Clipboard size={15} aria-hidden="true" />}
-                {copied === "dsh" ? "DSH configuration copied" : "Copy DSH configuration"}
-              </button>
-              {!canCopyDsh && <p>Enable Agent control and connect to the local Gateway to copy a configuration.</p>}
-              {copied === "dsh" && <p role="status">Copied. Save as semaframe.dsh.json; your existing DSH configuration stays unchanged.</p>}
-            </div>
-            <p className="agent-dsh-approval-note">Keep this workspace open. Review and approve DSH here before it can inspect or change the scene.</p>
+            <p className="agent-client-note">Install your chosen Agent client and configure its model there. SemaFrame does not need your model API key.</p>
+            <p className="agent-client-note">Keep this workspace open. For any client, review its fingerprint and requested permissions here before approving access. Setting up a connection does not grant access.</p>
           </section>}
 
           {status !== "occupied" && showDestructivePolicy && <label className="agent-connection-permission">
