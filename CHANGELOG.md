@@ -4,6 +4,24 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-15
+
+### Fixed
+
+- Open the native portable-project save picker directly from the user action on its `Window` receiver, before asynchronous preparation. Validate before opening a writable, stream the archive, and report success only after the file closes successfully.
+- Distinguish native-picker cancellation from preparation, open, read, write, and close failures. Preserve visible failure reporting and stream cleanup without an unsolicited download fallback; browsers without a picker retain a size-bounded download path.
+- Keep newer edits marked unsaved when the Workspace, project metadata, or undo/redo state changes during export, including changes that reuse the captured revision number.
+
+### Changed
+
+- Save portable projects as picker-safe `.semaframe.zip` files and strip the complete suffix from imported project names. Existing `.semaframe-project` files remain importable without conversion; archive format, media type, manifest versions, and project schema are unchanged.
+
+### Verification
+
+- Add regression coverage for native save failures/cancellation and independent Agent-session handoff with real current/history-only asset bytes, an empty destination vault, revoked old sessions, exact readback, undo/redo, and re-export/replay.
+- Verify a real Codex-to-DeepSeek handoff through native Chrome save/open and a final packed-build reopen: preserve 15 component IDs, a Reality Asset and event connection, edit existing geometry/material, and confirm undo/redo and exact asset digests. This bounded synthetic case is not a universal Agent, accuracy, or hardware guarantee.
+- Completed local gates: 276 Vitest files / 2,272 tests, 45 CLI tests, 23 XR launcher tests, lint, and desktop/XR builds. Details and limitations are in the [verification report](https://github.com/riseagain1/semaframe/blob/v0.5.2/docs/verification/portable-agent-handoff-2026-10-15.md); release CI and publication are separate gates.
+
 ## [0.5.1] - 2026-10-15
 
 ### Changed
@@ -159,7 +177,8 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/riseagain1/semaframe/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/riseagain1/semaframe/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.3...v0.4.0

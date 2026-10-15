@@ -6,7 +6,7 @@ The extension and service entries below are repository-source embedding contract
 
 | Surface | Current contract | What it is for |
 | --- | --- | --- |
-| Portable project | `.semaframe-project` / `application/vnd.semaframe.project+zip` | Move a validated Workspace together with the Reality Asset bytes required by its current state, checkpoint, replay, and retained undo history |
+| Portable project | `.semaframe.zip` / `application/vnd.semaframe.project+zip` | Move a validated Workspace together with the Reality Asset bytes required by its current state, checkpoint, replay, and retained undo history |
 | Scene Exchange | `.semaframe-exchange` / `application/vnd.semaframe.exchange+zip` | Send one immutable Workspace revision to Blender, FreeCAD, Unity, Unreal, or a custom downstream tool without transferring Workspace authority |
 | Extension SDK | API `1.0` manifests, providers, grants, conformance helpers | Add connector, importer, exporter, or bridge providers behind host-owned capabilities |
 | Native extension host | framed stdio protocol `1` | Run one verified native entrypoint with bounded messages, explicit authorization, cancellation, and hard process termination |
@@ -27,7 +27,7 @@ These are compatibility contracts, not ambient authority. `WorkspaceStore` remai
 4. Stream a canonical stored ZIP/ZIP64 archive with a canonical manifest, the direct Workspace JSON, and content-addressed Reality objects.
 5. On import, validate the whole archive and project before mutating the destination. Stage missing objects, atomically replace the project, and remove newly inserted objects if the replacement rejects.
 
-See [Portable projects](./portable-projects.md).
+Existing `.semaframe-project` files still import without renaming or conversion; `.semaframe.zip` is the new export filename for the same portable archive format. See [Portable projects](./portable-projects.md).
 
 ### Work in a downstream 3D tool
 

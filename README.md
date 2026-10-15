@@ -49,7 +49,9 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## What's new in v0.5
 
-The current stable release is `v0.5.1`. This patch presents Codex, Claude Code, and DeepSeek Harness as peer, expandable choices under **Connect your Agent**. Setup instructions differ, not their Workspace authority: all three use the same approval, instruction handshake, and scope checks. No API, protocol, permission, or project-schema migration is required. [Read the v0.5.1 release notes](./docs/release-v0.5.1.md).
+The current stable release is `v0.5.2`. This patch fixes native portable-project saving: picker-safe `.semaframe.zip` filenames, streaming completion and failure handling, and accurate unsaved state when edits occur during export. Existing `.semaframe-project` files still import without conversion. A real Codex-to-DeepSeek handoff verified native save/reopen, preserved asset bytes and IDs, editing, undo/redo, and final-package reopen. [Read the v0.5.2 release notes](./docs/release-v0.5.2.md) and [verification evidence and limits](./docs/verification/portable-agent-handoff-2026-10-15.md).
+
+The v0.5.1 connection experience remains: Codex, Claude Code, and DeepSeek Harness are peer, expandable choices under **Connect your Agent**. Setup instructions differ, not their Workspace authority; all use the same approval, instruction handshake, and scope checks. Neither patch requires API, protocol, permission, or project-schema migration.
 
 The v0.5.0 release introduced runtime-aware layout, smaller targeted Agent discovery, and the official DeepSeek Harness integration below. Those capabilities and the editable modeling, precision, Reality, XR, and portable-project foundation from v0.4 remain available.
 
@@ -80,7 +82,7 @@ The `v0.4.0` release established the following foundation on top of v0.3 modelin
 | **Photo-set Reality reconstruction** | Human and approval-gated Agent flows for digest-bound photo upload, explicit local reconstruction, bounded progress/cancellation, browser-authoritative preflight, and content-addressed Reality registration |
 | **Measurement-driven modeling** | Retained native capture mesh/material/texture evidence, ordinary OBJ/PLY/XYZ import, multi-point metric registration, independent scoped checks, robust geometric fitting, editable CAD proposals, and host-evaluated scan-to-CAD comparison |
 | **Cross-platform XR renderer** | A separately paired WebXR client with revisioned Workspace replication, collision-safe teleport, renderer-neutral live panels, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, fresh authenticated spatial context, renderer-only build reveals, resumable Reality assets, reconnect, and a fail-closed Windows PCVR Ultra gate |
-| **Portable projects** | A streamed `.semaframe-project` ZIP/ZIP64 bundle containing the replay-verified Workspace plus the complete content-addressed Reality byte closure required by current state, checkpoint, and retained undo/replay |
+| **Portable projects** | A streamed ZIP/ZIP64 bundle (now saved as `.semaframe.zip`) containing the replay-verified Workspace plus the complete content-addressed Reality byte closure required by current state, checkpoint, and retained undo/replay |
 | **Scene Exchange and bridges** | A sanitized `.semaframe-exchange` with semantic manifest, fidelity report, OpenUSD, self-contained GLB, optional exact STEP, stable IDs, expiring pull sessions, and review-only downstream change proposals |
 | **Extension and host services** | Versioned connector/importer/exporter/bridge contracts, digest/signature verification, Workspace-bound grants, an owned framed-stdio host, immutable connector registries, and bounded asynchronous artifact jobs |
 | **Community ecosystem** | A signed static project/model template catalog with proposal-only installation plus explicitly opt-in, previewable anonymous performance diagnostics with no bundled vendor endpoint |
@@ -180,7 +182,7 @@ SemaFrame provides this inspectable spatial substrate. It is not an autonomous o
 | Web and media | User-activated sandboxed website panels plus normalized YouTube, Vimeo, MP4, and WebM video |
 | XR rendering | Separately paired desktop/WebXR client with revisioned projection, controller input, teleport, live 2D panels in 3D, typed actions, Agent-guided setup, optional text-only-Agent Voice Relay, live ephemeral spatial context, renderer-only build reveals, and fail-closed performance tiers |
 | Agent control | Approval-gated Streamable HTTP MCP, OpenAPI 3.1, and a stdio bridge |
-| Persistence | Direct metadata projects plus portable `.semaframe-project` bundles with deterministic replay, migration, undo/redo, validated provenance, and complete required Reality bytes |
+| Persistence | Direct metadata projects plus portable `.semaframe.zip` bundles with deterministic replay, migration, undo/redo, validated provenance, and complete required Reality bytes |
 | Extensibility | API `1.0` connector/importer/exporter/bridge contracts, digest-bound manifests and grants, framed native stdio hosting, immutable connector registries, and bounded artifact jobs |
 | Downstream tools | Immutable `.semaframe-exchange` packages and review-only proposal bridges for Blender, FreeCAD, Unity, Unreal, or a custom client |
 | Community layer | Signed static project/model template catalogs and off-by-default, exact-preview anonymous performance diagnostics |
@@ -219,7 +221,7 @@ npm exec --yes --package=semaframe -- semaframe start
 ```
 
 For a reproducible installation, replace `--package=semaframe` with
-`--package=semaframe@0.5.1`. Older releases and candidates remain available by exact version;
+`--package=semaframe@0.5.2`. Older releases and candidates remain available by exact version;
 `next` is not required for this stable release.
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
@@ -451,7 +453,7 @@ installed on PATH (or the macOS DeepSeek Harness app installed), keep SemaFrame
 open and run:
 
 ```bash
-npm exec --yes --package=semaframe@0.5.1 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.2 -- semaframe agent launch --client dsh
 ```
 
 This launches DSH's Web profile with an independent temporary Cordis overlay and
@@ -464,7 +466,7 @@ scopes in SemaFrame when DSH first calls `get_workspace_instructions`.
 For an existing DSH launch workflow, use **Copy DSH configuration** inside the
 DeepSeek Harness details, save it as `semaframe.dsh.json`, and start
 `dsh web --patch ./semaframe.dsh.json`. The same JSON (a valid YAML subset) is
-available through `npm exec --yes --package=semaframe@0.5.1 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
+available through `npm exec --yes --package=semaframe@0.5.2 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
 contains only the launcher paths and fixed loopback Gateway origin, never model
 keys, pairing bearers, or short-lived connection URLs. Regenerate it if the
 SemaFrame installation moves. Do not load two SemaFrame overlays into one DSH
@@ -635,7 +637,7 @@ This workflow separates **visual appearance**, **measurement geometry**, and **e
 3. **Verify independent observations.** Fit controls and held-out checks are distinct. Point and dimension checks include their provenance, uncertainty bounds, required regions, and intended-use tolerance. Reports are recomputed from the current inputs; caller-supplied pass flags are rejected. Outcomes are `unverified`, `inconclusive`, `fail`, or `pass_for_scope`—the last means only the declared observations and regions, not the entire physical object. Declared source attachments must still be present and digest-valid; source geometry is checked against retained bytes when bound to them.
 4. **Propose editable CAD.** Plane, circle, and cylinder fits keep outliers visible and reject insufficient coverage. Shaft and measured-thickness plate proposals become ordinary editable sketch/extrude CAD parts evaluated by the real OCCT kernel. Thickness, hidden cavities, and missing end geometry are never invented as verified measurements. Existing CAD package export can then carry those solids into downstream CAD for detailed refinement.
 5. **Compare the current CAD.** `action: "compare_cad"` reads the actual current `cad-part`, evaluates all admitted body meshes, and performs bidirectional sampled-vertex-to-surface comparison. It accounts for the requested tessellation deviation, Float32 buffer rounding, and supplied source uncertainty. It does not transfer a few passing checks into whole-surface authority. This version requires the target and its parents to have identity placement in the shared working frame; other placements are explicitly rejected rather than silently compared in the wrong frame.
-6. **Keep the audit trail portable.** Ordinary transactions retain undo/redo and replay. A `.semaframe-project` bundle includes the precision source-byte closure, including retained history, using manifest 1.1 when needed (legacy 1.0 remains supported). Metric OBJ/PLY and a full study/report JSON sidecar are available separately; reopening a sidecar recomputes its report rather than trusting a serialized result.
+6. **Keep the audit trail portable.** Ordinary transactions retain undo/redo and replay. A `.semaframe.zip` bundle includes the precision source-byte closure, including retained history, using manifest 1.1 when needed (legacy 1.0 remains supported). Metric OBJ/PLY and a full study/report JSON sidecar are available separately; reopening a sidecar recomputes its report rather than trusting a serialized result.
 
 Measurement import is deliberately bounded: 16 MiB per raw source, 25,000 admitted vertices, 50,000 triangles, the existing 1 MiB transaction and 25 MiB project limits, and bounded exact comparison work. Retained capture bundles may contain up to 256 MiB; a larger native mesh can be kept and exported even when it cannot be admitted for in-browser analysis. No geometry is silently downsampled to obtain a passing result. Gaussian PLY is rejected by the measurement parser, external OBJ references are not fetched, and mesh formats do not establish real-world scale on their own.
 
@@ -699,7 +701,7 @@ Reconstruction quality still depends on coverage, overlap, focus, lighting, refl
 
 Automated repository verification uses valid synthetic image fixtures and a native backend capability probe. A manual macOS validation on August 25, 2026 also completed the browser-approved MCP workflow with all 51 photos from the public [ink-splashed skull photogrammetry test set](https://gitlab.com/photogrammetry-test-sets/skull-turntable-strong-lights-white-background-ink-splashed-textureless-areas): `preview` produced 250,000 splats and `balanced` produced 1,000,000 splats. This is end-to-end workflow evidence, not measured field accuracy or a permanent CI fixture; the source photos and generated artifacts are intentionally not committed.
 
-Current import limits are 256 MiB, 4 million splats, and 128 registered descriptors per Workspace. A direct `.semaframe.json` project remains a metadata/reference artifact and may require same-digest relinking on another browser. Use `.semaframe-project` when the destination needs the complete verified Reality byte closure in the same artifact.
+Current import limits are 256 MiB, 4 million splats, and 128 registered descriptors per Workspace. A direct `.semaframe.json` project remains a metadata/reference artifact and may require same-digest relinking on another browser. Use `.semaframe.zip` when the destination needs the complete verified Reality byte closure in the same artifact.
 
 ## Spatial understanding and physics
 
@@ -832,7 +834,9 @@ SemaFrame's ecosystem layer expands file portability, data/provider integration,
 
 ### Portable Workspace artifacts
 
-`.semaframe-project` is a deterministic stored ZIP/ZIP64 archive. It contains the normal replay-verified Workspace JSON plus every content-addressed Reality object required by current state, checkpoint, and retained undo/replay history. The precision workflow uses manifest `1.1` when measurement evidence is included; projects without it retain `1.0`. Export verifies each source object before streaming. Import verifies exact paths, entry order, CRC, SHA-256, Reality format, project replay, and closure before staging any bytes; a failed atomic project replacement rolls back newly inserted objects.
+`.semaframe.zip` is a deterministic stored ZIP/ZIP64 archive. It contains the normal replay-verified Workspace JSON plus every content-addressed Reality object required by current state, checkpoint, and retained undo/replay history. The precision workflow uses manifest `1.1` when measurement evidence is included; projects without it retain `1.0`. Export verifies each source object before streaming. Import verifies exact paths, entry order, CRC, SHA-256, Reality format, project replay, and closure before staging any bytes; a failed atomic project replacement rolls back newly inserted objects.
+
+Existing `.semaframe-project` files still import without renaming or conversion; the new export filename does not change the portable archive format.
 
 The direct `.semaframe.json` format remains useful when small metadata-only files and digest relinking are preferred. See [Portable projects](./docs/ecosystem/portable-projects.md) for the format and trust boundary.
 
@@ -966,7 +970,7 @@ Projects from the removed pre-Workspace runtime and its dual-envelope format are
 
 Project schema: [`src/workspace/persistence/workspaceProject.schema.json`](src/workspace/persistence/workspaceProject.schema.json).
 
-**Save portable project** wraps that same validated direct project in `.semaframe-project` version `1.0` and adds the complete content-addressed Reality byte closure required by current state, checkpoint, and retained undo/replay. The deterministic stored ZIP/ZIP64 format supports streaming, so a large valid bundle does not need to be assembled in memory. Its manifest and object paths are canonical and digest-pinned.
+**Save portable project** wraps that same validated direct project in `.semaframe.zip` and adds the complete content-addressed Reality byte closure required by current state, checkpoint, and retained undo/replay. The manifest uses `1.0` without measurement evidence or `1.1` when retained measurement evidence is included. The deterministic stored ZIP/ZIP64 format supports streaming, so a large valid bundle does not need to be assembled in memory. Its manifest and object paths are canonical and digest-pinned.
 
 Portable open validates exact archive structure, CRC, SHA-256, Reality preflight, project replay, and closure before replacing the current project. Missing objects are staged into the destination vault only after complete validation; if project replacement rejects, newly inserted objects are rolled back. Existing direct JSON projects remain supported through magic-based format detection.
 
@@ -1060,7 +1064,7 @@ SemaFrame deliberately does not claim the following:
 - **Not full mechanical CAD.** Exact primitives, bounded constraint sketches, a real editable B-rep feature subset, assembly intent, and verified AP242 handoff are available. Robust persistent per-face naming, arbitrary topology selection, evaluated shell/sweep/loft/pattern features, native vendor feature trees, STEP import, GD&T/PMI, drawings, PLM, and FEA are not.
 - **Reality capture is visual evidence, not engineering truth.** Gaussian splats do not provide collision, physics, CAD, material, or certification authority; editable semantic proxies must carry those claims.
 - **Photo reconstruction is local, visual-only, resource-bounded, and platform-bounded.** The bundled backend requires supported macOS Object Capture hardware and Xcode command-line tools. It rejects sets beyond the selected profile's pixel and memory policy and stops work if disk, memory, process-tree supervision, time, total working-tree, conversion, or candidate-staging bounds fail. Apple first produces a textured mesh, which SemaFrame samples into Gaussian PLY; every result begins as `visual_only` and `uncalibrated`. It is not a bundled cross-platform/cloud reconstruction service. A real 51-photo public test set has completed the manual end-to-end workflow, but that does not establish metric or survey accuracy and is not a committed CI fixture.
-- **Direct project JSON is still metadata-only.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest. The separate `.semaframe-project` artifact includes the verified Reality closure when portability is required.
+- **Direct project JSON is still metadata-only.** It saves safe descriptors and digest references; another browser may need the same bytes relinked by digest. The separate `.semaframe.zip` artifact includes the verified Reality closure when portability is required.
 - **Scene Exchange is not native downstream history.** OpenUSD/GLB/optional STEP preserve bounded geometry and stable semantics, but cannot reconstruct Blender modifiers, FreeCAD feature trees and constraints, or native Unity/Unreal authoring history. Downstream edits return only as reviewable proposals.
 - **Not a published extension runtime or marketplace.** The repository has source-level SDK, manifest/grant, signed static catalog, native-host, connector, and artifact contracts, but the public npm package is a CLI/source distribution without compiled SDK exports and the app does not install or activate extensions. It does not yet provide dependency resolution, automatic updates, or a public extension registry service.
 - **SSG is not OpenUSD.** SemaFrame Spatial Graph is the bounded JSON projection for Agent reasoning; USD/OpenUSD refers only to Pixar's interchange format.
@@ -1068,7 +1072,7 @@ SemaFrame deliberately does not claim the following:
 - **Not universal desktop automation.** Voice Relay targets only compatible standard Agent windows on macOS or Windows after a no-send diagnostic and per-session arm. Application accessibility trees can change, Linux has no native helper, and the Relay is not an arbitrary-window macro system.
 - **Not universal XR hardware certification.** The standards-based viewer and safety contracts have automated coverage, but each headset, browser/OpenXR runtime, controller mapping, link mode, microphone, and GPU tier still needs physical validation.
 - **Not automatic Ultra by GPU name.** Windows PCVR Ultra remains Balanced until fresh measured probe and benchmark evidence produces a matching eligibility receipt; macOS, unknown runtimes, stale evidence, and failed runs cannot override the gate.
-- **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project schema; `.semaframe-project` is a portable wrapper around that schema, not a restored legacy runtime.
+- **Not backward-compatible with legacy Scene/Compose projects.** The product now has one Workspace authority and one direct project schema; `.semaframe.zip` is a portable wrapper around that schema, not a restored legacy runtime.
 
 ## Architecture and code map
 

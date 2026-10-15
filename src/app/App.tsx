@@ -172,9 +172,14 @@ import {
   createPortableProjectBundle,
   importWorkspaceProjectArtifact,
   PORTABLE_PROJECT_EXTENSION,
-  PORTABLE_PROJECT_LIMITS,
-  PORTABLE_PROJECT_MEDIA_TYPE,
 } from "../workspace/persistence/portable";
+import {
+  PortableProjectSaveCancelledError,
+  savePortableProjectToBrowser,
+  watchPortableProjectSnapshot,
+  WORKSPACE_PROJECT_FILE_ACCEPT,
+  workspaceProjectNameFromFilename,
+} from "./portableProjectSave";
 import { createSemaFrameExchange } from "../bridge";
 import {
   approvedBridgeChangesToWorkspaceOperations,
@@ -438,60 +443,6 @@ function downloadBlob(name: string, blob: Blob): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-type BrowserSaveFilePicker = (options: Readonly<{
-  suggestedName: string;
-  types: readonly Readonly<{
-    description: string;
-    accept: Readonly<Record<string, readonly string[]>>;
-  }>[];
-}>) => Promise<Readonly<{
-  createWritable(): Promise<Readonly<{
-    write(value: Uint8Array): Promise<void>;
-    close(): Promise<void>;
-    abort?(reason?: unknown): Promise<void>;
-  }>>;
-}>>;
-
-async function savePortableBundleToBrowser(
-  name: string,
-  bundle: Awaited<ReturnType<typeof createPortableProjectBundle>>,
-): Promise<void> {
-  const filename = `${artifactStem(name)}${PORTABLE_PROJECT_EXTENSION}`;
-  const picker = (window as unknown as { showSaveFilePicker?: BrowserSaveFilePicker }).showSaveFilePicker;
-  if (!picker) {
-    if (bundle.byteLength > PORTABLE_PROJECT_LIMITS.defaultMaximumMaterializedBytes) {
-      throw new Error(
-        "This browser cannot stream a portable project of this size. Use a Chromium browser with the system save picker, or download the smaller metadata-only project instead.",
-      );
-    }
-    downloadBlob(filename, await bundle.toBlob());
-    return;
-  }
-  const handle = await picker({
-    suggestedName: filename,
-    types: [{
-      description: "SemaFrame portable project",
-      accept: { [PORTABLE_PROJECT_MEDIA_TYPE]: [PORTABLE_PROJECT_EXTENSION] },
-    }],
-  });
-  const writable = await handle.createWritable();
-  const reader = bundle.stream().getReader();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      await writable.write(value);
-    }
-    await writable.close();
-  } catch (error) {
-    await reader.cancel(error).catch(() => undefined);
-    await writable.abort?.(error).catch(() => undefined);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 function binaryBlobPart(contents: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(contents.byteLength);
   copy.set(contents);
@@ -753,6 +704,8 @@ export default function App() {
     setEntriesState(bounded);
   }, []);
   const [projectName, setProjectName] = useState(initialProjectName);
+  const projectNameRef = useRef(projectName);
+  projectNameRef.current = projectName;
   const [projectId, setProjectId] = useState(() => uid("project"));
   const [dirty, setDirty] = useState(false);
   const [notices, setNotices] = useState<AppNotice[]>([]);
@@ -1569,28 +1522,41 @@ export default function App() {
 
   const savePortableProject = useCallback(async () => {
     await runExclusive(async () => {
+      let snapshot: ReturnType<typeof watchPortableProjectSnapshot> | undefined;
       try {
         const store = workspaceStoreRef.current;
         if (!store) throw new Error("The workspace is not ready.");
-        const project = workspaceSerializerRef.current.fromStore(
-          projectId,
-          store,
-          { createdAt: createdAtRef.current },
+        const bundle = await savePortableProjectToBrowser(
+          `${artifactStem(projectName)}${PORTABLE_PROJECT_EXTENSION}`,
+          async () => {
+            const project = workspaceSerializerRef.current.fromStore(
+              projectId,
+              store,
+              { createdAt: createdAtRef.current },
+            );
+            snapshot = watchPortableProjectSnapshot(
+              (onChange) => store.subscribe(onChange),
+              () => workspaceStoreRef.current === store && projectNameRef.current === projectName,
+            );
+            return createPortableProjectBundle(
+              project,
+              realityAssetVaultRef.current!.vault,
+              { serializer: workspaceSerializerRef.current },
+            );
+          },
+          { download: downloadBlob },
         );
-        const bundle = await createPortableProjectBundle(
-          project,
-          realityAssetVaultRef.current!.vault,
-          { serializer: workspaceSerializerRef.current },
-        );
-        await savePortableBundleToBrowser(projectName, bundle);
-        setDirty(false);
+        const savedCurrentSnapshot = snapshot?.isCurrent() ?? false;
+        if (workspaceStoreRef.current === store) setDirty(!savedCurrentSnapshot);
         notice(
-          `Portable project saved with ${bundle.manifest.assets.length} verified Reality asset${bundle.manifest.assets.length === 1 ? "" : "s"}.`,
+          `Portable project saved with ${bundle.manifest.assets.length} verified Reality asset${bundle.manifest.assets.length === 1 ? "" : "s"}.${savedCurrentSnapshot ? "" : " The workspace changed during export; only the captured snapshot was saved."}`,
           "success",
         );
       } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (error instanceof PortableProjectSaveCancelledError) return;
         notice(`Couldn’t save portable project: ${friendlyError(error)}`, "error");
+      } finally {
+        snapshot?.dispose();
       }
     });
   }, [notice, projectId, projectName, runExclusive]);
@@ -1620,7 +1586,7 @@ export default function App() {
   const loadProject = useCallback(async (file: File) => {
     await runExclusive(async () => {
       try {
-        const restoredName = file.name.replace(/\.semaframe-project$|\.semaframe\.json$|\.json$/i, "");
+        const restoredName = workspaceProjectNameFromFilename(file.name);
         const result = await importWorkspaceProjectArtifact(file, {
           vault: realityAssetVaultRef.current!.vault,
           serializer: workspaceSerializerRef.current,
@@ -5550,6 +5516,7 @@ export default function App() {
       canRedo={Boolean(workspaceStoreRef.current?.canRedoUserCommand())}
       busy={busy}
       onProjectName={(name) => {
+        projectNameRef.current = name;
         setProjectName(name);
         setDirty(true);
         window.setTimeout(() => recoverySnapshotRef.current(), 0);
@@ -5753,7 +5720,7 @@ export default function App() {
       <div style={{ display: "contents" }} data-workspace-runtime-region="agent-history" data-workspace-runtime-children="true"><AgentHistoryDrawer open={agentHistoryOpen} entries={entries} onClose={() => setAgentHistoryOpen(false)} /></div>
     </AgentWorkspaceGate>
     {externalControlActive && recoveryAvailable && workspace.revision === 0 && workspace.components.size === 0 && <div className="recovery-banner" role="region" aria-label="Project recovery" data-workspace-runtime-region="project-recovery"><span>A local recovery is available.</span><button type="button" onClick={() => void restoreRecovery()}>Continue recovered project</button><button type="button" onClick={() => void dismissRecovery()}>Dismiss</button></div>}
-    <input ref={fileRef} hidden type="file" accept=".semaframe-project,.json,.semaframe.json,application/vnd.semaframe.project+zip,application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
+    <input ref={fileRef} hidden type="file" accept={WORKSPACE_PROJECT_FILE_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (dirty) { setPendingFile(file); setConfirm("open"); } else void loadProject(file); } event.target.value = ""; }} />
     <input ref={realityFileRef} hidden type="file" accept=".ply,.spz,.sog,.zip,application/ply,application/x-spz,model/vnd.sog,application/zip" onChange={(event) => { const file = event.target.files?.[0]; const relinkAssetId = pendingRealityRelinkRef.current ?? undefined; pendingRealityRelinkRef.current = null; if (file) void importRealityAssetFile(file, relinkAssetId); event.target.value = ""; }} />
     <input ref={photoSetFileRef} hidden type="file" multiple accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif" onChange={(event) => { const files = [...(event.target.files ?? [])]; if (files.length) void reconstructPhotoSet(files); event.target.value = ""; }} />
     <ConfirmDialog open={externalControlActive && confirm === "new"} title="Start a new project?" detail={dirty ? "You have unsaved changes. Save a copy first if you want to return to this workspace." : "This starts an empty workspace. Add a 3D Stage only when you need a 3D world."} confirmLabel="Start new" tone={dirty ? "danger" : "default"} onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); void resetProject(); }} />
