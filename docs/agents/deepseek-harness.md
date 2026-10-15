@@ -1,8 +1,20 @@
-# DeepSeek Harness as an external SemaFrame Agent
+# Connect DeepSeek Harness to SemaFrame
+
+On the connection screen, **Connect your Agent** presents Codex, Claude Code,
+and DeepSeek Harness as peer choices. Expand **DeepSeek Harness** for the setup
+described here. All three use the same Workspace tools, human approval, and
+scope checks; DSH does not receive a separate access level. Model selection,
+provider configuration, and authentication belong to whichever Agent client
+you choose.
+
+Codex and Claude Code use managed MCP registration through their official CLIs.
+DSH instead uses a Cordis overlay and Web-profile launch, without modifying its
+existing profile. See the [common Agent setup guide](../../README.md#connect-your-agent)
+for the other clients and shared approval behavior.
 
 This integration targets the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), whose executable is `dsh`, and its [`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md). It is not a DeepSeek API proxy, a built-in chat system, or an integration with an unrelated executable also named `dsh`.
 
-The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.0 for reproducibility. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
+The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.1 for reproducibility; this patch presents the three Agent clients together without changing the connection protocol. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
 
 ## Prerequisites
 
@@ -17,7 +29,7 @@ The commands below are included from `semaframe@0.5.0`; the historical `semafram
 With the official DSH runtime installed and SemaFrame open:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.0 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.1 -- semaframe agent launch --client dsh
 ```
 
 This runs the installed `dsh web --patch <temporary-overlay>` as a foreground child. The working directory remains the one you launched from; the existing DSH model/provider environment remains DSH's responsibility. SemaFrame writes only its own temporary overlay and removes it after the child exits. Interrupting the launcher forwards shutdown to the child. The wrapper does not modify `~/.dsh`, select a different model, enter credentials, or bypass browser approval. DSH may perform its own normal first-run initialization.
@@ -30,7 +42,7 @@ DSH owns its Web UI and model loop. SemaFrame owns Workspace validation, renderi
 
 ## Export a reusable overlay
 
-On SemaFrame's connection screen, choose **Copy DSH configuration**, save the copied JSON in a new `semaframe.dsh.json` file, then run:
+On SemaFrame's connection screen, expand **DeepSeek Harness** under **Connect your Agent**, choose **Copy DSH configuration**, save the copied JSON in a new `semaframe.dsh.json` file, then run:
 
 ```sh
 dsh web --patch ./semaframe.dsh.json
@@ -39,7 +51,7 @@ dsh web --patch ./semaframe.dsh.json
 Alternatively, the following command prints only the overlay JSON to stdout:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.0 -- semaframe agent config --client dsh
+npm exec --yes --package=semaframe@0.5.1 -- semaframe agent config --client dsh
 ```
 
 Save that output in a new file of your choice. JSON is valid YAML for the official Cordis overlay loader, so no YAML conversion or executable `!!js` expressions are required.

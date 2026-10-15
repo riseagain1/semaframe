@@ -4,6 +4,17 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-15
+
+### Changed
+
+- Present Codex, Claude Code, and DeepSeek Harness as peer, expandable choices under **Connect your Agent**, with client-specific registration or overlay instructions and one shared approval/scopes explanation. This is a setup UI/documentation change, not a protocol, permission, or model-provider change.
+- Keep each client's instructions in independently expandable, keyboard-operable details, with the same client choices available when managed registration status is loading or unavailable. Update the Agent setup documentation while preserving the previous README section anchor.
+
+### Compatibility
+
+- Workspace tools, API and protocol contracts, project schema, and approval/scope enforcement are unchanged from v0.5.0. Selecting or expanding a client does not launch it or grant Workspace access.
+
 ## [0.5.0] - 2026-10-14
 
 ### Added
@@ -148,7 +159,8 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/riseagain1/semaframe/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.3...v0.4.0
 [0.4.0-rc.3]: https://github.com/riseagain1/semaframe/compare/v0.4.0-rc.2...v0.4.0-rc.3

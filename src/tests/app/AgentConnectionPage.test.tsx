@@ -583,7 +583,9 @@ describe("AgentConnectionPage", () => {
       onManageAgentInstallation,
     })} />);
 
-    expect(screen.getByRole("heading", { name: "Connect your Agent client automatically" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Connect your Agent" })).toBeVisible();
+    fireEvent.click(screen.getByText("Codex").closest("summary")!);
+    fireEvent.click(screen.getByText("Claude Code").closest("summary")!);
     expect(screen.getByText("The stable SemaFrame launcher is installed for this client.")).toBeVisible();
     expect(screen.getByText("This client is not available on this computer.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Remove SemaFrame from Codex" })).toBeEnabled();
@@ -623,6 +625,7 @@ describe("AgentConnectionPage", () => {
       onManageAgentInstallation,
     })} />);
 
+    await user.click(screen.getByText("Claude Code").closest("summary")!);
     await user.click(screen.getByRole("button", { name: "Install" }));
     expect(onManageAgentInstallation).toHaveBeenCalledWith("claude", "install");
     expect(await screen.findByRole("status")).toHaveTextContent(
@@ -662,6 +665,7 @@ describe("AgentConnectionPage", () => {
       })),
     })} />);
 
+    await user.click(screen.getByText("Codex").closest("summary")!);
     await user.click(screen.getByRole("button", { name: "Update" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("A different SemaFrame configuration");
     expect(screen.queryByText(/SemaFrame was updated/i)).not.toBeInTheDocument();
