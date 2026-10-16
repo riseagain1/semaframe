@@ -14,7 +14,7 @@ for the other clients and shared approval behavior.
 
 This integration targets the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), whose executable is `dsh`, and its [`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md). It is not a DeepSeek API proxy, a built-in chat system, or an integration with an unrelated executable also named `dsh`.
 
-The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.4 for reproducibility, including Agent Guide 3.5, automatic scene recovery, handshake continuation and bounded concurrent requests without changing the connection protocol. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
+The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.5 for reproducibility, including Agent Guide 3.5, automatic scene recovery, handshake continuation, pairing-race recovery and bounded concurrent requests without changing the connection protocol. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ The commands below are included from `semaframe@0.5.0`; the historical `semafram
 With the official DSH runtime installed and SemaFrame open:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.4 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.5 -- semaframe agent launch --client dsh
 ```
 
 This runs the installed `dsh web --patch <temporary-overlay>` as a foreground child. The working directory remains the one you launched from; the existing DSH model/provider environment remains DSH's responsibility. SemaFrame writes only its own temporary overlay and removes it after the child exits. Interrupting the launcher forwards shutdown to the child. The wrapper does not modify `~/.dsh`, select a different model, enter credentials, or bypass browser approval. DSH may perform its own normal first-run initialization.
@@ -51,7 +51,7 @@ dsh web --patch ./semaframe.dsh.json
 Alternatively, the following command prints only the overlay JSON to stdout:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.4 -- semaframe agent config --client dsh
+npm exec --yes --package=semaframe@0.5.5 -- semaframe agent config --client dsh
 ```
 
 Save that output in a new file of your choice. JSON is valid YAML for the official Cordis overlay loader, so no YAML conversion or executable `!!js` expressions are required.

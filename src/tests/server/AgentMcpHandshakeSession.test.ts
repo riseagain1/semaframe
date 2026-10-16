@@ -34,8 +34,10 @@ describe("Agent MCP protocol-session handshake continuation", () => {
     expect(invoke).toHaveBeenLastCalledWith({ client_id: clientId, requested_scopes: ["workspace:read"], approval_token: TOKEN });
     await session.call(OFFER, "get_workspace_instructions", { client_id: clientId }, invoke);
     expect(invoke).toHaveBeenLastCalledWith({ client_id: clientId, requested_scopes: ["workspace:read"], approval_token: TOKEN });
-    await session.call(OFFER, "get_workspace_instructions", { client_id: "different-public-id" }, invoke);
-    expect(invoke).toHaveBeenLastCalledWith({ client_id: "different-public-id" });
+    invoke.mockClear();
+    const mismatch = await session.call(OFFER, "get_workspace_instructions", { client_id: "different-public-id" }, invoke);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(mismatch.structuredContent).toMatchObject({ error: { details: { reason: "approval_context_mismatch" } } });
   });
 
   it("retains the first token through later pending results and instruction refreshes", async () => {
@@ -60,8 +62,78 @@ describe("Agent MCP protocol-session handshake continuation", () => {
     const session = new AgentMcpHandshakeSession();
     await claim(session);
     const invoke = vi.fn(async () => error("approval_token_required"));
-    await session.call(OFFER, "get_workspace_instructions", input, invoke);
-    expect(invoke).toHaveBeenCalledWith(input);
+    const result = await session.call(OFFER, "get_workspace_instructions", input, invoke);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      error: {
+        code: "approval_token_required", retryable: true, required_action: "get_workspace_instructions",
+        details: { reason: "approval_context_mismatch", continuation_available: true, ...identity },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
+    await session.call(OFFER, "get_workspace_instructions", {}, invoke);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({ ...identity, approval_token: TOKEN });
+  });
+
+  it("retains an explicitly supplied proof only after upstream success with canonical identity and requested scopes", async () => {
+    const session = new AgentMcpHandshakeSession();
+    const canonical = { ...identity, requested_scopes: ["workspace:read"] };
+    const explicitInput = {
+      approval_token: TOKEN,
+      client_id: "not-the-approved-client",
+      client_name: "Not The Approved Name",
+      requested_scopes: ["workspace:delete"],
+    };
+    const resumed = vi.fn(async () => ({
+      content: [], structuredContent: { ok: true, data: { ...canonical, granted_scopes: ["workspace:read"] } },
+    }));
+    await session.call(OFFER, "get_workspace_instructions", explicitInput, resumed);
+    expect(resumed).toHaveBeenCalledExactlyOnceWith(explicitInput);
+    const invoke = vi.fn(async () => success);
+    await session.call(OFFER, "get_workspace_instructions", {}, invoke);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({ ...canonical, approval_token: TOKEN });
+    const mismatch = await session.call(OFFER, "get_workspace_instructions", { requested_scopes: ["workspace:delete"] }, invoke);
+    expect(mismatch.structuredContent).toMatchObject({ error: { details: { reason: "approval_context_mismatch" } } });
+    expect(invoke).toHaveBeenCalledTimes(1);
+
+    const anotherSession = new AgentMcpHandshakeSession();
+    await anotherSession.call(OFFER, "get_workspace_instructions", canonical, invoke);
+    expect(invoke).toHaveBeenLastCalledWith(canonical);
+  });
+
+  it("keeps requested scopes distinct from the narrower granted scopes when restoring explicit proof", async () => {
+    const session = new AgentMcpHandshakeSession();
+    await session.call(OFFER, "get_workspace_instructions", { approval_token: TOKEN }, async () => ({
+      content: [], structuredContent: { ok: true, data: { ...identity, granted_scopes: ["workspace:read"] } },
+    }));
+    const invoke = vi.fn(async () => success);
+    await session.call(OFFER, "get_workspace_instructions", identity, invoke);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({ ...identity, approval_token: TOKEN });
+  });
+
+  it.each([
+    error("approval_pending", { claim_id: "a-claim-with-no-new-proof", ...identity }),
+    error("approval_token_required"),
+    { content: [], structuredContent: { ok: true, data: { client_id: identity.client_id } } },
+    { content: [], structuredContent: { ok: true, data: { ...identity, client_name: null } } },
+    { content: [], isError: true, structuredContent: { ok: true, data: identity } },
+  ])("does not adopt explicit proof from a pending/error or noncanonical result %#", async (result) => {
+    const session = new AgentMcpHandshakeSession();
+    await session.call(OFFER, "get_workspace_instructions", { ...identity, approval_token: TOKEN }, async () => result);
+    const invoke = vi.fn(async () => success);
+    await session.call(OFFER, "get_workspace_instructions", {}, invoke);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({});
+  });
+
+  it("never creates continuation authority from a successful response without a supplied or returned proof", async () => {
+    const session = new AgentMcpHandshakeSession();
+    await session.call(OFFER, "get_workspace_instructions", identity, async () => ({
+      content: [], structuredContent: { ok: true, data: identity },
+    }));
+    const invoke = vi.fn(async () => success);
+    await session.call(OFFER, "get_workspace_instructions", {}, invoke);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({});
   });
 
   it("matches scope sets independent of order/duplicates but never overwrites an explicit token", async () => {

@@ -72,6 +72,39 @@ export async function executeAgentMcpUpstreamCall<Result>(
   }
 }
 
+type DiscoveryConnection<ClientKey, Discovery> = Readonly<{
+  client: ClientKey;
+  discovery: Discovery;
+}>;
+
+export function isCurrentAgentMcpDiscovery<ClientKey, Discovery>(
+  observation: Readonly<{ client: ClientKey; previous: Discovery }>,
+  current: DiscoveryConnection<ClientKey, Discovery> | undefined,
+): boolean {
+  return current?.client === observation.client && current?.discovery === observation.previous;
+}
+
+/**
+ * A discovery response belongs to the connection observed BEFORE its request.
+ * A reconnect can finish while that request is in flight. Its late response
+ * must not invalidate the replacement connection or erase its private claim.
+ */
+export async function readCurrentAgentMcpDiscovery<ClientKey, Discovery>(
+  current: () => DiscoveryConnection<ClientKey, Discovery> | undefined,
+  load: () => Promise<Discovery>,
+): Promise<Readonly<{
+  client: ClientKey;
+  previous: Discovery;
+  discovered: Discovery;
+}> | undefined> {
+  const before = current();
+  if (!before) return undefined;
+  const discovered = await load();
+  const after = current();
+  if (!isCurrentAgentMcpDiscovery({ client: before.client, previous: before.discovery }, after)) return undefined;
+  return { client: before.client, previous: before.discovery, discovered };
+}
+
 export type AgentMcpToolCatalogRefreshResult = "applied" | "superseded";
 
 /**

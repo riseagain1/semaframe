@@ -59,6 +59,56 @@ describe("AgentConnectionPage experience states", () => {
     expect(screen.queryByText("Agent control is active")).not.toBeInTheDocument();
   });
 
+  it("lets users deliberately replace a pending request without granting access", async () => {
+    const user = userEvent.setup();
+    const onRefreshOffer = vi.fn().mockResolvedValue(undefined);
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    render(<AgentConnectionPage {...props({
+      experience: {
+        kind: "approval_pending",
+        client: { name: "Codex", scopes: ["workspace:read"] },
+        expiresAt: new Date(Date.now() + 120_000).toISOString(),
+      },
+      onRefreshOffer, onApprove, onReject,
+    })} />);
+
+    expect(screen.getByRole("button", { name: "Approve client" })).toBeEnabled();
+    const recovery = screen.getByText("Client restarted or unable to continue?");
+    expect(recovery.closest("details")).not.toHaveAttribute("open");
+    await user.click(recovery);
+    expect(screen.getByText(/Starting over replaces this pending request without approving it/u)).toBeVisible();
+    expect(screen.getByText(/Your scene stays unchanged/u)).toBeVisible();
+    expect(onRefreshOffer).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Start over with a fresh URL" }));
+    expect(onRefreshOffer).toHaveBeenCalledOnce();
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
+  it("explains lost approval responses after client restart without silently renewing approval", async () => {
+    const user = userEvent.setup();
+    const onRefreshOffer = vi.fn().mockResolvedValue(undefined);
+    const onApprove = vi.fn();
+    render(<AgentConnectionPage {...props({
+      experience: {
+        kind: "approval_granted",
+        client: { name: "Codex", scopes: ["workspace:read"] },
+        handshakeStatus: "waiting",
+      },
+      onRefreshOffer, onApprove,
+    })} />);
+
+    expect(screen.getByText(/client restarted and lost its private approval response/u)).toBeVisible();
+    expect(screen.getByText(/approve its new fingerprint/u)).toBeVisible();
+    expect(onRefreshOffer).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Approve client" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start over with a fresh URL" }));
+    expect(onRefreshOffer).toHaveBeenCalledOnce();
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(screen.queryByText("Agent control is active")).not.toBeInTheDocument();
+  });
+
   it("counts down the pending request and disables approval at its own deadline", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
