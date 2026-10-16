@@ -4,6 +4,19 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-16
+
+### Fixed
+
+- Bind discovery reads to their original upstream client and snapshot, then recheck at the mutation boundary. Delayed responses from an obsolete connection cannot close a replacement connection or erase its approval continuation.
+- Explain identity/scope mismatches without forwarding the cached proof or discarding the original continuation. Explicit caller proof is retained only after upstream success, using the canonical response identity and requested scopes.
+- Clarify that stable launchers discover current offers automatically. Add an explicit pending-request restart path and distinguish URL discovery from required human approval; restarting never edits the scene or grants access.
+
+### Verification
+
+- Regression tests exercise the race through real stdio transports, the post-await mutation boundary, explicit-proof provenance, mismatched identities/scopes, and connection UI recovery.
+- A native MCP read-only acceptance run completed the approved handshake, automatic continuation, and three concurrent reads. The original scene remained at revision 10 with 19 components and one event connection, matching the pre-fix summary exactly; its backup checksum was unchanged. This is a connection-preservation test, not a new full DeepSeek modeling, browser-reload or headset acceptance run. See the [verification report](https://github.com/riseagain1/semaframe/blob/v0.5.5/docs/verification/agent-pairing-recovery-2026-10-16.md).
+
 ## [0.5.4] - 2026-10-16
 
 ### Fixed
@@ -208,7 +221,8 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/riseagain1/semaframe/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/riseagain1/semaframe/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/riseagain1/semaframe/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/riseagain1/semaframe/compare/v0.5.1...v0.5.2

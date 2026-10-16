@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as z from "zod/v4";
 import { AgentAssetIngress } from "../../../server/agent/AgentAssetIngress";
 import { AgentGateway } from "../../../server/agent/AgentGateway";
+import { createAgentBootstrapDiscoveryHandler } from "../../../server/agent/AgentBootstrapDiscovery";
 import {
   createNodeAgentGatewayHttpHandler,
   type AgentGatewayNodeHandler,
@@ -122,12 +123,17 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
   throw new Error(`stdio bridge process ${pid} did not exit within ${timeoutMs} ms`);
 }
 
-async function setup(options: { commandTimeoutMs?: number; port?: number } = {}): Promise<LiveRig & {
+async function setup(options: {
+  commandTimeoutMs?: number;
+  port?: number;
+  interceptRequest?: (request: IncomingMessage, response: ServerResponse) => boolean;
+} = {}): Promise<LiveRig & {
   connectionUrl: string;
   browserConnectionId: string;
 }> {
   let handler: AgentGatewayNodeHandler | undefined;
   const server = createServer((request, response) => {
+    if (options.interceptRequest?.(request, response)) return;
     if (!handler) {
       response.statusCode = 503;
       response.end();
@@ -352,6 +358,82 @@ afterEach(async () => {
 });
 
 describe("Agent MCP stdio transport bridge", () => {
+  it("does not let an old delayed discovery response erase a replacement offer's approval proof", async () => {
+    let discoveryCount = 0;
+    let failOldPost = false;
+    let oldPath: string;
+    let gatewayUrl: string;
+    let discovery: ReturnType<typeof createAgentBootstrapDiscoveryHandler>;
+    let releaseOldDiscovery: (() => void) | undefined;
+    let signalDelayedDiscovery!: () => void;
+    const delayedDiscovery = new Promise<void>((resolve) => { signalDelayedDiscovery = resolve; });
+    const rig = await setup({
+      interceptRequest: (request, response) => {
+        if (request.url === "/.well-known/semaframe-agent" && ++discoveryCount === 2) {
+          // Snapshot offer A now, but return its response only after the same
+          // bridge has independently reconnected and claimed replacement B.
+          const snapshot = discovery.fetch(new Request(`${gatewayUrl}${request.url}`, {
+            headers: { host: new URL(gatewayUrl).host },
+          }), "127.0.0.1");
+          void snapshot.text().then((body) => {
+            let released = false;
+            releaseOldDiscovery = () => {
+              if (released) return;
+              released = true;
+              response.writeHead(snapshot.status, Object.fromEntries(snapshot.headers));
+              response.end(body);
+            };
+            signalDelayedDiscovery();
+          });
+          return true;
+        }
+        if (failOldPost && request.method === "POST" && request.url === oldPath) {
+          failOldPost = false;
+          request.socket.destroy();
+          return true;
+        }
+        return false;
+      },
+    });
+    gatewayUrl = new URL(rig.connectionUrl).origin;
+    oldPath = new URL(rig.connectionUrl).pathname;
+    discovery = createAgentBootstrapDiscoveryHandler(rig.gateway, gatewayUrl);
+    const transport = stableStdioTransport(gatewayUrl);
+    const client = new Client({ name: "late-discovery-handshake-test", version: "1.0.0" });
+    clients.push(client);
+    const identity = {
+      client_id: "late-discovery-agent",
+      client_name: "Late Discovery Agent",
+      requested_scopes: ["workspace:read"],
+    };
+    const instructions = (arguments_: Record<string, unknown>) => client.callTool({
+      name: "get_workspace_instructions", arguments: arguments_,
+    });
+    try {
+      await client.connect(transport);
+      await delayedDiscovery;
+      rig.gateway.refreshOffer();
+      failOldPost = true;
+      expect((await instructions(identity)).structuredContent)
+        .toMatchObject({ ok: false, error: { code: "gateway_unavailable" } });
+      const initial = await instructions(identity);
+      expect(initial.structuredContent).toMatchObject({ ok: false, error: { code: "approval_pending" } });
+      const claimId = rig.gateway.getConfig().pendingApproval?.claimId;
+      expect((await instructions({})).structuredContent)
+        .toMatchObject({ ok: false, error: { code: "approval_pending" } });
+
+      releaseOldDiscovery!();
+      // Wait through another monitor poll; the late A result must not clear
+      // the B claim or close its healthy upstream connection.
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect((await instructions({})).structuredContent)
+        .toMatchObject({ ok: false, error: { code: "approval_pending" } });
+      expect(rig.gateway.getConfig().pendingApproval?.claimId).toBe(claimId);
+    } finally {
+      releaseOldDiscovery?.();
+    }
+  }, 20_000);
+
   it.each(["legacy-offer", "stable-discovery", "anonymous-stable-discovery"] as const)(
     "continues pending approval and browser-refresh handshakes without model-managed tokens (%s)",
     async (mode) => {
@@ -426,6 +508,49 @@ describe("Agent MCP stdio transport bridge", () => {
       expect(stderr).not.toContain(claim.details.approval_token);
     }, 20_000,
   );
+
+  it("resumes an explicitly supplied approved proof after bridge restart without sharing it with another process", async () => {
+    const rig = await setup();
+    const gatewayUrl = new URL(rig.connectionUrl).origin;
+    const first = new Client({ name: "explicit-proof-original", version: "1.0.0" });
+    clients.push(first);
+    await first.connect(stableStdioTransport(gatewayUrl));
+    const identity = {
+      client_id: "explicit-proof-agent",
+      client_name: "Explicit Proof Agent",
+      requested_scopes: ["workspace:read"],
+    };
+    const initial = await first.callTool({ name: "get_workspace_instructions", arguments: identity });
+    const claim = (initial.structuredContent as {
+      error: { code: string; details: { approval_token: string; claim_id: string } };
+    }).error;
+    expect(claim.code).toBe("approval_pending");
+    await first.close();
+
+    const restarted = new Client({ name: "explicit-proof-restarted", version: "1.0.0" });
+    clients.push(restarted);
+    await restarted.connect(stableStdioTransport(gatewayUrl));
+    expect((await restarted.callTool({ name: "get_workspace_instructions", arguments: identity })).structuredContent)
+      .toMatchObject({ ok: false, error: { code: "approval_token_required" } });
+    rig.gateway.approveClaim(claim.details.claim_id);
+
+    for (const arguments_ of [{ approval_token: claim.details.approval_token }, {}]) {
+      const pending = restarted.callTool({ name: "get_workspace_instructions", arguments: arguments_ });
+      const command = await pollCommand(rig.gateway, rig.browserConnectionId);
+      expect(command.name).toBe("get_workspace_instructions");
+      expect(command.input).toEqual(identity);
+      submitResult(rig.gateway, rig.browserConnectionId, command.id, {
+        ok: true,
+        data: {
+          ...identity,
+          granted_scopes: ["workspace:read"],
+          session_token: "session_explicit_proof_restarted",
+          guide_digest: "sha256:explicit-proof-guide",
+        },
+      });
+      expect((await pending).isError).toBe(false);
+    }
+  }, 20_000);
 
   it("uses the browser-approved HTTP claim for photo reconstruction instead of the bearer REST path", async () => {
     const rig = await setup();

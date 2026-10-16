@@ -9,6 +9,8 @@ import {
   AgentMcpToolCatalogRefreshCoordinator,
   classifyAgentMcpUpstreamFailure,
   executeAgentMcpUpstreamCall,
+  readCurrentAgentMcpDiscovery,
+  isCurrentAgentMcpDiscovery,
 } from "../../../server/agent/AgentMcpBridgeReliability";
 
 function deferred<Value>() {
@@ -22,6 +24,57 @@ function deferred<Value>() {
 }
 
 describe("Agent MCP bridge reliability", () => {
+  it("rechecks at the consumer when a reconnect finishes after the loader guard", async () => {
+    let connection = { client: {}, discovery: { url: "offer-A" } };
+    const reply = deferred<{ url: string }>();
+    const pending = readCurrentAgentMcpDiscovery(() => connection, () => reply.promise);
+    reply.resolve({ url: "offer-B" });
+    queueMicrotask(() => { connection = { client: {}, discovery: { url: "offer-C" } }; });
+    const observation = await pending;
+    expect(observation).toBeDefined();
+    expect(isCurrentAgentMcpDiscovery(observation!, connection)).toBe(false);
+    expect(isCurrentAgentMcpDiscovery(observation!, undefined)).toBe(false);
+  });
+
+  it("ignores discovery started before a replacement connection claimed a fresh offer", async () => {
+    const oldClient = {};
+    const oldOffer = { url: "offer-A" };
+    const freshOffer = { url: "offer-B" };
+    let connection = { client: oldClient, discovery: oldOffer };
+    const oldResponse = deferred<typeof oldOffer>();
+    const pending = readCurrentAgentMcpDiscovery(() => connection, () => oldResponse.promise);
+    connection = { client: {}, discovery: freshOffer };
+    oldResponse.resolve(oldOffer);
+    await expect(pending).resolves.toBeUndefined();
+    expect(connection.discovery).toBe(freshOffer);
+  });
+
+  it("rejects stale discovery snapshots even if the client reference is reused", async () => {
+    const client = {};
+    let connection: { client: object; discovery: object } | undefined = { client, discovery: {} };
+    const response = deferred<object>();
+    const pending = readCurrentAgentMcpDiscovery(() => connection, () => response.promise);
+    connection = { client, discovery: {} };
+    response.resolve({});
+    await expect(pending).resolves.toBeUndefined();
+
+    const closing = deferred<object>();
+    const shutdown = readCurrentAgentMcpDiscovery(() => connection, () => closing.promise);
+    connection = undefined;
+    closing.resolve({});
+    await expect(shutdown).resolves.toBeUndefined();
+  });
+
+  it("accepts a current discovery observation without dispatching any tool", async () => {
+    const connection = { client: {}, discovery: { url: "offer-A" } };
+    const discovered = { url: "offer-B" };
+    await expect(readCurrentAgentMcpDiscovery(() => connection, async () => discovered))
+      .resolves.toEqual({ client: connection.client, previous: connection.discovery, discovered });
+    const load = vi.fn(async () => discovered);
+    await expect(readCurrentAgentMcpDiscovery(() => undefined, load)).resolves.toBeUndefined();
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it("never lets an older tools/list response overwrite a newer catalog", async () => {
     const coordinator = new AgentMcpToolCatalogRefreshCoordinator<object>();
     const client = {};

@@ -168,7 +168,7 @@ const STATUS_COPY: Record<AgentConnectionStatus, { eyebrow: string; title: strin
   waiting: {
     eyebrow: "Ready to connect",
     title: "Give this connection to your client.",
-    detail: "Paste this address into the agent client you want to use, then keep this project open for workspace updates. Realtime and voice agents use the same connection.",
+    detail: "Ask your configured Agent to connect, or use the address below for manual setup. Keep this project open for workspace updates. Realtime and voice agents use the same connection.",
   },
   approval: {
     eyebrow: "Approval required",
@@ -345,6 +345,7 @@ export function AgentConnectionPage({
   const [installationNotice, setInstallationNotice] = useState<string>();
   const blocked = busy || pending !== null || pendingInstallation !== null;
   const copy = STATUS_COPY[status];
+  const hasManagedLauncher = agentInstallations?.clients.some((client) => client.state === "installed") ?? false;
 
   useEffect(() => {
     setPermission(status === "disabled" ? false : allowDeleteAndClear);
@@ -627,6 +628,7 @@ export function AgentConnectionPage({
                   : "Ask the client to reconnect and review a fresh approval request. Your project remains preserved."}</p>}
               </div>}
               <p className="agent-approved-note">The Workspace unlocks only after this browser completes the instruction handshake. If the Gateway expires this approval, reconnect and review a fresh request.</p>
+              {!handshakeInFlight && <p className="agent-approved-note">If the client restarted and lost its private approval response, retrying alone cannot continue this request. Start over with a fresh URL, ask the client to reconnect, and approve its new fingerprint. Your scene stays unchanged.</p>}
               <div className="agent-recovery-actions">
                 {onRetry && <button type="button" onClick={() => void runAction("retry", onRetry)} disabled={blocked}><RefreshCw className={pending === "retry" ? "spin-slow" : undefined} size={15} aria-hidden="true" />Check status</button>}
                 {onRefreshOffer && <button type="button" onClick={() => void runAction("refresh", onRefreshOffer)} disabled={blocked}>{pending === "refresh" ? "Starting over…" : "Start over with a fresh URL"}</button>}
@@ -707,15 +709,20 @@ export function AgentConnectionPage({
                 </button>}
                 {approvalExpired && onRefreshOffer && <button type="button" onClick={() => void runAction("refresh", onRefreshOffer)} disabled={blocked}>Create fresh URL</button>}
               </div>
+              {!approvalExpired && onRefreshOffer && <details className="agent-local-setup">
+                <summary>Client restarted or unable to continue?</summary>
+                <p>Starting over replaces this pending request without approving it. Your scene stays unchanged. Ask the client to reconnect, then review its new fingerprint and permissions.</p>
+                <button type="button" onClick={() => void runAction("refresh", onRefreshOffer)} disabled={blocked}>{pending === "refresh" ? "Starting over…" : "Start over with a fresh URL"}</button>
+              </details>}
             </section>
           ) : (
             <>
               <section className="agent-connect-step" aria-labelledby={`${titleId}-connect`}>
                 <span className="agent-step-number" aria-hidden="true">{status === "waiting" ? "01" : status === "connected" ? "✓" : "!"}</span>
                 <div>
-                  <h2 id={`${titleId}-connect`}>{status === "waiting" ? "Paste this into your client" : status === "connected" ? "Manage this connection" : "Reconnect or create a new pairing"}</h2>
+                  <h2 id={`${titleId}-connect`}>{status === "waiting" ? hasManagedLauncher ? "Ask your installed Agent to connect" : "Connect your Agent or use this address" : status === "connected" ? "Manage this connection" : "Reconnect or create a new pairing"}</h2>
                   <p>{status === "waiting"
-                    ? "Use this exact address in the agent client you want to control the workspace. Realtime and voice agents use the same connection. Do not close this browser tab."
+                    ? "The stable SemaFrame launcher discovers the latest connection offer automatically. A configured local client does not need a new URL pasted after every refresh. For manual URL setup, use this exact address. Do not close this browser tab."
                     : status === "connected"
                       ? "The connected client can inspect and change this open workspace through validated engine transactions."
                       : "The previous workspace remains preserved while the external client is offline. Reconnect to unlock editing."}</p>
@@ -742,7 +749,7 @@ export function AgentConnectionPage({
                   </button>
                   <p className="agent-copy-guidance" role="note">{status === "connected"
                     ? "Keep this address for reconnecting the approved client. Revoke the pairing before giving control to a different agent."
-                    : "After copying, paste it into your agent client and ask it to connect. Access is still controlled from this page."}</p>
+                    : "For manual setup, paste the copied address into your agent client and ask it to connect. An installed stable launcher finds the current offer without copying. Access still requires approval on this page."}</p>
                   {(onCopySetup || onCopyRestSetup) && <details className="agent-local-setup">
                     <summary>Advanced local setup</summary>
                     <p>The stdio MCP setup contains only the non-authorizing offer URL and still requires in-app approval. The REST setup contains an ephemeral bearer; copy it only into a trusted local REST client and never into chat, a URL, project data, or logs.</p>
@@ -812,7 +819,7 @@ export function AgentConnectionPage({
                   <details className="agent-client-option" data-client={clientId} data-state={client?.state}>
                     <summary><strong>{displayName}</strong><span>Register the MCP connection once</span></summary>
                     <div className="agent-client-instructions" role="region" aria-label={`${displayName} setup`}>
-                      <p>Register SemaFrame with your installed {displayName} client, then restart the client once. The stable launcher discovers the local Gateway after restarts.</p>
+                      <p>Register SemaFrame with your installed {displayName} client, then restart the client once. The stable launcher discovers the local Gateway and latest connection offer after restarts; there is no need to paste a new URL after each refresh. A new request still requires your approval here.</p>
                       <code className="agent-client-command">semaframe agent install --client {clientId}</code>
                       {client && <p className="agent-client-health">
                         <span className="agent-installation-health" aria-hidden="true">
@@ -847,7 +854,7 @@ export function AgentConnectionPage({
                 <details className="agent-client-option" data-client="dsh">
                   <summary><strong>DeepSeek Harness (dsh)</strong><span>Launch with an MCP configuration overlay</span></summary>
                   <div className="agent-client-instructions" role="region" aria-label="DeepSeek Harness (dsh) setup">
-                    <p>Launch your installed DSH Web profile with SemaFrame's MCP configuration. Your existing DSH profile stays unchanged.</p>
+                    <p>Launch your installed DSH Web profile with SemaFrame's MCP configuration. Its stable launcher discovers the latest connection offer without repeatedly copying URLs. New requests still require approval here. Your existing DSH profile stays unchanged.</p>
                     <code className="agent-client-command">semaframe agent launch --client dsh</code>
                     <div className="agent-client-manual">
                       <p>Or copy an overlay, save it as <code>semaframe.dsh.json</code>, then run:</p>

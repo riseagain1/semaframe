@@ -15,6 +15,8 @@ import {
 import {
   AgentMcpToolCatalogRefreshCoordinator,
   executeAgentMcpUpstreamCall,
+  readCurrentAgentMcpDiscovery,
+  isCurrentAgentMcpDiscovery,
 } from "../server/agent/AgentMcpBridgeReliability";
 import type { AgentCommandName } from "../server/agent/contracts";
 import {
@@ -268,22 +270,31 @@ function beginDiscoveryMonitor(): void {
       } catch {
         return;
       }
-      let discovered: AgentBootstrapDocument;
+      let observation: Awaited<ReturnType<typeof readCurrentAgentMcpDiscovery<Client, AgentBootstrapDocument>>>;
       try {
-        discovered = await discoverAgentMcpOffer(gatewayUrl, {
-          signal: AbortSignal.any([
-            controller.signal,
-            AbortSignal.timeout(Math.min(connectTimeoutMs, 5_000)),
-          ]),
-        });
+        observation = await readCurrentAgentMcpDiscovery(
+          () => upstreamClient && upstreamDiscovery && !closing
+            ? { client: upstreamClient, discovery: upstreamDiscovery }
+            : undefined,
+          () => discoverAgentMcpOffer(gatewayUrl, {
+            signal: AbortSignal.any([
+              controller.signal,
+              AbortSignal.timeout(Math.min(connectTimeoutMs, 5_000)),
+            ]),
+          }),
+        );
       } catch {
         // A restart has an expected unavailable window. Keep the last public
         // catalog and let the next bounded poll discover its replacement.
         continue;
       }
-      const previous = upstreamDiscovery;
-      const client = upstreamClient;
-      if (!previous || !client) continue;
+      if (!observation || controller.signal.aborted) continue;
+      // Awaiting the helper itself yields once more after its internal guard.
+      // Re-check at the synchronous mutation boundary, not only in the loader.
+      if (closing || !isCurrentAgentMcpDiscovery(observation,
+        upstreamClient && upstreamDiscovery ? { client: upstreamClient, discovery: upstreamDiscovery } : undefined,
+      )) continue;
+      const { previous, client, discovered } = observation;
       if (
         discovered.gateway_instance_id !== previous.gateway_instance_id
         || discovered.connection_url !== previous.connection_url
@@ -310,7 +321,9 @@ function beginDiscoveryMonitor(): void {
           continue;
         }
       }
-      upstreamDiscovery = discovered;
+      // A tool-list refresh above also awaits I/O. Do not attach an old
+      // discovery snapshot to a client that reconnected during that wait.
+      if (upstreamClient === client && upstreamDiscovery === previous) upstreamDiscovery = discovered;
     }
   })().finally(() => {
     if (discoveryMonitorAbort === controller) discoveryMonitorAbort = undefined;

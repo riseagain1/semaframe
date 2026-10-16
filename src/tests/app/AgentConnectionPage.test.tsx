@@ -267,8 +267,8 @@ describe("AgentConnectionPage", () => {
 
     const field = screen.getByRole("textbox", { name: "Connection URL" });
     expect(field).toHaveValue("http://127.0.0.1:4317/connect/offer-123");
-    expect(screen.getByText(/Paste this address into the agent client/i)).toBeVisible();
-    expect(screen.getAllByText(/Realtime and voice agents use the same connection/i)).toHaveLength(2);
+    expect(screen.getByText(/Ask your configured Agent to connect, or use the address below for manual setup/u)).toBeVisible();
+    expect(screen.getByText(/Realtime and voice agents use the same connection/i)).toBeVisible();
     expect(writeText).not.toHaveBeenCalled();
 
     fireEvent.focus(field);
@@ -330,6 +330,31 @@ describe("AgentConnectionPage", () => {
       onRefreshOffer,
     })} />);
     expect(screen.getByRole("button", { name: "Create fresh URL" })).toBeVisible();
+  });
+
+  it("explains automatic offer discovery for an installed launcher while preserving manual setup", () => {
+    const onCopySetup = vi.fn();
+    const { rerender } = render(<AgentConnectionPage {...connectionProps({
+      connectionUrl: "http://127.0.0.1:4317/mcp/connect/current-offer",
+      onCopySetup,
+      agentInstallations: {
+        version: 1,
+        clients: [{
+          client: "codex", displayName: "Codex", state: "installed",
+          changed: false, restartRequired: false, detail: "Stable launcher installed.",
+        }],
+      },
+    })} />);
+
+    expect(screen.getByRole("heading", { name: "Ask your installed Agent to connect" })).toBeVisible();
+    expect(screen.getByText(/A configured local client does not need a new URL pasted after every refresh/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy connection URL" })).toBeEnabled();
+    expect(screen.getByText(/Access still requires approval on this page/u)).toBeVisible();
+    expect(onCopySetup).not.toHaveBeenCalled();
+
+    rerender(<AgentConnectionPage {...connectionProps()} />);
+    expect(screen.getByRole("heading", { name: "Connect your Agent or use this address" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Ask your installed Agent to connect" })).not.toBeInTheDocument();
   });
 
   it("gives safe recovery guidance when the gateway cannot be reached", async () => {

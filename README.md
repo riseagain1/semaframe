@@ -49,7 +49,9 @@ The rooms, city, and feeds are deterministic synthetic evidence—not field scan
 
 ## What's new in v0.5
 
-The current stable release is `v0.5.4`. This patch repairs Agent handshake continuation, update-only zero-ID reservations, canonical placement guidance, and normal concurrent requests through a bounded FIFO. Browser connection recovery safely handles transient configuration reads and stopped or failed registration without replaying writes. A real DeepSeek-to-Codex workflow verified modeling, refresh recovery, saved-project reopen, continued editing, undo/redo, and portable ZIP reopen. DeepSeek needed one geometry correction; this is not a claim of error-free model reasoning. [Read the v0.5.4 release notes](./docs/release-v0.5.4.md) and [verification evidence and limits](./docs/verification/agent-session-resilience-2026-10-16.md).
+The current stable release is `v0.5.5`. This patch fixes a pairing-recovery race: a delayed discovery response for an old connection can no longer clear a replacement connection's approval continuation. It also explains mismatched identity/scope retries, safely resumes explicitly supplied proof after upstream verification, and clarifies automatic offer discovery versus fresh human approval. A real read-only acceptance run verified automatic continuation and three concurrent reads while preserving the original 19-component scene. [Read the v0.5.5 release notes](./docs/release-v0.5.5.md) and [verification evidence and limits](./docs/verification/agent-pairing-recovery-2026-10-16.md).
+
+The v0.5.4 handshake, update-only zero-ID reservation, canonical placement and bounded-concurrency improvements remain. Its real DeepSeek-to-Codex workflow covered modeling, refresh recovery, saved-project reopen, continued editing, undo/redo and portable ZIP reopen; DeepSeek needed a geometry correction. That earlier acceptance is documented separately and is not a claim of error-free model reasoning or a new full modeling run for every patch. [Read the handoff verification](./docs/verification/agent-session-resilience-2026-10-16.md).
 
 The v0.5.1 connection experience remains: Codex, Claude Code, and DeepSeek Harness are peer, expandable choices under **Connect your Agent**. Setup instructions differ, not their Workspace authority; all use the same approval, instruction handshake, and scope checks. These patches require no protocol, permission, or project-schema migration; v0.5.3 adds collision diagnostics and advances Agent Guide to 3.5.
 
@@ -221,7 +223,7 @@ npm exec --yes --package=semaframe -- semaframe start
 ```
 
 For a reproducible installation, replace `--package=semaframe` with
-`--package=semaframe@0.5.4`. Older releases and candidates remain available by exact version;
+`--package=semaframe@0.5.5`. Older releases and candidates remain available by exact version;
 `next` is not required for this stable release.
 
 Use `semaframe xr` instead of `semaframe start` to include the separate XR
@@ -453,7 +455,7 @@ installed on PATH (or the macOS DeepSeek Harness app installed), keep SemaFrame
 open and run:
 
 ```bash
-npm exec --yes --package=semaframe@0.5.4 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.5 -- semaframe agent launch --client dsh
 ```
 
 This launches DSH's Web profile with an independent temporary Cordis overlay and
@@ -466,7 +468,7 @@ scopes in SemaFrame when DSH first calls `get_workspace_instructions`.
 For an existing DSH launch workflow, use **Copy DSH configuration** inside the
 DeepSeek Harness details, save it as `semaframe.dsh.json`, and start
 `dsh web --patch ./semaframe.dsh.json`. The same JSON (a valid YAML subset) is
-available through `npm exec --yes --package=semaframe@0.5.4 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
+available through `npm exec --yes --package=semaframe@0.5.5 -- semaframe agent config --client dsh`. From a development checkout, `node bin/semaframe.mjs` can replace the npm launcher. The overlay
 contains only the launcher paths and fixed loopback Gateway origin, never model
 keys, pairing bearers, or short-lived connection URLs. Regenerate it if the
 SemaFrame installation moves. Do not load two SemaFrame overlays into one DSH
