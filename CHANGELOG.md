@@ -208,7 +208,8 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 - Project JSON stores Reality descriptors and digests, not binary payloads. Another browser may require exact-digest relinking.
 - Modeling remains light CAD: this release does not claim a general sketch constraint system, full feature tree, FEA, GD&T, or engineering certification.
 
-[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/riseagain1/semaframe/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/riseagain1/semaframe/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/riseagain1/semaframe/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/riseagain1/semaframe/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/riseagain1/semaframe/compare/v0.5.0...v0.5.1
