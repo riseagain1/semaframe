@@ -4,6 +4,20 @@ All notable SemaFrame changes are recorded here. The project follows semantic ve
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-16
+
+### Fixed
+
+- Keep approval continuation in memory in the official stdio adapter, bound to the current protocol session, gateway, offer, identity and scopes. Repeated instruction requests preserve the approved client identity while obtaining fresh core sessions; no human approval or authorization check is bypassed.
+- Accept integer zero-ID reservations consistently in MCP, REST and the core for update-only batches. Clarify canonical spatial candidate placement, geometry and full-size collider fields with an executable guide example.
+- Queue normal overlapping Agent requests in a bounded FIFO instead of immediately returning `engine_busy`. Recheck authorization and deadlines before delivery, cancel invalidated queued work, and retain a barrier for delivered requests with unknown outcomes; writes are never automatically replayed.
+- Retry only native transport failures of the read-only browser configuration GET with bounded backoff. Release known owned leases after failed setup, reject late registration after stop, and avoid contradictory result acknowledgements after an acknowledgement failure.
+
+### Verification
+
+- Final local gates passed: 280 Vitest files / 2,385 tests, 45 CLI tests, 23 XR launcher tests, lint, TypeScript, and desktop/XR production builds.
+- Real DeepSeek modeling, Chrome refresh recovery, save/reopen, real Codex continued editing with concurrent reads and zero-ID preparation, undo/redo, portable ZIP export/reopen, and final DeepSeek readback passed. Independent production-importer audits verified six artifacts. DeepSeek needed a geometry correction and human reminder; this is not a one-shot or universal Agent guarantee. See the [acceptance report](https://github.com/riseagain1/semaframe/blob/v0.5.4/docs/verification/agent-session-resilience-2026-10-16.md).
+
 ## [0.5.3] - 2026-10-15
 
 ### Fixed

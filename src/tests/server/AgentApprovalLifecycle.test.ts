@@ -85,6 +85,38 @@ async function complete(fixture: Fixture) {
 afterEach(() => gateways.splice(0).forEach((gateway) => gateway.close()));
 
 describe("bounded post-approval instruction redemption", () => {
+  it.each([undefined, "explicit-agent-id"])("pins one public identity across repeated handshakes for %s", async (clientId) => {
+    const fixture = setup();
+    const path = fixture.path();
+    const initial = await fixture.gateway.dispatchOffer(path, "get_workspace_instructions", {
+      ...(clientId === undefined ? {} : { client_id: clientId }),
+      requested_scopes: ["workspace:read"],
+    }, {});
+    const details = (initial.payload as { error: { details: {
+      approval_token: string; claim_id: string; client_id: string;
+    } } }).error.details;
+    const expectedId = clientId ?? `workspace_client_${details.claim_id}`;
+    expect(details.client_id).toBe(expectedId);
+    expect(fixture.gateway.getConfig().pendingApproval?.clientId).toBe(expectedId);
+    fixture.gateway.approveClaim(details.claim_id);
+    for (const extra of [{}, { client_id: "different-retry-identity" }]) {
+      const result = fixture.gateway.dispatchOffer(path, "get_workspace_instructions", {
+        approval_token: details.approval_token, ...extra,
+      }, {});
+      expect((await complete(fixture)).input).toMatchObject({ client_id: expectedId });
+      expect((await result).responseOk).toBe(true);
+    }
+    fixture.gateway.rotatePairing();
+    const fresh = await fixture.gateway.dispatchOffer(fixture.path(), "get_workspace_instructions", {
+      ...(clientId === undefined ? {} : { client_id: clientId }),
+      requested_scopes: ["workspace:read"],
+    }, {});
+    const newDetails = (fresh.payload as { error: { details: { client_id: string; claim_id: string } } }).error.details;
+    expect(newDetails.claim_id).not.toBe(details.claim_id);
+    if (clientId === undefined) expect(newDetails.client_id).not.toBe(expectedId);
+    else expect(newDetails.client_id).toBe(clientId);
+  });
+
   it.each(["core", "full"])("forwards explicit %s guide detail without changing the approved identity or exposing claim proof", async (detail) => {
     const fixture = setup();
     const request = await claim(fixture);
@@ -242,8 +274,7 @@ describe("bounded post-approval instruction redemption", () => {
     fixture.gateway.approveClaim(request.id);
     const original = fixture.gateway.getConfig().approvedHandshake;
     const first = redeem(fixture, request);
-    const busy = await redeem(fixture, request);
-    expect(busy).toMatchObject({ responseOk: false, payload: { error: { code: "engine_busy" } } });
+    const queued = redeem(fixture, request);
     expect(fixture.gateway.getConfig().approvedHandshake?.expiresAt).toBe(original?.expiresAt);
     const poll = await fixture.gateway.pollBrowser(fixture.browserConnectionId);
     if (poll.kind !== "command") throw new Error("Expected a command");
@@ -255,6 +286,7 @@ describe("bounded post-approval instruction redemption", () => {
       error: { code: "engine_timeout", message: "Transient test failure" },
     });
     expect(await first).toMatchObject({ responseOk: false, payload: { error: { code: "engine_timeout" } } });
+    expect(await queued).toMatchObject({ responseOk: false, payload: { error: { code: "connection_offer_expired" } } });
     expect(fixture.gateway.getConfig().connectionNotice?.reason).toBe("handshake_expired");
   });
 

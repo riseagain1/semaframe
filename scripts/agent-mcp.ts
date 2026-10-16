@@ -28,6 +28,7 @@ import {
   AgentMcpToolMirror,
   trackAgentMcpToolMirrorLifecycle,
 } from "../server/agent/AgentMcpToolMirror";
+import { AgentMcpHandshakeSession } from "../server/agent/AgentMcpHandshakeSession";
 
 const configuredGatewayUrl = process.env.SEMAFRAME_AGENT_GATEWAY_URL?.trim();
 const configuredLegacyOfferUrl = process.env.SEMAFRAME_AGENT_MCP_URL?.trim();
@@ -97,6 +98,8 @@ let upstreamDiscovery: AgentBootstrapDocument | undefined;
 let latestToolCatalog: readonly Tool[] | undefined;
 const toolMirrors = new Set<AgentMcpToolMirror>();
 const toolCatalogRefreshes = new AgentMcpToolCatalogRefreshCoordinator<Client>();
+const upstreamOfferKeys = new WeakMap<Client, string>();
+const handshakeSessions = new Set<AgentMcpHandshakeSession>();
 let closing = false;
 let closePromise: Promise<void> | undefined;
 
@@ -212,6 +215,10 @@ async function connectUpstream(): Promise<Client> {
       connectionTimeout = undefined;
       upstreamClient = client;
       upstreamDiscovery = resolved.discovery;
+      upstreamOfferKeys.set(client, JSON.stringify([
+        resolved.discovery?.gateway_instance_id ?? null,
+        resolved.url.href,
+      ]));
       beginDiscoveryMonitor();
       return client;
     } catch (error) {
@@ -281,6 +288,7 @@ function beginDiscoveryMonitor(): void {
         discovered.gateway_instance_id !== previous.gateway_instance_id
         || discovered.connection_url !== previous.connection_url
       ) {
+        for (const session of handshakeSessions) session.clear();
         toolCatalogRefreshes.invalidate(client);
         upstreamClient = undefined;
         upstreamDiscovery = undefined;
@@ -420,10 +428,12 @@ function upstreamMcpRequestError(error: unknown): CallToolResult {
  * The stdio adapter is a transport bridge, not a second authority path. Every
  * tool call traverses the exact browser-approved Streamable HTTP MCP offer, so
  * non-default scopes and reconstruction principals are resolved by the same
- * gateway code as a direct HTTP client. Pairing bearers and approval tokens are
- * never invented, cached, or injected here.
+ * gateway code as a direct HTTP client. A protocol session retains only its
+ * upstream-issued approval continuation in memory; the gateway still requires
+ * the user's approval. Pairing bearers are never invented or injected here.
  */
 async function callUpstreamRaw(
+  handshake: AgentMcpHandshakeSession,
   name: string,
   input: unknown,
   signal?: AbortSignal,
@@ -441,14 +451,12 @@ async function callUpstreamRaw(
       isError: true,
     };
   }
-  return executeAgentMcpUpstreamCall({
+  return handshake.call(upstreamOfferKeys.get(client)!, name, input, (arguments_) => executeAgentMcpUpstreamCall({
     ...(signal ? { signal } : {}),
     invoke: async () => await client!.callTool(
       {
         name,
-        arguments: input && typeof input === "object" && !Array.isArray(input)
-          ? input as Record<string, unknown>
-          : {},
+        arguments: arguments_,
       },
       signal ? { signal } : undefined,
     ) as CallToolResult,
@@ -465,11 +473,15 @@ async function callUpstreamRaw(
         isError: true,
       };
     },
-  });
+  }), signal);
 }
 
-async function callUpstream(name: AgentCommandName, input: unknown): Promise<AgentMcpBackendResult> {
-  const result = await callUpstreamRaw(name, input);
+async function callUpstream(
+  handshake: AgentMcpHandshakeSession,
+  name: AgentCommandName,
+  input: unknown,
+): Promise<AgentMcpBackendResult> {
+  const result = await callUpstreamRaw(handshake, name, input);
   try {
     const payload = result.structuredContent;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -508,9 +520,11 @@ async function callUpstream(name: AgentCommandName, input: unknown): Promise<Age
 }
 
 const handle = serveStdio(({ era }) => {
+  const handshake = new AgentMcpHandshakeSession();
+  handshakeSessions.add(handshake);
   const initialRegistrations: Array<readonly [string, RegisteredTool]> = [];
   const server = createAgentMcpServer(
-    { dispatch: (name, input) => callUpstream(name, input) },
+    { dispatch: (name, input) => callUpstream(handshake, name, input) },
     {
       protocolEra: era,
       onToolRegistered: (name, registration) => {
@@ -520,10 +534,16 @@ const handle = serveStdio(({ era }) => {
   );
   const mirror = new AgentMcpToolMirror(
     server,
-    (name, input, signal) => callUpstreamRaw(name, input, signal),
+    (name, input, signal) => callUpstreamRaw(handshake, name, input, signal),
   );
   for (const [name, registration] of initialRegistrations) mirror.seed(name, registration);
   trackAgentMcpToolMirrorLifecycle(server, mirror, toolMirrors);
+  const previousOnClose = server.server.onclose;
+  server.server.onclose = () => {
+    handshake.clear();
+    handshakeSessions.delete(handshake);
+    previousOnClose?.();
+  };
   if (latestToolCatalog) mirror.synchronize(latestToolCatalog);
   if (gatewayUrl) {
     queueMicrotask(() => {
@@ -536,6 +556,8 @@ const handle = serveStdio(({ era }) => {
 function close(): Promise<void> {
   if (closePromise) return closePromise;
   closing = true;
+  for (const session of handshakeSessions) session.clear();
+  handshakeSessions.clear();
   closePromise = (async () => {
     const pending = upstreamConnection;
     const reconnecting = reconnectPromise;

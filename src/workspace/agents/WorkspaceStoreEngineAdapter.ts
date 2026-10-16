@@ -2651,8 +2651,8 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
       if (typeof intent !== "string" || !intent.trim() || intent.length > 4_000) {
         throw new WorkspaceEngineError("invalid_request", "intent must contain 1-4000 characters", { retryable: true });
       }
-      if (!Number.isSafeInteger(requestedIds) || requestedIds < 1 || requestedIds > 100) {
-        throw new WorkspaceEngineError("invalid_request", "requestedIds must be between 1 and 100", { retryable: true });
+      if (!Number.isSafeInteger(requestedIds) || requestedIds < 0 || requestedIds > 100) {
+        throw new WorkspaceEngineError("invalid_request", "requestedIds must be an integer between 0 and 100 (0 for edits without new components)", { retryable: true });
       }
       const state = this.store.getState();
       const context = this.readRuntimeView();
@@ -2684,7 +2684,7 @@ export class WorkspaceStoreEngineAdapter implements WorkspaceEnginePort {
           this.maxSummaryBytes,
         ),
         capability_manifest: capabilityManifest(this.store, this.maxCapabilityBytes),
-        reserved_component_ids: this.store.reserveComponentIds(requestedIds),
+        reserved_component_ids: requestedIds === 0 ? [] : this.store.reserveComponentIds(requestedIds),
       };
       const requestId = prepared.envelope.request_id;
       if (this.preparations.has(requestId)) {

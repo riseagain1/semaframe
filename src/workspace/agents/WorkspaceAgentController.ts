@@ -1126,7 +1126,7 @@ export class WorkspaceAgentController {
       if (!intent) throw new WorkspaceEngineError("invalid_request", "intent cannot be blank", { retryable: true });
       const requestedIds = body.requested_component_ids === undefined
         ? DEFAULT_RESERVED_ID_COUNT
-        : safeInteger(body.requested_component_ids, "requested_component_ids", 1, MAX_RESERVED_ID_COUNT);
+        : safeInteger(body.requested_component_ids, "requested_component_ids", 0, MAX_RESERVED_ID_COUNT);
       const requestedViewGuard = viewGuard(body.view_guard);
       const requestedLayoutFrame = layoutFrame(body.layout_frame);
       const prepared = await this.engine.prepare(intent, requestedIds, principal(session), {

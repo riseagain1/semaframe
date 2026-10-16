@@ -352,6 +352,81 @@ afterEach(async () => {
 });
 
 describe("Agent MCP stdio transport bridge", () => {
+  it.each(["legacy-offer", "stable-discovery", "anonymous-stable-discovery"] as const)(
+    "continues pending approval and browser-refresh handshakes without model-managed tokens (%s)",
+    async (mode) => {
+      const rig = await setup();
+      const client = new Client({ name: "handshake-continuation-test", version: "1.0.0" });
+      clients.push(client);
+      // Legacy starts on the seeded local handler; its initial connection
+      // installs the mirrored catalog before subsequent calls. Stable mode
+      // connects proactively and exercises the normal installed bridge path.
+      const transport = mode === "legacy-offer"
+        ? stdioTransport(rig.connectionUrl)
+        : stableStdioTransport(new URL(rig.connectionUrl).origin);
+      let stderr = "";
+      transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+      await client.connect(transport);
+      const identity = {
+        ...(mode === "anonymous-stable-discovery" ? {} : { client_id: "handshake-continuation-agent" }),
+        client_name: "Handshake Continuation Agent",
+        requested_scopes: ["workspace:read"],
+      };
+      const initial = await client.callTool({ name: "get_workspace_instructions", arguments: identity });
+      const claim = (initial.structuredContent as {
+        error: { code: string; details: { approval_token: string; claim_id: string; client_id: string } };
+      }).error;
+      expect(claim.code).toBe("approval_pending");
+      const expectedClientId = mode === "anonymous-stable-discovery"
+        ? `workspace_client_${claim.details.claim_id}` : identity.client_id;
+      expect(claim.details.client_id).toBe(expectedClientId);
+      for (const changed of [
+        { ...identity, client_id: "not-the-original-client" },
+        { ...identity, requested_scopes: ["workspace:read", "workspace:write"] },
+      ]) {
+        const mismatch = await client.callTool({ name: "get_workspace_instructions", arguments: changed });
+        expect(mismatch.structuredContent).toMatchObject({ ok: false, error: { code: "approval_token_required" } });
+      }
+      const stranger = new Client({ name: "separate-protocol-session", version: "1.0.0" });
+      clients.push(stranger);
+      await stranger.connect(stdioTransport(rig.connectionUrl));
+      const strangerResult = await stranger.callTool({ name: "get_workspace_instructions", arguments: identity });
+      expect(strangerResult.structuredContent).toMatchObject({ ok: false, error: { code: "approval_token_required" } });
+      await stranger.close();
+      const pending = await client.callTool({ name: "get_workspace_instructions", arguments: identity });
+      expect(pending.structuredContent).toMatchObject({ ok: false, error: { code: "approval_pending" } });
+      expect(JSON.stringify(pending.structuredContent)).not.toContain(claim.details.approval_token);
+      expect(rig.gateway.getConfig().pendingApproval?.claimId).toBe(claim.details.claim_id);
+      rig.gateway.approveClaim(claim.details.claim_id);
+
+      async function completeHandshake(browserConnectionId: string, suffix: string, explicitIdentity = false): Promise<void> {
+        const result = client.callTool({
+          name: "get_workspace_instructions",
+          arguments: explicitIdentity ? { client_id: expectedClientId } : {},
+        });
+        const command = await pollCommand(rig.gateway, browserConnectionId);
+        expect(command.name).toBe("get_workspace_instructions");
+        expect(command.input).toMatchObject({ ...identity, client_id: expectedClientId });
+        expect(command.input).not.toHaveProperty("approval_token");
+        submitResult(rig.gateway, browserConnectionId, command.id, {
+          ok: true,
+          data: {
+            session_token: `session_handshake_${suffix}`,
+            guide_digest: "sha256:handshake-continuation-guide",
+            granted_scopes: ["workspace:read"],
+          },
+        });
+        expect((await result).isError).toBe(false);
+      }
+      await completeHandshake(rig.browserConnectionId, "initial");
+      rig.gateway.unregisterBrowser(rig.browserConnectionId);
+      const refreshedBrowser = rig.gateway.registerBrowser("refreshed-handshake-browser");
+      await completeHandshake(refreshedBrowser.browserConnectionId, "refresh");
+      await completeHandshake(refreshedBrowser.browserConnectionId, "explicit-identity", true);
+      expect(stderr).not.toContain(claim.details.approval_token);
+    }, 20_000,
+  );
+
   it("uses the browser-approved HTTP claim for photo reconstruction instead of the bearer REST path", async () => {
     const rig = await setup();
     const client = new Client(

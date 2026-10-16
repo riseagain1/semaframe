@@ -731,6 +731,11 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
     const body = exactObject(value, ["session_token", "instruction_digest", "intent", "requested_component_ids", "capability_detail", "layout_frame", "view_guard"], [
       "session_token", "instruction_digest", "intent",
     ]);
+    const requestedIds = body.requested_component_ids === undefined
+      ? undefined : safeInteger(body.requested_component_ids, "requested_component_ids");
+    if (requestedIds !== undefined && requestedIds > 100) {
+      throw new InvalidRequestError("requested_component_ids must be an integer between 0 and 100 (0 for edits without new components).");
+    }
     return {
       name: "begin_workspace_update",
       input: {
@@ -740,9 +745,9 @@ function externalCommand(pathname: string, method: string, value?: unknown): {
         ...(body.capability_detail === undefined ? {} : { capability_detail: boundedString(body.capability_detail, "capability_detail", 1, 16) }),
         ...(body.layout_frame === undefined ? {} : { layout_frame: boundedString(body.layout_frame, "layout_frame", 1, 16) }),
         ...(body.view_guard === undefined ? {} : { view_guard: workspaceViewGuard(body.view_guard) }),
-        ...(body.requested_component_ids === undefined
+        ...(requestedIds === undefined
           ? {}
-          : { requested_component_ids: safeInteger(body.requested_component_ids, "requested_component_ids") }),
+          : { requested_component_ids: requestedIds }),
       },
     };
   }

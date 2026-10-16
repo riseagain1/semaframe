@@ -14,7 +14,7 @@ for the other clients and shared approval behavior.
 
 This integration targets the official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), whose executable is `dsh`, and its [`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md). It is not a DeepSeek API proxy, a built-in chat system, or an integration with an unrelated executable also named `dsh`.
 
-The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.3 for reproducibility, including Agent Guide 3.5 and automatic scene recovery without changing the connection protocol. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
+The commands below are included from `semaframe@0.5.0`; the historical `semaframe@0.4.0` package does not contain this integration. The examples pin v0.5.4 for reproducibility, including Agent Guide 3.5, automatic scene recovery, handshake continuation and bounded concurrent requests without changing the connection protocol. With SemaFrame already installed on PATH, `semaframe` can replace the npm launcher; in a development checkout, use `node bin/semaframe.mjs`.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ The commands below are included from `semaframe@0.5.0`; the historical `semafram
 With the official DSH runtime installed and SemaFrame open:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.3 -- semaframe agent launch --client dsh
+npm exec --yes --package=semaframe@0.5.4 -- semaframe agent launch --client dsh
 ```
 
 This runs the installed `dsh web --patch <temporary-overlay>` as a foreground child. The working directory remains the one you launched from; the existing DSH model/provider environment remains DSH's responsibility. SemaFrame writes only its own temporary overlay and removes it after the child exits. Interrupting the launcher forwards shutdown to the child. The wrapper does not modify `~/.dsh`, select a different model, enter credentials, or bypass browser approval. DSH may perform its own normal first-run initialization.
@@ -51,7 +51,7 @@ dsh web --patch ./semaframe.dsh.json
 Alternatively, the following command prints only the overlay JSON to stdout:
 
 ```sh
-npm exec --yes --package=semaframe@0.5.3 -- semaframe agent config --client dsh
+npm exec --yes --package=semaframe@0.5.4 -- semaframe agent config --client dsh
 ```
 
 Save that output in a new file of your choice. JSON is valid YAML for the official Cordis overlay loader, so no YAML conversion or executable `!!js` expressions are required.
@@ -82,13 +82,35 @@ human approves, without granting indefinite setup authority. A handshake already
 in flight can finish within its normal command timeout, and completed sessions
 are not invalidated by setup deadlines.
 
-Keep the same private approval credential for that approved request when asking
-DSH to continue. If the request expired and SemaFrame has rotated to a fresh
+The stdio bridge keeps the upstream-issued approval continuation in memory for
+that client protocol session and exact Gateway offer. After approval, DSH can
+repeat `get_workspace_instructions` without copying `approval_token`; the bridge
+does not approve requests or grant additional scopes. Explicit identity/scope
+changes never inherit a previous approval. Restarting the client, changing the
+Gateway/offer, denial or expiry clears this continuation. Direct HTTP clients
+must retain their own approval credential.
+
+If the request expired and SemaFrame has rotated to a fresh
 offer, do not repeat the old credential or assume prior approval still applies.
 Ask DSH to start a new `get_workspace_instructions` request with the same identity
 and intended scopes but no old approval token; compare and approve the newly
 displayed fingerprint. Neither SemaFrame nor DSH may approve that replacement on
 the user's behalf. The historical `0.4.0` package does not include this timing fix.
+
+### Concurrent requests and edit-only transactions
+
+Browser commands share a bounded FIFO queue (one executing, up to 32 waiting).
+Parallel reads no longer fail merely because another ordinary command is in
+flight; writes and reads keep arrival order. The 45-second deadline includes
+queue wait. Overflow, or a previously delivered command whose outcome is still
+unknown, can still return `engine_busy`. A timed-out write is never automatically
+replayed: inspect the resulting state before deciding whether to retry.
+
+Use `requested_component_ids: 0` for edits that create no components. It returns
+an empty reservation without consuming IDs; creating an assembly still requires
+reserving its root and every new part. For placement queries, use
+`candidate.placement`, `geometry.kind`, and `collision.shape`; the modeling guide
+includes a complete box preflight example.
 
 ## Verification boundaries
 

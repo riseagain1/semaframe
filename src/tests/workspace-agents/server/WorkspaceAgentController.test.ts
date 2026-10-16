@@ -412,6 +412,48 @@ async function begin(
 }
 
 describe("WorkspaceAgentController", () => {
+  it("renews session capabilities without changing a supplied stable client identity", async () => {
+    const engine = new FakeWorkspaceEngine();
+    const controller = controllerFor(engine, ["workspace:read"]);
+    const identity = { client_id: "workspace_client_stable-approved-claim", requested_scopes: ["workspace:read"] };
+    const first = unwrap(await controller.getWorkspaceInstructions(identity));
+    const second = unwrap(await controller.getWorkspaceInstructions(identity));
+    expect(first.client_id).toBe(identity.client_id);
+    expect(second.client_id).toBe(first.client_id);
+    expect(second.session_token).not.toBe(first.session_token);
+    for (const instructions of [first, second]) {
+      expect(await controller.inspectWorkspace({
+        session_token: instructions.session_token, instruction_digest: instructions.guide_digest,
+      })).toMatchObject({ ok: true, data: { client_id: identity.client_id } });
+    }
+    controller.revokeAll();
+    for (const instructions of [first, second]) {
+      expect(await controller.inspectWorkspace({
+        session_token: instructions.session_token, instruction_digest: instructions.guide_digest,
+      })).toMatchObject({ ok: false, error: { code: "session_expired" } });
+    }
+  });
+
+  it("accepts zero new IDs for update-only transactions while retaining the default and bounds", async () => {
+    const engine = new FakeWorkspaceEngine();
+    const controller = controllerFor(engine, ["workspace:read", "workspace:write"]);
+    const session = await sessionFor(controller, ["workspace:read", "workspace:write"]);
+    for (const requested_component_ids of [0, 1, 100, undefined]) {
+      const prepared = unwrap(await controller.beginWorkspaceUpdate({
+        ...session, intent: "Edit without creating components", requested_component_ids,
+      }));
+      expect(prepared.reserved_component_ids).toHaveLength(requested_component_ids ?? 8);
+      expect(engine.prepareCalls.at(-1)?.requestedIds).toBe(requested_component_ids ?? 8);
+    }
+    const acceptedCount = engine.prepareCalls.length;
+    for (const requested_component_ids of [-1, 0.5, 100.5, 101, Number.MAX_SAFE_INTEGER, "0", null]) {
+      expect(await controller.beginWorkspaceUpdate({
+        ...session, intent: "Invalid reservation", requested_component_ids,
+      })).toMatchObject({ ok: false, error: { code: "invalid_request" } });
+    }
+    expect(engine.prepareCalls).toHaveLength(acceptedCount);
+  });
+
   it("issues the canonical digest, sanitizes identity, and grants only requested approved scopes", async () => {
     const engine = new FakeWorkspaceEngine();
     const controller = controllerFor(engine, ["workspace:read", "workspace:write", "component:create"]);

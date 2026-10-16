@@ -55,6 +55,8 @@ export type AgentGatewayOptions = Readonly<{
   tsxLoaderPath?: string;
   workspaceRoot: string;
   commandTimeoutMs?: number;
+  /** Maximum waiting commands, excluding the single browser command in flight. */
+  commandQueueLimit?: number;
   pollTimeoutMs?: number;
   browserTtlMs?: number;
   offerTtlMs?: number;
@@ -81,6 +83,9 @@ type PendingCommand = {
   command: BrowserAgentCommand;
   mutation: boolean;
   delivered: boolean;
+  /** A delivered timeout remains a barrier until the browser acknowledges it. */
+  timedOut: boolean;
+  deadline: number;
   clientName?: string;
   offerClaimId?: string;
   resolve: (value: unknown) => void;
@@ -284,6 +289,7 @@ export class AgentGateway {
   readonly #workspaceRoot: string;
   readonly #tsxLoaderPath: string;
   readonly #commandTimeoutMs: number;
+  readonly #commandQueueLimit: number;
   readonly #pollTimeoutMs: number;
   readonly #browserTtlMs: number;
   readonly #offerTtlMs: number;
@@ -297,6 +303,7 @@ export class AgentGateway {
   #browser?: BrowserConnection;
   #pollWaiter?: PollWaiter;
   #pendingCommand?: PendingCommand;
+  #commandQueue: PendingCommand[] = [];
   #lastClientName?: string;
   #lastClientSeenAt?: number;
   #lastClientSource?: "legacy" | "offer";
@@ -330,6 +337,7 @@ export class AgentGateway {
       throw new Error("Agent gateway tsxLoaderPath must be an absolute filesystem path.");
     }
     this.#commandTimeoutMs = options.commandTimeoutMs ?? 45_000;
+    this.#commandQueueLimit = options.commandQueueLimit ?? 32;
     this.#pollTimeoutMs = options.pollTimeoutMs ?? 25_000;
     this.#browserTtlMs = options.browserTtlMs ?? 65_000;
     this.#offerTtlMs = options.offerTtlMs ?? 10 * 60_000;
@@ -338,6 +346,7 @@ export class AgentGateway {
     this.#now = options.now ?? Date.now;
     for (const [name, value] of [
       ["commandTimeoutMs", this.#commandTimeoutMs],
+      ["commandQueueLimit", this.#commandQueueLimit],
       ["pollTimeoutMs", this.#pollTimeoutMs],
       ["browserTtlMs", this.#browserTtlMs],
       ["offerTtlMs", this.#offerTtlMs],
@@ -506,7 +515,7 @@ export class AgentGateway {
     this.#rejectPending(new AgentGatewayError(
       "pairing_rotated",
       "The pairing credential changed before the command completed.",
-    ));
+    ), true);
     return Object.freeze({
       ...this.revealPairing(),
       ...this.getConfig(),
@@ -543,8 +552,8 @@ export class AgentGateway {
     const replacedClaimId = this.#offer?.claim?.id;
     this.#offer = this.#newOffer();
     this.#connectionNotice = undefined;
-    if (replacedClaimId && this.#pendingCommand?.offerClaimId === replacedClaimId) {
-      this.#rejectPending(new AgentGatewayError(
+    if (replacedClaimId) {
+      this.#rejectClaimCommands(replacedClaimId, new AgentGatewayError(
         "connection_invalid",
         "The connection offer was replaced before the command completed.",
       ));
@@ -582,6 +591,10 @@ export class AgentGateway {
       throw new AgentGatewayError("approval_already_used", "This agent already completed the approved instruction handshake. Revoke the connection instead.");
     }
     claim.decision = "denied";
+    this.#rejectClaimCommands(claim.id, new AgentGatewayError(
+      "approval_denied",
+      "The SemaFrame user denied this connection request.",
+    ));
     this.#markConfigChanged();
     return { denied: true };
   }
@@ -642,7 +655,11 @@ export class AgentGateway {
         }
         return { responseOk: true, status: 200, payload };
       } catch (error) {
-        if (!isTransientInstructionError(error)) this.#replaceFailedInstructionOffer(offer);
+        if (error instanceof AgentGatewayError && error.code === "connection_offer_expired") {
+          this.#replaceIncompleteOffer(offer, error.message, this.#expirationReason(offer));
+        } else if (!isTransientInstructionError(error)) {
+          this.#replaceFailedInstructionOffer(offer);
+        }
         return this.#backendError(error);
       }
     }
@@ -721,6 +738,7 @@ export class AgentGateway {
     const browser = this.#requireBrowser(browserConnectionId);
     browser.lastSeenAt = this.#now();
 
+    this.#expireUndeliveredCommand();
     if (this.#pendingCommand && !this.#pendingCommand.delivered) {
       this.#pendingCommand.delivered = true;
       return { kind: "command", command: structuredClone(this.#pendingCommand.command) };
@@ -775,8 +793,26 @@ export class AgentGateway {
     if (!pending || pending.command.id !== result.commandId || !pending.delivered) {
       throw new AgentGatewayError("command_not_found", "This command is no longer awaiting a result.");
     }
+    if (!pending.timedOut && this.#now() >= pending.deadline) this.#expireCommand(pending);
     clearTimeout(pending.timer);
     this.#pendingCommand = undefined;
+    if (pending.timedOut) {
+      // The caller already received a timeout. A late acknowledgement releases
+      // the execution barrier, but cannot resurrect that caller or its grant.
+      this.#startNextCommand();
+      return { accepted: true };
+    }
+    if (isInstructionCommand(pending.command.name) && pending.offerClaimId && pending.offerClaimId === this.#offer?.claim?.id) {
+      const failedPermanently = result.ok
+        ? !isSuccessfulAgentResult(result.result) && !isRetryableAgentResult(result.result)
+        : !isTransientInstructionError(new AgentGatewayError(result.error.code, result.error.message));
+      if (failedPermanently && this.#offer) {
+        // Invalidate before advancing the FIFO, not in dispatchOffer's later
+        // promise continuation: another queued redemption must never reach the
+        // browser after this handshake has permanently failed.
+        this.#replaceFailedInstructionOffer(this.#offer);
+      }
+    }
     if (result.ok) {
       const coreSucceeded = Boolean(
         result.result && typeof result.result === "object" && !Array.isArray(result.result) &&
@@ -805,6 +841,7 @@ export class AgentGateway {
         structuredClone(result.error.details),
       ));
     }
+    this.#startNextCommand();
     return { accepted: true };
   }
 
@@ -819,34 +856,39 @@ export class AgentGateway {
       this.#revokeBrowser(new AgentGatewayError("engine_unavailable", "The SemaFrame browser engine is not connected."));
       throw new AgentGatewayError("engine_unavailable", "Open SemaFrame before calling Workspace tools.");
     }
-    if (this.#pendingCommand) {
+    if (this.#pendingCommand?.timedOut) {
       throw new AgentGatewayError(
         "engine_busy",
-        this.#pendingCommand.mutation || isMutationCommand(name)
-          ? "Another Workspace command is already in flight."
-          : "The browser engine is answering another request.",
+        "A previous browser command is still finishing after timeout or revocation. Wait for its acknowledgement or reconnect the browser before continuing; do not replay a mutation automatically.",
+        { previous_command_outcome: "unknown", command_dispatched: false },
       );
+    }
+    if (this.#pendingCommand && this.#commandQueue.length >= this.#commandQueueLimit) {
+      throw new AgentGatewayError("engine_busy", "The browser command queue is full. Retry after the current requests finish.", {
+        queue_limit: this.#commandQueueLimit,
+        command_dispatched: false,
+      });
     }
     return new Promise<unknown>((resolve, reject) => {
       const pending: PendingCommand = {
         command: { id: randomUUID(), name, input: structuredClone(safeInstructionInput(name, input)) },
         mutation: isMutationCommand(name),
         delivered: false,
+        timedOut: false,
+        deadline: this.#now() + this.#commandTimeoutMs,
         ...(safeClientName(options.clientName) ? { clientName: safeClientName(options.clientName) } : {}),
         ...(options.offerClaimId ? { offerClaimId: options.offerClaimId } : {}),
         resolve,
         reject,
         timer: setTimeout(() => {
-          if (this.#pendingCommand !== pending) return;
-          this.#pendingCommand = undefined;
-          reject(new AgentGatewayError(
-            "engine_timeout",
-            "The browser engine did not finish the command in time. Retry the same Workspace transaction if one was prepared.",
-          ));
+          this.#expireCommand(pending);
         }, this.#commandTimeoutMs),
       };
-      this.#pendingCommand = pending;
-      this.#deliverPendingToPoll();
+      // One FIFO for reads and writes prevents a later read overtaking a
+      // mutation. Execution remains browser-authoritative and strictly serial;
+      // transactions/revisions are checked by the core when their turn arrives.
+      this.#commandQueue.push(pending);
+      this.#startNextCommand();
     });
   }
 
@@ -902,7 +944,7 @@ export class AgentGateway {
 
   #offerNeedsRefresh(offer: ConnectionOffer): boolean {
     if (this.#offerHandshakeCompleted(offer)) return false;
-    if (offer.claim && this.#pendingCommand?.offerClaimId === offer.claim.id) {
+    if (offer.claim && this.#pendingCommand?.offerClaimId === offer.claim.id && !this.#pendingCommand.timedOut) {
       // The deadline gates starting the approved handshake. Once its browser
       // command is in flight, let that bounded command finish or time out.
       return false;
@@ -936,8 +978,8 @@ export class AgentGateway {
         occurredAt: new Date(this.#now()).toISOString(),
       });
     }
-    if (replacedClaimId && this.#pendingCommand?.offerClaimId === replacedClaimId) {
-      this.#rejectPending(new AgentGatewayError("connection_invalid", message));
+    if (replacedClaimId) {
+      this.#rejectClaimCommands(replacedClaimId, new AgentGatewayError("connection_invalid", message));
     }
     this.#markConfigChanged();
     return true;
@@ -991,6 +1033,7 @@ export class AgentGateway {
     if (!claim || claim.decision !== "approved" || claim.instructionsSucceeded
       || claim.approvedAt === undefined || claim.handshakeExpiresAt === undefined) return undefined;
     const inFlight = this.#pendingCommand?.offerClaimId === claim.id
+      && !this.#pendingCommand.timedOut
       && isInstructionCommand(this.#pendingCommand.command.name);
     return Object.freeze({
       ...(claim.clientId ? { clientId: claim.clientId } : {}),
@@ -1058,11 +1101,15 @@ export class AgentGateway {
       const token = secret();
       const digest = tokenDigest(token);
       const requestedAt = this.#now();
+      const claimId = randomUUID();
       claim = {
-        id: randomUUID(),
+        id: claimId,
         tokenHash: digest,
         fingerprint: tokenFingerprint(digest),
-        ...(safeClientId(client.clientId) ? { clientId: safeClientId(client.clientId) } : {}),
+        // Anonymous callers still need stable provenance across instruction
+        // renewal and browser refresh. This public ID identifies the approved
+        // claim, not a capability; session tokens continue to rotate in core.
+        clientId: safeClientId(client.clientId) ?? `workspace_client_${claimId}`,
         ...(safeClientName(client.clientName) ? { clientName: safeClientName(client.clientName) } : {}),
         scopes: Object.freeze([...new Set(client.requestedScopes)].sort()),
         requestedAt,
@@ -1085,6 +1132,7 @@ export class AgentGateway {
           approval_token: token,
           approval_fingerprint: claim.fingerprint,
           claim_id: claim.id,
+          client_id: claim.clientId,
           approval_expires_at: new Date(claim.expiresAt).toISOString(),
           requested_scopes: [...claim.scopes],
         },
@@ -1196,11 +1244,82 @@ export class AgentGateway {
   }
 
   #deliverPendingToPoll(): void {
+    this.#expireUndeliveredCommand();
     const pending = this.#pendingCommand;
     const waiter = this.#pollWaiter;
     if (!pending || pending.delivered || !waiter || waiter.browserConnectionId !== this.#browser?.id) return;
     pending.delivered = true;
     this.#resolvePoll({ kind: "command", command: structuredClone(pending.command) });
+  }
+
+  #expireUndeliveredCommand(): void {
+    const pending = this.#pendingCommand;
+    if (pending && !pending.delivered && this.#now() >= pending.deadline) this.#expireCommand(pending);
+  }
+
+  #startNextCommand(): void {
+    if (this.#pendingCommand) return;
+    while (this.#commandQueue.length > 0) {
+      const next = this.#commandQueue.shift() as PendingCommand;
+      try {
+        this.#assertOpen();
+        this.#assertEnabled();
+        if (!this.#isBrowserConnected()) {
+          throw new AgentGatewayError("engine_unavailable", "The browser engine disconnected before the queued command started.");
+        }
+        if (this.#now() >= next.deadline) {
+          throw new AgentGatewayError("engine_timeout", "The command's waiting deadline elapsed before browser delivery; it was not executed.", { command_dispatched: false });
+        }
+        if (next.offerClaimId) {
+          const offer = this.#offer;
+          const claim = offer?.claim;
+          if (!offer || !claim || claim.id !== next.offerClaimId || claim.decision !== "approved") {
+            throw new AgentGatewayError("connection_invalid", "The queued command's approval was revoked or replaced.");
+          }
+          // Admission is not a lease on authority: a handshake can expire while
+          // waiting behind another command, and denial must take effect now.
+          if (this.#offerNeedsRefresh(offer)) {
+            throw new AgentGatewayError("connection_offer_expired", "The approved handshake expired before the queued command started.");
+          }
+          if (!isInstructionCommand(next.command.name) && !claim.instructionsSucceeded) {
+            throw new AgentGatewayError("instructions_required", "Complete an approved instruction handshake before calling workspace tools.");
+          }
+        }
+      } catch (error) {
+        clearTimeout(next.timer);
+        next.reject(error instanceof AgentGatewayError ? error : new AgentGatewayError("gateway_error", "The queued command could not start."));
+        continue;
+      }
+      this.#pendingCommand = next;
+      this.#deliverPendingToPoll();
+      return;
+    }
+  }
+
+  #expireCommand(command: PendingCommand): void {
+    const active = this.#pendingCommand === command;
+    if (!active) {
+      const index = this.#commandQueue.indexOf(command);
+      if (index < 0) return;
+      this.#commandQueue.splice(index, 1);
+    }
+    command.reject(new AgentGatewayError(
+      "engine_timeout",
+      command.delivered
+        ? "The browser command timed out after delivery; its outcome is unknown. Inspect the workspace after the browser finishes or reconnects before retrying a mutation."
+        : "The command timed out before browser delivery and was not executed.",
+      { command_dispatched: command.delivered, mutation_outcome: command.delivered && command.mutation ? "unknown" : "not_applicable" },
+    ));
+    if (!active) return;
+    if (command.delivered) {
+      command.timedOut = true;
+      // Do not send queued work into an engine that may still be executing the
+      // timed-out command. In particular, never replay a transaction here.
+      this.#rejectQueued(new AgentGatewayError("engine_timeout", "A previous browser command timed out; this queued command was not executed.", { command_dispatched: false }));
+    } else {
+      this.#pendingCommand = undefined;
+      this.#startNextCommand();
+    }
   }
 
   #resolvePoll(value: BrowserPollResponse): void {
@@ -1220,12 +1339,44 @@ export class AgentGateway {
     }
   }
 
-  #rejectPending(error: AgentGatewayError): void {
+  #rejectPending(error: AgentGatewayError, retainDeliveredBarrier = false): void {
     const pending = this.#pendingCommand;
-    if (!pending) return;
-    this.#pendingCommand = undefined;
-    clearTimeout(pending.timer);
-    pending.reject(error);
+    this.#pendingCommand = retainDeliveredBarrier && pending?.delivered ? pending : undefined;
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+      if (retainDeliveredBarrier && pending.delivered) pending.timedOut = true;
+    }
+    this.#rejectQueued(error);
+  }
+
+  #rejectQueued(error: AgentGatewayError): void {
+    for (const queued of this.#commandQueue.splice(0)) {
+      clearTimeout(queued.timer);
+      queued.reject(error);
+    }
+  }
+
+  #rejectClaimCommands(claimId: string, error: AgentGatewayError): void {
+    const pending = this.#pendingCommand;
+    if (pending?.offerClaimId === claimId) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+      if (pending.delivered) {
+        // Revocation does not cancel JavaScript already running in the browser.
+        // Retain the same draining barrier as a timeout until its result arrives.
+        pending.timedOut = true;
+      } else {
+        this.#pendingCommand = undefined;
+      }
+    }
+    this.#commandQueue = this.#commandQueue.filter((queued) => {
+      if (queued.offerClaimId !== claimId) return true;
+      clearTimeout(queued.timer);
+      queued.reject(error);
+      return false;
+    });
+    this.#startNextCommand();
   }
 
   #revokeBrowser(error: AgentGatewayError): void {

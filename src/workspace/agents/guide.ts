@@ -120,9 +120,9 @@ export const WORKSPACE_CREATE_COMPONENT_QUICKSTART: JSONValue = Object.freeze(js
         session_token: "<get_workspace_instructions.data.session_token>",
         instruction_digest: "<get_workspace_instructions.data.guide_digest>",
         intent: "<short mutation intent>",
-        requested_component_ids: "<number from 1 through 100>",
+        requested_component_ids: "<integer from 0 through 100; 0 for edits only, otherwise count every new root and part>",
       },
-      use: "Use this response's exact envelope, reserved_component_ids, and capability_manifest.",
+      use: "Use this response's exact envelope, reserved_component_ids, and capability_manifest. Omitted requested_component_ids defaults to 8. A zero reservation consumes no IDs and cannot create components.",
     },
     {
       construct_batch: {
@@ -262,6 +262,19 @@ export const WORKSPACE_DATA_INTERACTION_QUICKSTART: JSONValue = Object.freeze(js
   },
 }));
 
+/** One executable example shared by Agent discovery and the REST documentation. */
+export const WORKSPACE_NEW_PRIMITIVE_PREFLIGHT = Object.freeze({
+  geometry: { kind: "box", sizeM: { x: 0.15, y: 0.004, z: 0.21 } },
+  placement: {
+    space: "world3d", position: { x: 0, y: 0.002, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+  },
+  collision: {
+    enabled: true, role: "solid", shape: "box", margin: 0,
+    center: { x: 0, y: 0, z: 0 }, size: { x: 0.15, y: 0.004, z: 0.21 },
+  },
+});
+
 export const WORKSPACE_MODELING_QUICKSTART: JSONValue = Object.freeze(jsonContract({
   required_scopes: [
     "workspace:read", "workspace:write", "component:create", "component:update",
@@ -277,6 +290,11 @@ export const WORKSPACE_MODELING_QUICKSTART: JSONValue = Object.freeze(jsonContra
     child_composed_world: { position: { x: 2, y: 0.425, z: 3 } },
     warning: "Giving the child z=3 here would place it at world z=6. For a rotated/scaled parent, subtracting the translation alone is also wrong; use the full inverse parent transform or author directly in the parent's frame.",
     move_group: "To move the whole model, change only the root placement; keep every child local placement unchanged.",
+  },
+  new_primitive_preflight: {
+    tool: "query_spatial_placement",
+    candidate: WORKSPACE_NEW_PRIMITIVE_PREFLIGHT,
+    rule: "Pass this candidate alongside session_token and instruction_digest. This example is a thin box resting on the Stage floor. Adapt all dimensions and the world placement to the inspected scene; it is not a universal free location. New candidates use world coordinates because they have no existing parent; create child parts in parent-local coordinates that compose to the checked world pose. geometry.kind identifies the primitive; collision.shape identifies the collider. Position/rotation/scale are nested inside placement, never directly on candidate; world_transform is output evidence, not input. An explicit box collider requires center and full size, not half_extents. Keep matching geometry and collision in props when committing. Margin 0 is intentional face contact, not a default for unrelated clearances.",
   },
   existing_assembly_preflight: {
     tool: "query_spatial_placement",
@@ -1037,7 +1055,7 @@ export const WORKSPACE_AGENT_CORE_GUIDE = Object.freeze({
     "Keep session_token private. Every later call uses instruction_digest equal to the returned guide_digest. granted_scopes is authoritative; a connection URL does not grant authority.",
     "inspect_workspace returns revision and compact type catalog. inspect_workspace_space returns layout_graph (ui2d), spatial_graph (world3d), and ephemeral view_graph (host viewport/occlusions); view_detail full adds runtime nodes. Read these before layout work; do not infer positions from names.",
     "Before authoring, call inspect_workspace_capabilities for needed component_type_ids, guide_topics and operation_names. Full manifests/schemas are on demand, not omitted accidentally. Read the relevant topic before using that subsystem. Cache discovery only with the same registry_digest. Use inspect_workspace_component for an existing pinned instance.",
-    "Before each durable edit, begin_workspace_update. Copy its envelope unchanged, use distinct reserved_component_ids and exact typeId/version/digest tuples from its catalog. If the registry changed, rediscover needed manifests and prepare again. Submit one atomic batch with its transaction_token and unique op_id values.",
+    "Before edits, begin_workspace_update (requested_component_ids 0 for edits only). Copy its envelope unchanged, use distinct reserved_component_ids and exact typeId/version/digest tuples. Rediscover manifests and prepare again if registry changed. Submit one atomic batch with transaction_token and unique op_id values.",
     "A stale revision/registry requires a fresh preparation, never rewriting the envelope. Lost-response retries must be identical. Undo/redo require the exact current workspace_revision; never undo another person's intervening edit.",
     "Inspect resulting geometry, connection and revision. Check actual rendered output when available: a successful write or valid outer layout is not proof of complete visual fit, physical feasibility, precision or task completion.",
   ],

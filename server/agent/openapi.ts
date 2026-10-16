@@ -1,4 +1,5 @@
 import workspaceProtocolSchema from "../../src/workspace/protocol/workspaceProtocol.schema.json";
+import { WORKSPACE_NEW_PRIMITIVE_PREFLIGHT } from "../../src/workspace/agents/guide";
 import {
   PHOTO_RECONSTRUCTION_LIMITS,
   PHOTO_RECONSTRUCTION_MEDIA_TYPES,
@@ -1104,6 +1105,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
         post: {
           operationId: "query_spatial_placement",
           summary: "Preflight an asset, parametric primitive, or host-evaluated semantic CAD world3d placement without mutation.",
+          description: "Use candidate.placement with space world3d, position, rotation and scale. geometry.kind is the primitive type; collision.shape is the collider type. Do not pass shape, position, props or world_transform directly on candidate. Existing components use component_id and their proposed parent-local placement; new primitives use geometry and world placement. Discover the modeling guide for the complete contract and examples.",
           requestBody: jsonBody({
             type: "object",
             additionalProperties: false,
@@ -1111,7 +1113,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
             properties: {
               session_token: { type: "string", minLength: 8, maxLength: 256 },
               instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
-              candidate: { type: "object" },
+              candidate: { type: "object", example: WORKSPACE_NEW_PRIMITIVE_PREFLIGHT },
             },
           }),
           responses: successResponses,
@@ -1244,7 +1246,7 @@ export function createAgentGatewayOpenApi(publicBaseUrl: string): Record<string,
               session_token: { type: "string", minLength: 8, maxLength: 256 },
               instruction_digest: { type: "string", minLength: 8, maxLength: 256 },
               intent: { type: "string", minLength: 1, maxLength: 4_000 },
-              requested_component_ids: { type: "integer", minimum: 1, maximum: 100 },
+              requested_component_ids: { type: "integer", minimum: 0, maximum: 100, default: 8, description: "Number of NEW component IDs. Use 0 for update-only edits; no IDs are allocated. Creating components still requires reserved IDs. Include every assembly root and child." },
               capability_detail: { enum: ["catalog", "full"] },
               layout_frame: { enum: ["current_view", "canonical"] },
               view_guard: { $ref: "#/components/schemas/WorkspaceViewGuard" },
