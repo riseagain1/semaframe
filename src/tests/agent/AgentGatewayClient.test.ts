@@ -117,6 +117,266 @@ afterEach(() => {
 });
 
 describe("AgentGatewayClient", () => {
+  it("binds receiver-sensitive native fetch to its owning browser global", async () => {
+    const nativeFetch = vi.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(jsonResponse(config({ enabled: false })));
+    });
+    vi.stubGlobal("fetch", nativeFetch);
+    const client = new AgentGatewayClient({ origin: "https://scene.test", handler: vi.fn() });
+    await client.start();
+    expect(nativeFetch).toHaveBeenCalledOnce();
+  });
+
+  it("recovers bounded native transport failures during the startup config read", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Transient connection reset"))
+      .mockRejectedValueOnce(new TypeError("Transient connection reset"))
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })));
+    const handler = vi.fn();
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler });
+    const running = client.start();
+    await vi.advanceTimersByTimeAsync(1_001);
+    await running;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(Array(3).fill("/api/agent/config"));
+    expect(handler).not.toHaveBeenCalled();
+    expect(client.status).toBe("disabled");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds persistent config transport failures to three reads without mutating authorization", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Network unavailable"));
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    const failed = expect(client.fetchConfig()).rejects.toMatchObject({
+      code: "request_failed",
+      message: "The local agent gateway request failed while reading gateway configuration after 3 attempts.",
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await failed;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.every(([path, init]) => path === "/api/agent/config" && init.method === "GET")).toBe(true);
+    expect(client.config).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([401, 403, 409])("does not retry a config HTTP %s rejection", async (status) => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({ error: { code: "permission_denied" } }, status));
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    await expect(client.fetchConfig()).rejects.toMatchObject({ code: "request_failed", status, gatewayCode: "permission_denied" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry malformed configuration JSON", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("not-json", { status: 200 }));
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    await expect(client.fetchConfig()).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(["abort", "stop"] as const)("cancels config retry backoff on %s and leaves no timer", async (action) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError("Transient connection reset"));
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    const failed = expect(client.fetchConfig(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    if (action === "abort") controller.abort();
+    else client.stop();
+    await failed;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    fetchMock.mockResolvedValueOnce(jsonResponse(config({ enabled: false })));
+    await expect(client.fetchConfig()).resolves.toMatchObject({ enabled: false });
+  });
+
+  it("recovers post-command config reads without replaying the handler or acknowledgement", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config()))
+      .mockResolvedValueOnce(jsonResponse({ browserConnectionId: "owned-browser-connection" }))
+      .mockResolvedValueOnce(jsonResponse({ kind: "command", command: { id: "mutation-1", name: "submit_workspace_batch", input: {} } }))
+      .mockResolvedValueOnce(jsonResponse({ accepted: true }))
+      .mockRejectedValueOnce(new TypeError("Connection reset"))
+      .mockRejectedValueOnce(new TypeError("Connection reset"))
+      .mockResolvedValueOnce(jsonResponse(config({ enabled: false })));
+    const handler = vi.fn(async () => ({ ok: true, data: { revision: 1 } }));
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler });
+    const running = client.start();
+    await vi.advanceTimersByTimeAsync(1_001);
+    await running;
+    expect(handler).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/agent/browser/result")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/agent/config")).toHaveLength(4);
+    expect(client.status).toBe("disabled");
+  });
+
+  it("releases only its owned lease when config recovery is exhausted during polling", async () => {
+    vi.useFakeTimers();
+    let configReads = 0;
+    const fetchMock = vi.fn(async (path: RequestInfo | URL, _init?: RequestInit) => {
+      if (path === "/api/agent/config") {
+        if (configReads++ === 0) return jsonResponse(config());
+        throw new TypeError("Network unavailable");
+      }
+      if (path === "/api/agent/browser/register") return jsonResponse({ browserConnectionId: "owned-browser-connection" });
+      if (path === "/api/agent/browser/poll") return jsonResponse({ kind: "idle" });
+      if (path === "/api/agent/browser/unregister") return jsonResponse({}, 204);
+      throw new Error("Unexpected endpoint");
+    });
+    const handler = vi.fn();
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler });
+    const failed = expect(client.start()).rejects.toMatchObject({ code: "request_failed" });
+    await vi.advanceTimersByTimeAsync(1_001);
+    await failed;
+    const releases = fetchMock.mock.calls.filter(([path]) => path === "/api/agent/browser/unregister");
+    expect(releases).toHaveLength(1);
+    expect(JSON.parse(String(releases[0]?.[1]?.body))).toEqual({ browserConnectionId: "owned-browser-connection" });
+    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/agent/browser/register")).toHaveLength(1);
+    expect(configReads).toBe(4);
+    expect(handler).not.toHaveBeenCalled();
+    expect(client.running).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["success", "handler-failure"] as const)("does not replay a lost %s acknowledgement or turn it into another result", async (outcome) => {
+    const fetchMock = vi.fn(async (path: RequestInfo | URL) => {
+      if (path === "/api/agent/config") return jsonResponse(config());
+      if (path === "/api/agent/browser/register") return jsonResponse({ browserConnectionId: "owned-browser-connection" });
+      if (path === "/api/agent/browser/poll") return jsonResponse({ kind: "command", command: { id: "mutation-1", name: "submit_workspace_batch", input: {} } });
+      if (path === "/api/agent/browser/result") throw new TypeError("Acknowledgement outcome unknown");
+      if (path === "/api/agent/browser/unregister") return jsonResponse({}, 204);
+      throw new Error("Unexpected endpoint");
+    });
+    const handler = vi.fn(async () => {
+      if (outcome === "handler-failure") throw new AgentGatewayCommandError("safe_failure", "The command failed safely.");
+      return { ok: true, data: { revision: 1 } };
+    });
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler });
+    await expect(client.start()).rejects.toMatchObject({ code: "request_failed" });
+    expect(handler).toHaveBeenCalledOnce();
+    const requests = fetchMock.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit]>;
+    const acknowledgements = requests.filter(([path]) => path === "/api/agent/browser/result");
+    expect(acknowledgements).toHaveLength(1);
+    expect(JSON.parse(String(acknowledgements[0]?.[1]?.body))).toMatchObject({ ok: outcome === "success" });
+    const releases = requests.filter(([path]) => path === "/api/agent/browser/unregister");
+    expect(releases).toHaveLength(1);
+    expect(JSON.parse(String(releases[0]?.[1]?.body))).toEqual({ browserConnectionId: "owned-browser-connection" });
+    expect(client.running).toBe(false);
+    expect(client.status).toBe("disconnected");
+  });
+
+  it.each(["start", "claimBrowser", "takeover"] as const)("never retries an ambiguous %s registration or releases an unknown lease", async (method) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(config()))
+      .mockRejectedValueOnce(new TypeError("Registration outcome unknown"));
+    const handler = vi.fn();
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler });
+    await expect(client[method]()).rejects.toMatchObject({ code: "request_failed" });
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/agent/config", method === "takeover" ? "/api/agent/browser/takeover" : "/api/agent/browser/register",
+    ]);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each(["claimBrowser", "takeover"] as const)("releases a known %s lease if the finite post-registration config read exhausts recovery", async (method) => {
+    vi.useFakeTimers();
+    let configReads = 0;
+    const endpoint = method === "takeover" ? "/api/agent/browser/takeover" : "/api/agent/browser/register";
+    const fetchMock = vi.fn(async (path: RequestInfo | URL, _init?: RequestInit) => {
+      if (path === "/api/agent/config") {
+        if (configReads++ === 0) return jsonResponse(config());
+        throw new TypeError("Network unavailable");
+      }
+      if (path === endpoint) return jsonResponse({ browserConnectionId: "finite-owned-lease" });
+      if (path === "/api/agent/browser/unregister") return jsonResponse({}, 204);
+      throw new Error("Unexpected endpoint");
+    });
+    const handler = vi.fn();
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler });
+    const failed = expect(client[method]()).rejects.toMatchObject({ code: "request_failed" });
+    await vi.advanceTimersByTimeAsync(1_001);
+    await failed;
+    const releases = fetchMock.mock.calls.filter(([path]) => path === "/api/agent/browser/unregister");
+    expect(releases).toHaveLength(1);
+    expect(JSON.parse(String(releases[0]?.[1]?.body))).toEqual({ browserConnectionId: "finite-owned-lease" });
+    expect(releases[0]?.[1]?.headers).toMatchObject({ "X-SemaFrame-Agent-CSRF": "csrf-memory-only" });
+    expect(fetchMock.mock.calls.filter(([path]) => path === endpoint)).toHaveLength(1);
+    expect(configReads).toBe(4);
+    expect(handler).not.toHaveBeenCalled();
+    expect(client.running).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["claimBrowser", "stop"], ["claimBrowser", "abort"],
+    ["takeover", "stop"], ["takeover", "abort"],
+  ] as const)("releases the exact known %s lease once when %s cancels its finite config refresh", async (method, action) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let configReads = 0;
+    const endpoint = method === "takeover" ? "/api/agent/browser/takeover" : "/api/agent/browser/register";
+    const fetchMock = vi.fn(async (path: RequestInfo | URL, _init?: RequestInit) => {
+      if (path === "/api/agent/config") {
+        if (configReads++ === 0) return jsonResponse(config());
+        throw new TypeError("Connection reset");
+      }
+      if (path === endpoint) return jsonResponse({ browserConnectionId: "finite-cancelled-lease" });
+      if (path === "/api/agent/browser/unregister") return jsonResponse({}, 204);
+      throw new Error("Unexpected endpoint");
+    });
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    const failed = expect(client[method](controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(configReads).toBe(2);
+    if (action === "stop") client.stop();
+    else controller.abort();
+    await failed;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(configReads).toBe(2);
+    const releases = fetchMock.mock.calls.filter(([path]) => path === "/api/agent/browser/unregister");
+    expect(releases).toHaveLength(1);
+    expect(JSON.parse(String(releases[0]?.[1]?.body))).toEqual({ browserConnectionId: "finite-cancelled-lease" });
+    expect(client.running).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["claimBrowser", "takeover"] as const)("does not resurrect a stopped client when a %s response arrives late", async (method) => {
+    let resolveRegistration!: (response: Response) => void;
+    let markRegistrationStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markRegistrationStarted = resolve; });
+    const endpoint = method === "takeover" ? "/api/agent/browser/takeover" : "/api/agent/browser/register";
+    const fetchMock = vi.fn(async (path: RequestInfo | URL, _init?: RequestInit) => {
+      if (path === "/api/agent/config") return jsonResponse(config());
+      if (path === endpoint) {
+        markRegistrationStarted();
+        return await new Promise<Response>((resolve) => { resolveRegistration = resolve; });
+      }
+      if (path === "/api/agent/browser/unregister") return jsonResponse({}, 204);
+      throw new Error("Unexpected endpoint");
+    });
+    const client = new AgentGatewayClient({ origin: "https://scene.test", fetch: fetchMock as typeof fetch, handler: vi.fn() });
+    const failed = expect(client[method]()).rejects.toMatchObject({ name: "AbortError" });
+    await started;
+    client.stop();
+    expect(client.config).toBeUndefined();
+    resolveRegistration(jsonResponse({ browserConnectionId: "late-owned-lease" }));
+    await failed;
+    expect(client.config).toBeUndefined();
+    expect(client.status).toBe("disconnected");
+    expect(client.running).toBe(false);
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/agent/config", endpoint, "/api/agent/browser/unregister",
+    ]);
+    const release = fetchMock.mock.calls.at(-1)?.[1];
+    expect(JSON.parse(String(release?.body))).toEqual({ browserConnectionId: "late-owned-lease" });
+    expect(release?.headers).toMatchObject({ "X-SemaFrame-Agent-CSRF": "csrf-memory-only" });
+  });
+
   it.each(["waiting", "in_flight"])("retains the approved handshake identity and independent deadline while %s", async (status) => {
     const approvedHandshake = { ...approvedHandshakeFixture, status };
     const client = new AgentGatewayClient({

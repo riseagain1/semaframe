@@ -177,6 +177,49 @@ function defaultCreatePlacement(manifest: AdvertisedComponentType, index = 0): C
 }
 
 describe("WorkspaceStoreEngineAdapter", () => {
+  it("commits update-only transactions with zero reservations without consuming component IDs", async () => {
+    const store = new WorkspaceStore();
+    const adapter = adapterFor(store);
+    const actor = principal(["workspace:read", "workspace:write", "component:create", "component:update"]);
+    applyCurrentBatch(store, "seed_timer", [timerCreate(store, "TIMER")]);
+    const prepared = await adapter.prepare("Rename the existing timer", 0, actor);
+    expect(prepared.reserved_component_ids).toEqual([]);
+    expect(store.getRevision()).toBe(1);
+    await adapter.submit(prepared, batchFor(prepared, [{
+      op: "update_component", op_id: "rename", id: "TIMER", patch: { label: "Updated timer" },
+    }]), actor);
+    expect(store.getState().components.get("TIMER")?.label).toBe("Updated timer");
+    expect(store.getRevision()).toBe(2);
+    const next = await adapter.prepare("Normal default reservation", undefined, actor);
+    expect(next.reserved_component_ids).toHaveLength(8);
+    expect(next.reserved_component_ids[0]).toBe("CMP_000001");
+  });
+
+  it("does not let zero-reservation transactions create unreserved components", async () => {
+    const store = new WorkspaceStore();
+    const adapter = adapterFor(store);
+    const actor = principal(["workspace:read", "workspace:write", "component:create"]);
+    const prepared = await adapter.prepare("Update only", 0, actor);
+    await expect(adapter.submit(prepared, batchFor(prepared, [timerCreate(store, "CMP_000001")]), actor))
+      .rejects.toMatchObject({ code: "command_validation_failed", options: { details: { unreserved_component_ids: ["CMP_000001"] } } });
+    expect(store.getRevision()).toBe(0);
+    expect(store.getState().components.size).toBe(0);
+    expect((await adapter.prepare("First real reservation", 1, actor)).reserved_component_ids).toEqual(["CMP_000001"]);
+  });
+
+  it("rejects invalid reservation counts before consuming IDs or a request sequence", async () => {
+    const store = new WorkspaceStore();
+    const adapter = adapterFor(store);
+    for (const count of [-1, 0.5, 100.5, 101, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(adapter.prepare("Invalid reservation", count)).rejects.toMatchObject({ code: "invalid_request" });
+    }
+    const prepared = await adapter.prepare("Maximum legal reservation", 100);
+    expect(prepared.reserved_component_ids).toHaveLength(100);
+    expect(prepared.reserved_component_ids[0]).toBe("CMP_000001");
+    expect(prepared.envelope.input_revision).toBe(1);
+    expect(store.getRevision()).toBe(0);
+  });
+
   it("preserves ModelDefinition V2 logical and manufacturing metadata in exact model inspection", async () => {
     const adapter = adapterFor(publishedCadModel());
     const inspection = await adapter.inspectModel(

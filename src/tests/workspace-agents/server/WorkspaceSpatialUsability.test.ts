@@ -4,6 +4,7 @@ import type { WorkspaceAgentPrincipal } from "../../../workspace/agents/contract
 import { DEFAULT_COMPONENT_REGISTRY } from "../../../workspace/components";
 import { WorkspaceStore } from "../../../workspace/state";
 import { workspaceBatch } from "../../workspace/helpers";
+import { WORKSPACE_MODELING_QUICKSTART, WORKSPACE_NEW_PRIMITIVE_PREFLIGHT } from "../../../workspace/agents/guide";
 
 const reader: WorkspaceAgentPrincipal = {
   sessionId: "spatial_session", clientId: "spatial_client", clientName: "Spatial tests", scopes: ["workspace:read"],
@@ -28,6 +29,23 @@ function furniture() {
 }
 
 describe("Spatial agent operation clarity", () => {
+  it("executes the documented new primitive preflight and rejects guessed shape/position aliases", async () => {
+    const store = furniture();
+    const adapter = new WorkspaceStoreEngineAdapter(store);
+    const revision = store.getRevision();
+    expect(WORKSPACE_MODELING_QUICKSTART).toMatchObject({
+      new_primitive_preflight: { candidate: WORKSPACE_NEW_PRIMITIVE_PREFLIGHT },
+    });
+    await expect(adapter.querySpatialPlacement(WORKSPACE_NEW_PRIMITIVE_PREFLIGHT, reader))
+      .resolves.toMatchObject({ placementCheck: { valid: true, mutates_workspace: false } });
+    for (const field of ["shape", "position", "world_transform"]) {
+      await expect(adapter.querySpatialPlacement({ ...WORKSPACE_NEW_PRIMITIVE_PREFLIGHT, [field]: {} }, reader))
+        .rejects.toMatchObject({ code: "invalid_spatial_candidate", options: { details: { unsupported_fields: [field] } } });
+    }
+    expect(store.getRevision()).toBe(revision);
+    expect(store.getState().components.size).toBe(3);
+  });
+
   it("reports local placement references and world-space results without mutating an existing assembly", async () => {
     const store = furniture();
     const adapter = new WorkspaceStoreEngineAdapter(store);

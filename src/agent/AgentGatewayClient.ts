@@ -320,6 +320,11 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
 // Keep that transport wait independent from the shorter UI-request budget so
 // a quiet, healthy Agent session cannot relock the Workspace between commands.
 const BROWSER_POLL_REQUEST_TIMEOUT_MS = 60_000;
+// Only a read-only config GET may be repeated automatically after the native
+// fetch failed before yielding a response. HTTP rejection, response validation,
+// registration, command execution, and result acknowledgements are not retried.
+const CONFIG_TRANSPORT_RETRY_DELAYS_MS = [250, 750] as const;
+const nativeTransportFailures = new WeakSet<AgentGatewayError>();
 // A transactional Claude update can perform seven bounded official CLI
 // operations when it must verify and roll back a bad replacement. Each command
 // has a 10-second bound plus a 1-second forced-kill grace, so keep the browser
@@ -845,6 +850,23 @@ function isAbortError(error: unknown): boolean {
     (isRecord(error) && error.name === "AbortError");
 }
 
+function waitForConfigRetry(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(abortSignalReason(signal));
+  return new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timeout = globalThis.setTimeout(finish, milliseconds);
+    const abort = () => {
+      globalThis.clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      reject(abortSignalReason(signal));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 function abortSignalReason(signal?: AbortSignal | null): Error | DOMException {
   const reason = signal?.reason;
   return reason instanceof Error || isAbortError(reason)
@@ -1074,6 +1096,7 @@ export class AgentGatewayClient {
   private runController?: AbortController;
   private runPromise?: Promise<void>;
   private requestedStopStatus: AgentGatewayStatus = "disconnected";
+  private configRecoveryController = new AbortController();
 
   constructor(options: AgentGatewayClientOptions) {
     if (typeof options.handler !== "function") {
@@ -1119,12 +1142,32 @@ export class AgentGatewayClient {
   }
 
   fetchConfig(signal?: AbortSignal): Promise<AgentGatewayConfig> {
+    const recoverySignal = signal
+      ? AbortSignal.any([signal, this.configRecoveryController.signal])
+      : this.configRecoveryController.signal;
     return this.enqueueConfigOperation(async (requestSequence) => {
-      const value = await this.fetchJson(this.endpoints.config, {
-        method: "GET",
-        signal,
-      });
-      return this.adoptConfig(parseConfig(value), requestSequence);
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const value = await this.fetchJson(this.endpoints.config, {
+            method: "GET",
+            signal: recoverySignal,
+          });
+          if (recoverySignal.aborted) throw abortSignalReason(recoverySignal);
+          return this.adoptConfig(parseConfig(value), requestSequence);
+        } catch (error) {
+          const delay = CONFIG_TRANSPORT_RETRY_DELAYS_MS[attempt];
+          if (!(error instanceof AgentGatewayError) || !nativeTransportFailures.has(error)
+            || recoverySignal.aborted) throw error;
+          if (delay === undefined) {
+            throw new AgentGatewayError(
+              "request_failed",
+              "The local agent gateway request failed while reading gateway configuration after 3 attempts.",
+              { cause: error },
+            );
+          }
+          await waitForConfigRetry(delay, recoverySignal);
+        }
+      }
     });
   }
 
@@ -1675,14 +1718,13 @@ export class AgentGatewayClient {
   }
 
   private claimBrowserAt(endpoint: string, signal?: AbortSignal): Promise<AgentGatewayConfig> {
+    const lifecycleSignal = this.configRecoveryController.signal;
+    const claimSignal = signal ? AbortSignal.any([signal, lifecycleSignal]) : lifecycleSignal;
     if (this.runPromise) {
       return Promise.reject(new AgentGatewayError(
         "invalid_configuration",
         "Stop the current agent bridge before claiming browser control.",
       ));
-    }
-    if (endpoint === this.endpoints.register && this.browserConnectionId) {
-      return this.fetchConfig(signal);
     }
     if (this.claimPromise) {
       if (this.claimEndpoint === endpoint) return this.claimPromise;
@@ -1691,7 +1733,9 @@ export class AgentGatewayClient {
         "A browser control claim is already in progress.",
       ));
     }
-    const pending = this.performBrowserClaim(endpoint, signal);
+    const pending = endpoint === this.endpoints.register && this.browserConnectionId && this.csrfToken
+      ? this.refreshClaimedBrowserLease(this.browserConnectionId, this.csrfToken, claimSignal)
+      : this.performBrowserClaim(endpoint, claimSignal, signal);
     this.claimPromise = pending;
     this.claimEndpoint = endpoint;
     return pending.finally(() => {
@@ -1702,18 +1746,52 @@ export class AgentGatewayClient {
     });
   }
 
-  private async performBrowserClaim(endpoint: string, signal?: AbortSignal): Promise<AgentGatewayConfig> {
-    const config = await this.ensureConfig(signal);
+  private async performBrowserClaim(
+    endpoint: string,
+    claimSignal: AbortSignal,
+    callerSignal?: AbortSignal,
+  ): Promise<AgentGatewayConfig> {
+    const config = await this.ensureConfig(claimSignal);
+    if (claimSignal.aborted) throw abortSignalReason(claimSignal);
     if (!config.enabled) {
       throw new AgentGatewayError("request_failed", "Agent control must be enabled before taking control.");
     }
+    const registrationCsrfToken = this.csrfToken ?? config.csrfToken;
+    // Do not replay registration or assume an aborted POST had no effect. Let
+    // its already-bounded response finish after stop(), so a known late lease
+    // can be released with the CSRF proof used to create it. A caller-aborted
+    // or otherwise unknown POST outcome is never guessed or taken over.
     const registration = await this.postJson(
       endpoint,
       { clientInstanceId: this.clientInstanceId },
-      signal,
+      callerSignal,
     );
-    this.browserConnectionId = parseRegistration(registration);
-    return this.fetchConfig(signal);
+    const browserConnectionId = parseRegistration(registration);
+    if (claimSignal.aborted) {
+      this.releaseExactBrowserLease(browserConnectionId, registrationCsrfToken);
+      throw abortSignalReason(claimSignal);
+    }
+    this.browserConnectionId = browserConnectionId;
+    return this.refreshClaimedBrowserLease(browserConnectionId, registrationCsrfToken, claimSignal);
+  }
+
+  private async refreshClaimedBrowserLease(
+    browserConnectionId: string,
+    csrfToken: string,
+    signal: AbortSignal,
+  ): Promise<AgentGatewayConfig> {
+    try {
+      return await this.fetchConfig(signal);
+    } catch (error) {
+      // This finite claim path has not entered run(), so it owns its own
+      // cleanup. stop() may have released it already; never release twice or
+      // clear a different, newer browser lease.
+      if (this.browserConnectionId === browserConnectionId) {
+        this.browserConnectionId = undefined;
+        this.releaseExactBrowserLease(browserConnectionId, csrfToken);
+      }
+      throw error;
+    }
   }
 
   start(): Promise<void> {
@@ -1737,6 +1815,8 @@ export class AgentGatewayClient {
 
   stop(status: "disabled" | "disconnected" = "disconnected"): void {
     this.requestedStopStatus = status;
+    this.configRecoveryController.abort();
+    this.configRecoveryController = new AbortController();
     this.releaseBrowserLease();
     this.runController?.abort();
     this.runController = undefined;
@@ -1772,6 +1852,7 @@ export class AgentGatewayClient {
 
         if (poll.kind === "command") {
           if (isMutatingCommand(poll.command.name)) this.setStatus("applying");
+          let acknowledgement: Record<string, unknown>;
           try {
             const result = await this.handler(
               poll.command.name,
@@ -1779,12 +1860,12 @@ export class AgentGatewayClient {
               { signal },
             );
             if (signal.aborted) return;
-            await this.postJson(this.endpoints.result, {
+            acknowledgement = {
               browserConnectionId,
               commandId: poll.command.id,
               ok: true,
               result,
-            }, signal);
+            };
           } catch (error) {
             if (signal.aborted || isAbortError(error)) return;
             const failure = error instanceof AgentGatewayCommandError
@@ -1797,13 +1878,17 @@ export class AgentGatewayClient {
                   code: "command_failed",
                   message: "The browser could not apply the agent command.",
                 };
-            await this.postJson(this.endpoints.result, {
+            acknowledgement = {
               browserConnectionId,
               commandId: poll.command.id,
               ok: false,
               error: failure,
-            }, signal);
+            };
           }
+          // A failed acknowledgement is not a failed handler. Its delivery
+          // outcome may be unknown, so never execute the handler again or send
+          // a contradictory error result for the same command.
+          await this.postJson(this.endpoints.result, acknowledgement, signal);
         }
 
         if (signal.aborted) return;
@@ -1822,6 +1907,10 @@ export class AgentGatewayClient {
         return;
       }
       this.setStatus("disconnected");
+      // Drop only the exact lease this client owns. An unsuccessful config or
+      // acknowledgement request must not strand it until the host TTL elapses.
+      // Unregister never revokes approval, takes over another tab, or replays work.
+      this.releaseBrowserLease();
       throw error;
     } finally {
       this.browserConnectionId = undefined;
@@ -1877,6 +1966,10 @@ export class AgentGatewayClient {
     // Clear locally first so a late pagehide/stop cannot unregister a newer
     // connection created by this client instance.
     this.browserConnectionId = undefined;
+    this.releaseExactBrowserLease(browserConnectionId, csrfToken);
+  }
+
+  private releaseExactBrowserLease(browserConnectionId: string, csrfToken: string): void {
     try {
       const release = this.request(this.endpoints.unregister, {
         method: "POST",
@@ -2041,11 +2134,13 @@ export class AgentGatewayClient {
       cleanup();
       if (requestController.signal.aborted) throw abortReason();
       if (isAbortError(cause)) throw cause;
-      throw new AgentGatewayError(
+      const error = new AgentGatewayError(
         "request_failed",
         "The local agent gateway request failed.",
         { cause },
       );
+      nativeTransportFailures.add(error);
+      throw error;
     }
 
     if (response.body) {

@@ -786,19 +786,29 @@ describe("Agent Gateway browser boundary", () => {
     expect((await json(response)).error).toEqual(expect.objectContaining({ code: "unsupported_media_type" }));
   });
 
-  it("permits only one external command in flight", async () => {
+  it("queues concurrent external commands while delivering only one at a time", async () => {
     const { handle } = setup();
     const browser = await browserSetup(handle);
     const first = handle(jsonRequest("/v1/workspace/instructions", {}, {
       authorization: `Bearer ${browser.bearer}`,
     }));
-    const second = await handle(jsonRequest("/v1/workspace/instructions", {}, {
+    const second = handle(jsonRequest("/v1/workspace/instructions", {}, {
       authorization: `Bearer ${browser.bearer}`,
     }));
-    expect(second.status).toBe(409);
-    expect((await json(second)).error).toEqual(expect.objectContaining({ code: "engine_busy" }));
-    gateways.at(-1)?.close();
-    await first;
+    for (const response of [first, second]) {
+      const polled = await json(await browserPost(handle, browser.csrfToken, "/api/agent/browser/poll", {
+        browserConnectionId: browser.browserConnectionId,
+      }));
+      expect(polled.kind).toBe("command");
+      const command = polled.command as { id: string };
+      await browserPost(handle, browser.csrfToken, "/api/agent/browser/result", {
+        browserConnectionId: browser.browserConnectionId,
+        commandId: command.id,
+        ok: true,
+        result: { ok: true, data: {} },
+      });
+      expect((await response).status).toBe(200);
+    }
   });
 
   it("publishes an OpenAPI 3.1 contract without a pairing secret", async () => {

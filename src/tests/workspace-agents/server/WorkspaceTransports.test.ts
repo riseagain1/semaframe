@@ -25,6 +25,7 @@ import {
   WORKSPACE_RESOURCE_SNAPSHOT_UNTRUSTED_DATA_NOTICE,
 } from "../../../workspace/agents/contracts";
 import type { ZodType } from "zod/v4";
+import { WORKSPACE_NEW_PRIMITIVE_PREFLIGHT } from "../../../workspace/agents/guide";
 
 type RegisteredTool = {
   definition: Record<string, unknown>;
@@ -92,6 +93,8 @@ describe("composable Workspace MCP tools", () => {
       candidate: { additionalProperties: false, properties: { component_type: { additionalProperties: false, required: ["typeId", "version", "digest"] } } },
     });
     expect(properties("/workspace/updates/begin")).toMatchObject({ layout_frame: { enum: ["current_view", "canonical"] }, view_guard: { $ref: "#/components/schemas/WorkspaceViewGuard" } });
+    expect(properties("/workspace/updates/begin").requested_component_ids).toMatchObject({ type: "integer", minimum: 0, maximum: 100, default: 8 });
+    expect(properties("/workspace/space/query").candidate).toMatchObject({ example: WORKSPACE_NEW_PRIMITIVE_PREFLIGHT });
     expect(properties("/workspace/updates/submit")).not.toHaveProperty("view_guard");
     expect(document.components.schemas.WorkspaceViewGuard).toMatchObject({ additionalProperties: false, required: ["view_id", "view_epoch"], properties: { view_epoch: { minimum: 0, maximum: Number.MAX_SAFE_INTEGER } } });
   });
@@ -153,6 +156,18 @@ describe("composable Workspace MCP tools", () => {
     const spatialPlacementDefinition = recorder.tools.get("query_spatial_placement")!
       .definition.inputSchema as { "~standard": { validate(value: unknown): { issues?: unknown } } };
     const spatialPlacementInput = { safeParse: (value: unknown) => ({ success: !spatialPlacementDefinition["~standard"].validate(value).issues }) };
+    const spatialExample = {
+      session_token: "workspace_session_1234567890",
+      instruction_digest: "guide_digest_1234567890",
+      candidate: WORKSPACE_NEW_PRIMITIVE_PREFLIGHT,
+    };
+    expect(spatialPlacementInput.safeParse(spatialExample).success).toBe(true);
+    for (const invalidCandidate of [
+      { ...WORKSPACE_NEW_PRIMITIVE_PREFLIGHT, shape: "box" },
+      { ...WORKSPACE_NEW_PRIMITIVE_PREFLIGHT, position: { x: 0, y: 0, z: 0 } },
+      { ...WORKSPACE_NEW_PRIMITIVE_PREFLIGHT, world_transform: WORKSPACE_NEW_PRIMITIVE_PREFLIGHT.placement },
+      { ...WORKSPACE_NEW_PRIMITIVE_PREFLIGHT, geometry: { shape: "box", sizeM: { x: 1, y: 1, z: 1 } } },
+    ]) expect(spatialPlacementInput.safeParse({ ...spatialExample, candidate: invalidCandidate }).success).toBe(false);
     const exactParametricCandidate = {
       session_token: "workspace_session_1234567890",
       instruction_digest: "guide_digest_1234567890",
@@ -251,6 +266,12 @@ describe("composable Workspace MCP tools", () => {
     const inspectSpaceInput = recorder.tools.get("inspect_workspace_space")?.definition.inputSchema as ZodType;
     const beginInput = recorder.tools.get("begin_workspace_update")?.definition.inputSchema as ZodType;
     const session = { session_token: exactLayoutCandidate.session_token, instruction_digest: exactLayoutCandidate.instruction_digest };
+    for (const requested_component_ids of [0, 1, 100, undefined]) {
+      expect(beginInput.safeParse({ ...session, intent: "Edit existing component", requested_component_ids }).success).toBe(true);
+    }
+    for (const requested_component_ids of [-1, 0.5, 100.5, 101, Number.MAX_SAFE_INTEGER, "0", null]) {
+      expect(beginInput.safeParse({ ...session, intent: "Invalid reservation", requested_component_ids }).success).toBe(false);
+    }
     expect(inspectSpaceInput.safeParse({ ...session, view_detail: "full" }).success).toBe(true);
     expect(inspectSpaceInput.safeParse({ ...session, view_detail: "summary" }).success).toBe(true);
     expect(inspectSpaceInput.safeParse({ ...session, view_detail: "raw" }).success).toBe(false);
