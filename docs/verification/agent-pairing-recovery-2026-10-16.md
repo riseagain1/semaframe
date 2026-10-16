@@ -39,6 +39,14 @@ expiration, denial, revocation and Gateway authorization checks remain authorita
   cover those additions. Release preparation reruns the complete final source,
   isolated packed installation and CI as separate gates.
 
+The first release CI attempt passed the mounted Workspace browser flow, but the
+Agent/precision smoke retained the old manual-only guidance substring and failed
+against the new dual-path copy. The assertion now separately requires manual
+copy/paste, stable-launcher discovery and explicit in-page approval; none of those
+checks was removed. Seven new contract cases bind the fixture to the actual UI
+copy and reject missing guidance. The focused smoke-contract, diagnostics and
+connection-page run passed 46 tests; the browser flow must pass again in CI.
+
 Source tests:
 
 - [Discovery race and mutation guard](../../src/tests/server/AgentMcpBridgeReliability.test.ts)

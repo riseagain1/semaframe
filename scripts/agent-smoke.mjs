@@ -79,6 +79,20 @@ export function sanitizeAgentSmokeFailure(error, sensitiveValues = []) {
   return new Error(redactAgentSmokeDiagnosticText(failureMessage, sensitiveValues));
 }
 
+export function assertAgentConnectionGuidance({ guidance, copyLabel }) {
+  const text = typeof guidance === "string" ? guidance.replace(/\s+/gu, " ").trim() : "";
+  if (!/For manual setup, paste the copied address into your agent client and ask it to connect\./iu.test(text) ||
+      !/Copy connection URL/u.test(copyLabel ?? "")) {
+    throw new Error("Agent connection management did not retain manual URL copy-and-paste guidance.");
+  }
+  if (!/An installed stable launcher finds the current offer without copying\./iu.test(text)) {
+    throw new Error("Agent connection management did not explain automatic offer discovery for an installed stable launcher.");
+  }
+  if (!/Access still requires approval on this page\./iu.test(text)) {
+    throw new Error("Agent connection management did not preserve explicit in-page approval guidance.");
+  }
+}
+
 function browserExecutable() {
   const candidates = [
     process.env.BROWSER_EXECUTABLE,
@@ -442,9 +456,7 @@ try {
       preConnectionUi.hasComposer || preConnectionUi.hasDialog) {
     throw new Error(`The waiting Agent connection gate did not keep the mounted Workspace inert before the handshake: ${JSON.stringify(preConnectionUi)}`);
   }
-  if (!preConnectionUi.guidance?.includes("paste it into your agent") || !preConnectionUi.copyLabel) {
-    throw new Error("Agent connection management did not clearly tell the user to copy and paste the URL into their agent.");
-  }
+  assertAgentConnectionGuidance(preConnectionUi);
   let connectionUrl = preConnectionUi.connectionUrl;
   const parsedConnectionUrl = new URL(connectionUrl);
   if (parsedConnectionUrl.origin !== gatewayUrl || !/^\/mcp\/connect\/[A-Za-z0-9_-]{24,}$/u.test(parsedConnectionUrl.pathname) || parsedConnectionUrl.search || parsedConnectionUrl.hash) {
